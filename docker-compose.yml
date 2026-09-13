@@ -1,0 +1,90 @@
+# Phase 1 — Agent Sandbox
+# Run: docker compose up
+# Prerequisites: docker build -t everything-sandbox:latest ./sandbox-supervisor/sandbox-image/
+
+services:
+  sandbox-supervisor:
+    build:
+      context: ./sandbox-supervisor
+      dockerfile: Dockerfile
+      args:
+        # Must match the host's docker.sock group, or `node` inside the
+        # container gets EACCES talking to Docker. Get it with:
+        #   stat -c '%g' /var/run/docker.sock
+        DOCKER_GID: ${DOCKER_GID:-999}
+    # Supervisor is the ONLY service that holds docker.sock.
+    # sandbox-mcp talks to it over the internal network — never directly to Docker.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      POOL_SIZE: ${POOL_SIZE:-2}
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-everything-sandbox:latest}
+      SUPERVISOR_PORT: ${SUPERVISOR_PORT:-3001}
+    # Bind to 127.0.0.1 on the host; only reachable from within this Compose stack
+    # and from the host machine (for debugging). Not exposed externally.
+    ports:
+      - "127.0.0.1:3001:3001"
+    restart: unless-stopped
+    networks:
+      - sandbox-internal
+
+  sandbox-mcp:
+    build:
+      context: ./sandbox-mcp
+      dockerfile: Dockerfile
+    environment:
+      SUPERVISOR_URL: http://sandbox-supervisor:3001
+      MCP_PORT: ${MCP_PORT:-3002}
+      SANDBOX_TIMEOUT_MS: ${SANDBOX_TIMEOUT_MS:-30000}
+      AUTO_APPROVE_TOOLS: ${AUTO_APPROVE_TOOLS:-}
+      MCP_API_KEY: ${MCP_API_KEY:?MCP_API_KEY is required}
+    ports:
+      - "127.0.0.1:3002:3002"
+    depends_on:
+      - sandbox-supervisor
+    restart: unless-stopped
+    networks:
+      - sandbox-internal
+
+  # MVP web/mobile bridge (cli/server.ts) — same tool logic as the CLI, over
+  # HTTP + a static page instead of a terminal. NOT the full §11 PWA spec.
+  # Front this with the existing Nginx+Certbot for HTTPS from a phone —
+  # bound to 127.0.0.1 here, same as the other services.
+  everythingapp-web:
+    build:
+      # Root, not ./cli: the Dockerfile needs to COPY both cli/dist and the
+      # sibling web/dist (React frontend build output), and Docker can't
+      # reach outside its build context.
+      context: .
+      dockerfile: cli/Dockerfile
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}
+      SERVER_AUTH_TOKEN: ${SERVER_AUTH_TOKEN:?SERVER_AUTH_TOKEN is required}
+      PORT: 3000
+      MCP_CONNECTORS: ${EVERYTHINGAPP_MCP_CONNECTORS:-sandbox}
+      # Container-to-container URL — NOT localhost, unlike local CLI dev
+      # (see cli/.env.example). Reaches sandbox-mcp over sandbox-internal.
+      MCP_SANDBOX_URL: http://sandbox-mcp:3002/mcp/sse
+      MCP_SANDBOX_API_KEY: ${MCP_API_KEY:-}
+      # Add MCP_OBSIDIAN_URL/_API_KEY (or others) here as needed — it's
+      # already an external HTTPS URL, so it works unchanged from inside
+      # this container.
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # Conversation/batch history persists across container restarts.
+      - everythingapp_web_data:/home/node/.everythingapp
+    depends_on:
+      - sandbox-mcp
+    restart: unless-stopped
+    networks:
+      - sandbox-internal
+
+networks:
+  # Isolated network — zero overlap with any other Compose stacks on the host.
+  # On the Pi: ensure this network name doesn't conflict with skarpa-net or obsidian-net.
+  sandbox-internal:
+    driver: bridge
+
+volumes:
+  everythingapp_web_data:
