@@ -90,13 +90,31 @@ export function BrowserPanel({
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const prevBlobUrl = useRef<string | null>(null);
-
   // Keyboard + mouse events when takeover is active
   const sendEvent = useCallback((msg: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(msg));
     }
   }, []);
+
+  const frameBoxRef = useRef<HTMLDivElement | null>(null);
+  const sessionLive = connected && status.session;
+
+  // Alone in the dock the page takes the panel's own shape: tell the browser the panel's size (debounced) so the
+  // frame has no black bars. Beside other panels the default viewport stays.
+  useEffect(() => {
+    const box = frameBoxRef.current;
+    if (!fill || !sessionLive || !box) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const report = () => {
+      const { width, height } = box.getBoundingClientRect();
+      if (width > 0 && height > 0) sendEvent({ type: 'viewport', width: Math.round(width), height: Math.round(height) });
+    };
+    const ro = new ResizeObserver(() => { clearTimeout(timer); timer = setTimeout(report, 250); });
+    ro.observe(box);
+    report();
+    return () => { clearTimeout(timer); ro.disconnect(); };
+  }, [fill, sessionLive, sendEvent]);
 
   useEffect(() => {
     setUnavailable(false);
@@ -227,7 +245,7 @@ export function BrowserPanel({
 
   return (
     <div
-      className="flex w-full shrink-0 flex-col overflow-hidden border-b border-border bg-bg"
+      className={`flex w-full flex-col overflow-hidden border-b border-border bg-bg ${fill ? 'min-h-0 flex-1' : 'shrink-0'}`}
       style={fill ? undefined : { height }}
     >
       {/* Toolbar */}
@@ -272,7 +290,7 @@ export function BrowserPanel({
       </div>
 
       {/* Live view */}
-      <div className={`relative bg-black ${fill ? 'aspect-video w-full' : 'min-h-0 flex-1'}`}>
+      <div ref={frameBoxRef} className="relative min-h-0 flex-1 bg-black">
         {unavailable && (
           <div className="flex h-full min-h-24 items-center justify-center px-4 text-center text-xs text-fg-tertiary">
             Live view is unavailable — the browser service is not reachable or not configured.

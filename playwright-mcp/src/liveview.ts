@@ -41,12 +41,15 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 const FRAME_INTERVAL_MS = 200; // 5 fps — enough for "can I see what's happening"
+const MIN_VIEWPORT = { width: 320, height: 240 };
+const MAX_VIEWPORT = { width: 1920, height: 1440 };
 const JPEG_QUALITY = 60; // balance between latency and clarity on mobile
 
 type ClientMsg =
   | { type: 'open'; url?: string }
   | { type: 'takeover'; active: boolean }
   | { type: 'close' }
+  | { type: 'viewport'; width: number; height: number }
   | { type: 'mouse'; action: 'move' | 'down' | 'up'; x: number; y: number; button?: 'left' | 'right' | 'middle' }
   | { type: 'keyboard'; action: 'down' | 'up' | 'press'; key: string }
   | { type: 'scroll'; x: number; y: number; deltaX: number; deltaY: number };
@@ -248,6 +251,20 @@ async function handleClientMessage(
   if (msg.type === 'close') {
     client.takeover = false;
     await pool.close(client.convId, 'closed by the user');
+    return;
+  }
+
+  // The panel reports its own size so the page fills it instead of sitting letterboxed at the default 16:9.
+  if (msg.type === 'viewport') {
+    const session = pool.get(client.convId);
+    if (!session) return;
+    const width = Math.round(Number(msg.width));
+    const height = Math.round(Number(msg.height));
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+    await session.page.setViewportSize({
+      width: Math.min(Math.max(width, MIN_VIEWPORT.width), MAX_VIEWPORT.width),
+      height: Math.min(Math.max(height, MIN_VIEWPORT.height), MAX_VIEWPORT.height),
+    });
     return;
   }
 
