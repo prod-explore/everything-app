@@ -31,8 +31,7 @@ export function useConversations() {
     return () => {
       cancelled = true;
     };
-    // Runs once; refresh() is stable.
-  }, []);
+  }, [refresh]); // refresh() is stable, so this runs once
 
   // The one place that guarantees a conversation is open. Deleting the last
   // chat, a first run and a deleted project all just leave the list empty;

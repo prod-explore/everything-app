@@ -3,6 +3,10 @@
   "plugins": ["react", "typescript", "oxc"],
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+    // Off on purpose: this app loads data from its own API when a panel mounts or its inputs change
+    // (`useEffect(() => { void load(); }, [load])`), and the rule flags every such effect although the state is only set
+    // after an await. React's own guidance keeps effects for synchronising with an external system, and a server is one.
+    "react/set-state-in-effect": "off"
   }
 }
