@@ -65,7 +65,7 @@ export function chromiumLaunchArgs(): string[] {
   ];
 }
 
-export const BOT_USER_AGENT = 'Mozilla/5.0 (compatible; EverythingAppBot/1.0; +https://futumore.pl)';
+export const BOT_USER_AGENT = 'Mozilla/5.0 (compatible; EverythingAppBot/1.0; +https://github.com/prod-explore/everything-app)';
 
 /** Context options for a policy. Always a fresh, in-memory profile: no storageState, nothing persisted. */
 export function contextOptionsFor(policy: EffectivePolicy): BrowserContextOptions {

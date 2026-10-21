@@ -3,7 +3,7 @@
 # This is the STARTING config — plain HTTP, no certificate paths. Get this
 # in place and reloaded first, then run:
 #
-#   sudo certbot --nginx -d everythingapp.twoja-domena.pl
+#   sudo certbot --nginx -d app.example.com
 #
 # Certbot edits this file in place: it adds `listen 443 ssl;` +
 # `ssl_certificate`/`ssl_certificate_key` lines, and (if you accept the
@@ -21,7 +21,7 @@ limit_req_zone $binary_remote_addr zone=ea_login:1m rate=10r/m;
 server {
     listen 80;
     listen [::]:80;
-    server_name everythingapp.twoja-domena.pl;
+    server_name app.example.com;
 
     # Attachments travel as base64 inside the JSON body of a message (up to ~8 MB of base64 per image).
     client_max_body_size 16m;

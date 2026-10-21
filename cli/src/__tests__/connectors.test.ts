@@ -74,7 +74,7 @@ describe('connector URL rules', () => {
   it('derives a valid, unique name from the address', () => {
     const none = new Set<string>();
     assert.equal(suggestConnectorName('https://mcp.notion.com/mcp', none), 'notion');
-    assert.equal(suggestConnectorName('https://obsidian.futumore.pl/mcp/sse', none), 'obsidian');
+    assert.equal(suggestConnectorName('https://obsidian.example.com/mcp/sse', none), 'obsidian');
     assert.equal(suggestConnectorName('http://192.168.1.10:3000/mcp', none), 'c_192_168_1_10');
     assert.equal(suggestConnectorName('https://api.example.com/mcp', new Set(['example', 'example_2'])), 'example_3');
     assert.match(suggestConnectorName('https://-.x/', none), /^[a-z][a-z0-9_]{0,31}$/);
@@ -97,35 +97,35 @@ describe('connectors API', () => {
       assert.equal((await call(t.port, 'POST', '/api/connectors', { url: 'file:///etc' })).status, 400);
       assert.equal((await call(t.port, 'POST', '/api/connectors', { url: 'http://evil.example/mcp' })).status, 400);
 
-      const ok = await call(t.port, 'POST', '/api/connectors', { url: 'https://n8n.example.com/mcp', token: 'tok123' });
+      const ok = await call(t.port, 'POST', '/api/connectors', { url: 'https://hooks.example.com/mcp', token: 'tok123' });
       assert.equal(ok.status, 201);
-      assert.equal(ok.json.name, 'n8n');
+      assert.equal(ok.json.name, 'hooks');
       assert.equal(ok.json.error, null);
       assert.deepEqual([ok.json.connector.source, ok.json.connector.connected, ok.json.connector.hasToken, ok.json.connector.toolCount], ['custom', true, true, 1]);
-      assert.deepEqual(t.registry.toLlmTools().map(x => [x.name, x.description]), [['n8n__ping', 'auth=tok123']]);
-      assert.equal(t.registry.requiresApproval('n8n__ping'), true);
+      assert.deepEqual(t.registry.toLlmTools().map(x => [x.name, x.description]), [['hooks__ping', 'auth=tok123']]);
+      assert.equal(t.registry.requiresApproval('hooks__ping'), true);
 
-      assert.equal((await call(t.port, 'POST', '/api/connectors', { name: 'n8n', url: 'https://other.example/mcp' })).status, 409);
-      const second = await call(t.port, 'POST', '/api/connectors', { url: 'https://n8n.other.org/mcp' });
-      assert.equal(second.json.name, 'n8n_2', 'same host label gets a suffix');
+      assert.equal((await call(t.port, 'POST', '/api/connectors', { name: 'hooks', url: 'https://other.example/mcp' })).status, 409);
+      const second = await call(t.port, 'POST', '/api/connectors', { url: 'https://hooks.other.org/mcp' });
+      assert.equal(second.json.name, 'hooks_2', 'same host label gets a suffix');
 
       const bad = await call(t.port, 'POST', '/api/connectors', { name: 'broken', url: 'https://down.example/mcp' });
       assert.match(bad.json.error, /refused/);
       const list = (await call(t.port, 'GET', '/api/connectors')).json.connectors;
-      assert.deepEqual(list.map((c: any) => [c.name, c.connected, c.toolCount, c.hasToken]), [['n8n', true, 1, true], ['n8n_2', true, 1, false], ['broken', false, 0, false]]);
+      assert.deepEqual(list.map((c: any) => [c.name, c.connected, c.toolCount, c.hasToken]), [['hooks', true, 1, true], ['hooks_2', true, 1, false], ['broken', false, 0, false]]);
       assert.match(list[2].error, /refused/);
       assert.deepEqual(list[0].tools, [{ name: 'ping', description: 'auth=tok123' }]);
 
-      await call(t.port, 'POST', '/api/connectors/n8n/disable');
-      assert.equal(t.registry.toolsOf('n8n').length, 0);
-      assert.deepEqual(t.closed, ['n8n']);
-      const afterDisable = (await call(t.port, 'GET', '/api/connectors')).json.connectors.find((c: any) => c.name === 'n8n');
+      await call(t.port, 'POST', '/api/connectors/hooks/disable');
+      assert.equal(t.registry.toolsOf('hooks').length, 0);
+      assert.deepEqual(t.closed, ['hooks']);
+      const afterDisable = (await call(t.port, 'GET', '/api/connectors')).json.connectors.find((c: any) => c.name === 'hooks');
       assert.deepEqual([afterDisable.enabled, afterDisable.connected], [false, false]);
-      await call(t.port, 'POST', '/api/connectors/n8n/reconnect');
-      assert.equal(t.registry.toolsOf('n8n').length, 1);
-      await call(t.port, 'DELETE', '/api/connectors/n8n');
-      assert.equal(t.connections.some(c => c.name === 'n8n'), false);
-      assert.equal(t.router.vault.hasKey('connector:n8n').present, false);
+      await call(t.port, 'POST', '/api/connectors/hooks/reconnect');
+      assert.equal(t.registry.toolsOf('hooks').length, 1);
+      await call(t.port, 'DELETE', '/api/connectors/hooks');
+      assert.equal(t.connections.some(c => c.name === 'hooks'), false);
+      assert.equal(t.router.vault.hasKey('connector:hooks').present, false);
       assert.equal((await call(t.port, 'DELETE', '/api/connectors/nope')).status, 404);
     } finally { t.close(); }
   });

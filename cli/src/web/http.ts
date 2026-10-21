@@ -15,7 +15,7 @@ import { assertPublicUrl, isPrivateAddress, UrlBlockedError } from './url-safety
  *    request has a deadline.
  */
 
-export const FETCH_USER_AGENT = 'Mozilla/5.0 (compatible; EverythingAppBot/1.0; +https://futumore.pl)';
+export const FETCH_USER_AGENT = 'Mozilla/5.0 (compatible; EverythingAppBot/1.0; +https://github.com/prod-explore/everything-app)';
 
 export interface FetchOptions {
   maxBytes?: number;

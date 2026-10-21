@@ -7,7 +7,7 @@ import type { BrowserContext } from 'playwright';
  *
  * The agent (and any page it opens) must be able to reach the PUBLIC internet freely — shops,
  * price checks, docs — but never the operator's own network: loopback, the LAN (router, NAS,
- * Skarpa, n8n), link-local / cloud-metadata addresses, other containers, the Docker host.
+ * other self-hosted services), link-local / cloud-metadata addresses, other containers, the Docker host.
  * That is the same rule every hosted IDE/agent sandbox applies.
  *
  * Defence in depth — this guard is the application layer; the network layer (DOCKER-USER

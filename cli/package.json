@@ -1,7 +1,7 @@
 {
   "name": "everythingapp-cli",
   "version": "0.1.0",
-  "description": "Personal BYOK chat CLI for EverythingApp — talks to Claude with MCP tools (sandbox-mcp, obsidian-livesync-mcp) behind a terminal Approval Gate",
+  "description": "EverythingApp orchestrator: Express + SQLite server with the agent loop, provider router, approval gate and MCP client",
   "main": "dist/server.js",
   "type": "module",
   "scripts": {
