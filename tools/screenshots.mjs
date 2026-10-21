@@ -22,7 +22,7 @@ await send(page, 'ask: pick a database'); await page.waitForSelector('[aria-labe
 await page.screenshot({ path: `${OUT}/question.png` });
 await page.locator('[aria-label="Questions from the agent"] >> text=Dismiss').first().click(); await idle(page);
 await send(page, 'spawn'); await idle(page);
-await page.click('button[aria-label="Agents"]'); await page.waitForSelector('text=Completed');
+await page.click('button[aria-label="Agents"]'); await page.waitForSelector('text=Completed'); await idle(page);
 await page.screenshot({ path: `${OUT}/agents.png` });
 await page.reload(); await page.waitForSelector('#composer-input');
 await page.locator('#composer-input').blur();
@@ -34,6 +34,9 @@ await page.keyboard.press('Escape');
 await page.fill('#composer-input', '/');
 await page.waitForSelector('[aria-label="Commands"]');
 await page.screenshot({ path: `${OUT}/slash.png` });
+await page.fill('#composer-input', '');
+await page.click('text=Settings'); await page.waitForSelector('text=Model slots');
+await page.screenshot({ path: `${OUT}/models.png` });
 await page.context().close();
 
 page = await open({ width: 390, height: 844 }, true);
