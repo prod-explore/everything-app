@@ -80,8 +80,9 @@ export function ChatView({
             <Quote size={12} /> Quote
           </SelectionToolbarPrimitive.Quote>
         </SelectionToolbarPrimitive.Root>
-        <ChatQuestions conversationId={conversationId} />
+        {/* Before the question panel: the status row floats over the bottom edge of the messages, so it must not sit on top of a card. */}
         <ChatStatus api={convState} running={live.running} />
+        <ChatQuestions conversationId={conversationId} />
         <Composer
           error={error}
           errorKind={live.errorKind}
