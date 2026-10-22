@@ -32,6 +32,11 @@ const INIT_PROMPT =
 
 export type DockTool = 'agents' | 'files' | 'git';
 
+/** Placeholder while a dock panel's code chunk loads. */
+function DockLoading() {
+  return <p className="px-3 py-4 text-center text-xs text-fg-tertiary">Loading…</p>;
+}
+
 function formatWait(ms: number): string {
   const s = Math.max(1, Math.round(ms / 1000));
   if (s < 90) return `${s}s`;
@@ -410,20 +415,27 @@ function MainApp() {
             />
             <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-border md:hidden" aria-hidden="true" />
             <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-              <Suspense fallback={<p className="px-3 py-4 text-center text-xs text-fg-tertiary">Loading…</p>}>
+              {/* One Suspense boundary per panel: with a shared one, loading a panel's chunk hid the panels already open and React re-inserted them in a loop. */}
               {browserPanelOpen && (
-                <BrowserPanel conversationId={selectedId} onClose={() => setBrowserPanelOpen(false)} fill={dockTools.length === 0} />
+                <Suspense fallback={<DockLoading />}>
+                  <BrowserPanel conversationId={selectedId} onClose={() => setBrowserPanelOpen(false)} fill={dockTools.length === 0} />
+                </Suspense>
               )}
               {dockTools.includes('agents') && selectedId && (
-                <AgentsPanel conversationId={selectedId} refreshKey={agentsRefresh} budgetWarning={budgetWarning} onClose={() => closeDockTool('agents')} />
+                <Suspense fallback={<DockLoading />}>
+                  <AgentsPanel conversationId={selectedId} refreshKey={agentsRefresh} budgetWarning={budgetWarning} onClose={() => closeDockTool('agents')} />
+                </Suspense>
               )}
               {dockTools.includes('files') && selectedId && (
-                <ExplorerPanel key={workspaceOwner ?? ''} owner={workspaceOwner ?? selectedId} pinsRefresh={pinsRefresh} onClose={() => closeDockTool('files')} />
+                <Suspense fallback={<DockLoading />}>
+                  <ExplorerPanel key={workspaceOwner ?? ''} owner={workspaceOwner ?? selectedId} pinsRefresh={pinsRefresh} onClose={() => closeDockTool('files')} />
+                </Suspense>
               )}
               {dockTools.includes('git') && workspaceOwner && (
-                <GitPanel key={workspaceOwner} projectId={workspaceOwner} onConnect={() => openSettings('github')} onClose={() => closeDockTool('git')} />
+                <Suspense fallback={<DockLoading />}>
+                  <GitPanel key={workspaceOwner} projectId={workspaceOwner} onConnect={() => openSettings('github')} onClose={() => closeDockTool('git')} />
+                </Suspense>
               )}
-              </Suspense>
             </div>
           </aside>
           </>
