@@ -17,8 +17,9 @@ import { Monitor, Hand, X, Loader, Globe, Power } from 'lucide-react';
  * With no session the panel offers "Open browser" (optionally with a start URL), so a human can
  * start one without asking the agent to call browser_open.
  *
- * Layout: the frame is scaled to fit (object-contain) whatever size the panel has. When the browser
- * is the only panel in the dock it takes the frame's own 16:9 shape at full width (no black bars); otherwise it has a drag-resizable height.
+ * Layout: the panel reports its size to the browser (`viewport` message), so the page is rendered at exactly the panel's
+ * shape and the frame has no black bars; object-contain is only the fallback while a resize is in flight. When the browser
+ * is the only panel in the dock it takes the full height; otherwise it has a drag-resizable height.
  */
 
 function liveViewUrl(conversationId: string): string {
@@ -100,11 +101,11 @@ export function BrowserPanel({
   const frameBoxRef = useRef<HTMLDivElement | null>(null);
   const sessionLive = connected && status.session;
 
-  // Alone in the dock the page takes the panel's own shape: tell the browser the panel's size (debounced) so the
-  // frame has no black bars. Beside other panels the default viewport stays.
+  // The page takes the panel's own shape, whatever that is (alone in the dock, or beside other tools with the dragged height):
+  // tell the browser the panel's size (debounced) so the frame has no black bars.
   useEffect(() => {
     const box = frameBoxRef.current;
-    if (!fill || !sessionLive || !box) return;
+    if (!sessionLive || !box) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const report = () => {
       const { width, height } = box.getBoundingClientRect();
@@ -114,7 +115,7 @@ export function BrowserPanel({
     ro.observe(box);
     report();
     return () => { clearTimeout(timer); ro.disconnect(); };
-  }, [fill, sessionLive, sendEvent]);
+  }, [sessionLive, sendEvent]);
 
   useEffect(() => {
     setUnavailable(false);
