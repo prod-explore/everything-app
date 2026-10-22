@@ -184,6 +184,17 @@ describe('AgentManager', () => {
     await t2.agents.wait([w.runId], 'all');
   });
 
+  it('naming post_report / request_human_input in tools is not a delegation: workers always have them, the spawn still works', async () => {
+    const t = await setup(() => message([text('done')], 'end_turn'));
+    const r = t.agents.spawn(t.root.id, { goal: 'a', model: 'm', tools: ['post_report', 'request_human_input', 'srv__x'] });
+    assert.ok('runId' in r, 'error' in r ? r.error : '');
+    assert.deepEqual(getRun(t.db, r.runId)!.tools, ['srv__x']);
+    // …while a tool the parent really lacks is still refused.
+    const outside = t.agents.spawn(t.root.id, { goal: 'b', model: 'm', tools: ['post_report', 'srv__nope'] });
+    assert.ok('error' in outside && /srv__nope/.test(outside.error) && !/post_report/.test(outside.error));
+    await t.agents.wait([r.runId], 'all');
+  });
+
   it('stopping the root (kill switch) stops the worker tree, including a worker parked on an approval', async () => {
     const t = await setup(p => (isWorker(p) ? message([toolUse('t1', 'srv__x')], 'tool_use') : message([text('?')], 'end_turn')), { autoApprove: [] });
     const r = t.agents.spawn(t.root.id, { goal: 'needs approval', model: 'm', tools: ['srv__x'] });

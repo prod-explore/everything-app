@@ -119,6 +119,9 @@ interface LiveRun {
 
 const TERMINAL = (s: string) => !ACTIVE_STATUSES.includes(s as RunRow['status']);
 
+/** Tools every worker always has, whatever its parent delegates (see workerExtraTools in server.ts). */
+const ALWAYS_ON_WORKER_TOOLS: ReadonlySet<string> = new Set(['request_human_input', 'post_report']);
+
 export class AgentManager {
   private readonly live = new Map<string, LiveRun>();
   private readonly semaphores = new Map<string, Semaphore>();
@@ -218,7 +221,9 @@ export class AgentManager {
 
     // Narrowing only: a worker can never get a tool its parent doesn't have (Plan v3 §7c).
     const parentTools = new Set(this.toolsOf(parent));
-    const requested = (input.tools ?? []).map(t => this.registryFor(parent).resolveName(t) ?? t);
+    // post_report and request_human_input are handed to every worker by the app (workerExtraTools). A model sees them in its
+    // own tool list and naturally names them here — that's not a delegation, so it must not make the spawn fail.
+    const requested = (input.tools ?? []).map(t => this.registryFor(parent).resolveName(t) ?? t).filter(t => !ALWAYS_ON_WORKER_TOOLS.has(t));
     const outside = requested.filter(t => !parentTools.has(t));
     if (outside.length) return { error: `tools not available to the parent, cannot delegate: ${outside.join(', ')}` };
 
@@ -443,7 +448,7 @@ export class AgentManager {
               goal: { type: 'string', description: 'Precise, self-contained goal and expected report format.' },
               model: { type: 'string', description: 'Exact model id from the model list in your instructions. Omit to use the default for agents.' },
               tag: { type: 'string', description: 'Pick the first usable model carrying this tag (e.g. "free", "coder", "reasoning") instead of naming one. Ignored when "model" is given.' },
-              tools: { type: 'array', items: { type: 'string' }, description: 'Tool names the worker may use (subset of yours). Empty = none.' },
+              tools: { type: 'array', items: { type: 'string' }, description: 'Extra tool names the worker may use (subset of yours). Empty = none. Every worker already has post_report and request_human_input — no need to list them.' },
               label: { type: 'string', description: 'Short role name, e.g. "researcher", "tests".' },
             },
             required: ['goal'],
