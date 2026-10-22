@@ -57,7 +57,9 @@ export interface ConversationStateInfo {
 /** Why a turn failed (cli/src/providers/errors.ts). */
 export type TurnErrorKind =
   | 'context_too_long' | 'auth' | 'budget_exhausted' | 'rate_limited' | 'busy' | 'timeout'
-  | 'tool_parse' | 'not_configured' | 'aborted' | 'unknown';
+  | 'tool_parse' | 'not_configured' | 'aborted' | 'unknown'
+  /** Client-side only: the message never reached the server (e.g. a turn was still running). Nothing to retry. */
+  | 'send_failed';
 
 /** What the composer sends up for an image attachment — see api.ts's sendMessage(). */
 export interface OutgoingAttachment {

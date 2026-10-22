@@ -44,7 +44,7 @@ export function Composer({
               <Minimize2 size={12} /> Compact &amp; retry
             </button>
           )}
-          {errorKind !== 'auth' && errorKind !== 'not_configured' && errorKind !== 'budget_exhausted' && (
+          {errorKind !== 'auth' && errorKind !== 'not_configured' && errorKind !== 'budget_exhausted' && errorKind !== 'send_failed' && (
             <button
               type="button"
               onClick={onRetry}

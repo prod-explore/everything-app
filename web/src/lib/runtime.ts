@@ -1,10 +1,18 @@
 import { SimpleImageAttachmentAdapter, useExternalStoreRuntime } from '@assistant-ui/react';
 import type { AppendMessage, ThreadMessageLike } from '@assistant-ui/react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { editMessage, getMessages, deleteMessageFrom, killTurn, regenerateMessage, retryLastMessage, sendMessage } from '../api';
-import type { OutgoingAttachment } from '../types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ApiError, editMessage, getMessages, deleteMessageFrom, killTurn, regenerateMessage, retryLastMessage, sendMessage } from '../api';
+import type { OutgoingAttachment, TurnErrorKind } from '../types';
 import { useSSE } from '../hooks/useSSE';
 import { foldRawMessages, liveTurnToMessage } from './messages';
+
+/** What to tell the person when their message could not be sent (the server refuses with 409 while a turn is running). */
+export function sendFailureMessage(e: unknown): string {
+  if (e instanceof ApiError && e.status === 409) {
+    return "The assistant is still working on this chat, so your message wasn't sent. Wait for it to finish (or stop it), then send it again.";
+  }
+  return `Your message wasn't sent: ${e instanceof Error ? e.message : 'unknown error'}.`;
+}
 
 /** data:image/png;base64,AAAA... → { mediaType: 'image/png', data: 'AAAA...' } */
 function splitDataUrl(dataUrl: string): OutgoingAttachment | null {
@@ -31,6 +39,9 @@ function truncateToAnchor(persisted: ThreadMessageLike[], parentId: string | nul
 export function useEverythingAppRuntime(conversationId: string | null) {
   const [persisted, setPersisted] = useState<ThreadMessageLike[]>([]);
   const live = useSSE(conversationId);
+  // A message the server refused: shown in the composer's banner, and the text goes back into the box.
+  const [sendError, setSendError] = useState<string | null>(null);
+  const composerRef = useRef<{ setText: (text: string) => void } | null>(null);
 
   const refetch = useCallback(() => {
     if (!conversationId) {
@@ -81,6 +92,7 @@ export function useEverythingAppRuntime(conversationId: string | null) {
       const images = message.content.filter((c): c is Extract<typeof c, { type: 'image' }> => c.type === 'image');
       const attachments = images.map(img => splitDataUrl(img.image)).filter((a): a is OutgoingAttachment => a !== null);
       if (!text.trim() && attachments.length === 0) return;
+      setSendError(null);
 
       // Optimistic: show the user's own message immediately rather than
       // waiting on the round trip to the backend and the turn:start SSE
@@ -93,11 +105,11 @@ export function useEverythingAppRuntime(conversationId: string | null) {
 
       try {
         await sendMessage(conversationId, text, attachments.length > 0 ? attachments : undefined);
-      } catch {
-        // Roll back the optimistic message — a failed send with no reply
-        // and no way to retry from where it left off is worse than just
-        // making the user retype it.
+      } catch (e) {
+        // Roll back the optimistic message, say why, and put the text back so nothing has to be retyped.
         setPersisted(prev => prev.slice(0, -1));
+        setSendError(sendFailureMessage(e));
+        if (typed) composerRef.current?.setText(typed);
       }
     },
     [conversationId],
@@ -182,6 +194,10 @@ export function useEverythingAppRuntime(conversationId: string | null) {
     },
   });
 
+  useEffect(() => { composerRef.current = runtime.thread.composer; }, [runtime]);
+  // A new turn (or a finished one) makes an old "wasn't sent" notice stale.
+  useEffect(() => { setSendError(null); }, [conversationId, live.finishedCount]);
+
   const retry = useCallback(async () => {
     if (!conversationId) return;
     try {
@@ -191,5 +207,7 @@ export function useEverythingAppRuntime(conversationId: string | null) {
     }
   }, [conversationId]);
 
-  return { runtime, refetch, live, error: live.error, retry };
+  const error = live.error ?? sendError ?? undefined;
+  const errorKind: TurnErrorKind | undefined = live.error ? live.errorKind : sendError ? 'send_failed' : undefined;
+  return { runtime, refetch, live, error, errorKind, retry };
 }

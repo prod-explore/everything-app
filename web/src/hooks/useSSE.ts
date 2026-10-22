@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useRef } from 'react';
+import { getTurnStatus } from '../api';
 import type { ConversationStateInfo, TurnErrorKind } from '../types';
 
 /**
@@ -48,6 +49,8 @@ export const INITIAL_STATE: LiveTurnState = { running: false, parts: [], finishe
 export type LiveTurnAction =
   | { type: 'clear' }
   | { type: 'start' }
+  /** The server says a turn is running that we never saw start (reload, switched back to the chat, dropped stream). */
+  | { type: 'resume' }
   | { type: 'text_delta'; block: number; text: string }
   | { type: 'thinking_delta'; text: string }
   | { type: 'text'; text: string }
@@ -64,6 +67,8 @@ export function liveTurnReducer(state: LiveTurnState, action: LiveTurnAction): L
       return { running: false, parts: [], finishedCount: state.finishedCount, compactedCount: state.compactedCount };
     case 'start':
       return { running: true, parts: [], finishedCount: state.finishedCount, compactedCount: state.compactedCount, context: state.context, convState: state.convState };
+    case 'resume':
+      return state.running ? state : liveTurnReducer(state, { type: 'start' });
     case 'context':
       return { ...state, context: { used: action.used, limit: action.limit } };
     case 'conv_state':
@@ -170,7 +175,8 @@ export function useSSE(conversationId: string | null, onSideEvent?: (event: Side
     // and is only set to true when the server actually emits 'turn:start'.
 
     // Same-origin EventSource sends the HttpOnly session cookie by itself — no credential in the URL.
-    const url = `/api/conversations/${conversationId}/stream`;
+    const id = conversationId;
+    const url = `/api/conversations/${id}/stream`;
     let closed = false;
     let source: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -229,6 +235,14 @@ export function useSSE(conversationId: string | null, onSideEvent?: (event: Side
           onSideEventRef.current?.(evt, data);
         });
       }
+
+      // Every (re)connect: a reload, a switch back to this chat or a dropped stream can leave a turn running on the
+      // server that we never saw start. Without this the composer looked idle and a sent message was refused (409).
+      source.onopen = () => {
+        void getTurnStatus(id)
+          .then(s => { if (!closed && s.status === 'running') dispatch({ type: 'resume' }); })
+          .catch(() => { /* the next event or reconnect sorts it out */ });
+      };
 
       source.onerror = () => {
         source?.close();

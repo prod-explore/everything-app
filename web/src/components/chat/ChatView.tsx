@@ -91,7 +91,7 @@ export function ChatView({
   onOpenSettings: () => void;
   approvals: ReturnType<typeof useApprovals>;
 }) {
-  const { runtime, live, error, retry } = useEverythingAppRuntime(conversationId);
+  const { runtime, live, error, errorKind, retry } = useEverythingAppRuntime(conversationId);
   const convState = useConversationState(conversationId, live);
   const content = useFollowBottom(conversationId);
 
@@ -122,7 +122,7 @@ export function ChatView({
           leading={<EffortSelect api={convState} running={live.running} />}
           trailing={<ContextMeter api={convState} running={live.running} />}
           error={error}
-          errorKind={live.errorKind}
+          errorKind={errorKind}
           errorDetail={live.errorDetail}
           onRetry={retry}
           onCompactAndRetry={async () => { if (await convState.compact()) retry(); }}

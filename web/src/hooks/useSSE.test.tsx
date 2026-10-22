@@ -2,6 +2,9 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { INITIAL_STATE, liveTurnReducer, useSSE, type LiveTurnAction, type LiveTurnState } from './useSSE';
 
+const { getTurnStatus } = vi.hoisted(() => ({ getTurnStatus: vi.fn() }));
+vi.mock('../api', () => ({ getTurnStatus }));
+
 const run = (actions: LiveTurnAction[], from: LiveTurnState = INITIAL_STATE) => actions.reduce(liveTurnReducer, from);
 
 describe('liveTurnReducer', () => {
@@ -67,6 +70,12 @@ describe('liveTurnReducer', () => {
     expect(s.compactedCount).toBe(1);
   });
 
+  it('resume starts a turn we never saw start, and leaves a turn we already follow untouched', () => {
+    expect(liveTurnReducer(INITIAL_STATE, { type: 'resume' }).running).toBe(true);
+    const following = run([{ type: 'start' }, { type: 'text', text: 'partial' }]);
+    expect(liveTurnReducer(following, { type: 'resume' })).toBe(following);
+  });
+
   it('a clear forgets the turn but not the counters consumers watch', () => {
     const s = run([{ type: 'start' }, { type: 'finish' }, { type: 'compacted' }, { type: 'clear' }]);
     expect(s).toMatchObject({ running: false, parts: [], finishedCount: 1, compactedCount: 1 });
@@ -77,6 +86,7 @@ class FakeEventSource {
   static instances: FakeEventSource[] = [];
   readonly listeners = new Map<string, Array<(e: MessageEvent) => void>>();
   onerror: (() => void) | null = null;
+  onopen: (() => void) | null = null;
   closed = false;
   readonly url: string;
   constructor(url: string) {
@@ -99,6 +109,8 @@ describe('useSSE', () => {
     FakeEventSource.instances = [];
     vi.stubGlobal('EventSource', FakeEventSource);
     vi.useFakeTimers();
+    getTurnStatus.mockReset();
+    getTurnStatus.mockResolvedValue({ id: 0, status: 'idle', usage: '' });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -126,6 +138,26 @@ describe('useSSE', () => {
     expect(result.current.parts).toMatchObject([{ type: 'text', text: 'Hi' }]);
     act(() => es.emit('turn:error', { error: 'boom', kind: 'other' }));
     expect(result.current).toMatchObject({ running: false, error: 'boom', finishedCount: 1 });
+  });
+
+  it('picks up a turn that is already running when the stream connects (reload, switching back, reconnect)', async () => {
+    getTurnStatus.mockResolvedValue({ id: 4, status: 'running', usage: '' });
+    const { result } = renderHook(() => useSSE('c1'));
+    expect(result.current.running).toBe(false);
+    await act(async () => { FakeEventSource.instances[0]!.onopen?.(); });
+    expect(getTurnStatus).toHaveBeenCalledWith('c1');
+    expect(result.current.running).toBe(true);
+  });
+
+  it('stays idle when the server is idle, and ignores a late answer after unmount', async () => {
+    const { result, unmount } = renderHook(() => useSSE('c1'));
+    await act(async () => { FakeEventSource.instances[0]!.onopen?.(); });
+    expect(result.current.running).toBe(false);
+    getTurnStatus.mockResolvedValue({ id: 5, status: 'running', usage: '' });
+    const open = FakeEventSource.instances[0]!.onopen;
+    unmount();
+    await act(async () => { open?.(); });
+    expect(result.current.running).toBe(false);
   });
 
   it('hands side events to the callback', () => {
