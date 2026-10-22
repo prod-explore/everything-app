@@ -27,7 +27,7 @@ function TodoPanel({ api }: { api: ConversationStateApi }) {
           )}
         </button>
         {open && (
-          <ul className="space-y-1 border-t border-border px-2.5 py-2">
+          <ul className="max-h-[30vh] space-y-1 overflow-y-auto border-t border-border px-2.5 py-2">
             {todos.map((t, i) => (
               <li key={i} className={`flex items-start gap-2 ${t.status === 'completed' ? 'text-fg-tertiary line-through' : t.status === 'in_progress' ? 'text-fg' : 'text-fg-secondary'}`}>
                 {t.status === 'completed' ? <Check size={13} className="mt-0.5 shrink-0 text-success" /> : t.status === 'in_progress' ? <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin" /> : <Circle size={13} className="mt-0.5 shrink-0 text-fg-tertiary" />}

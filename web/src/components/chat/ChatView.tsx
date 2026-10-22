@@ -98,13 +98,17 @@ export function ChatView({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ThreadPrimitive.Root className="flex h-full flex-col">
-        <ThreadPrimitive.Viewport className="flex flex-1 flex-col overflow-y-auto px-4 pb-6 pt-6">
-          <div ref={content} className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5">
+        <ThreadPrimitive.Viewport className="flex flex-1 flex-col overflow-y-auto px-4 pt-6">
+          <div ref={content} className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5 pb-6">
             <ThreadPrimitive.Empty>
               <Onboarding onOpenSettings={onOpenSettings} />
             </ThreadPrimitive.Empty>
             <Transcript conversationId={conversationId} />
             <InlineApprovals pending={approvals.pending} respond={approvals.respond} />
+          </div>
+          {/* Inside the scroller (sticky) rather than below it, so the scrollbar runs all the way down to the composer. */}
+          <div className="sticky bottom-0 z-10 -mx-4 shrink-0 bg-bg">
+            <ChatStatus api={convState} running={live.running} />
           </div>
         </ThreadPrimitive.Viewport>
         {/* Select any passage in a message → floating "Quote" quotes just that passage in the next reply. */}
@@ -113,7 +117,6 @@ export function ChatView({
             <Quote size={12} /> Quote
           </SelectionToolbarPrimitive.Quote>
         </SelectionToolbarPrimitive.Root>
-        <ChatStatus api={convState} running={live.running} />
         <ChatQuestions conversationId={conversationId} />
         <Composer
           leading={<EffortSelect api={convState} running={live.running} />}
