@@ -1,6 +1,13 @@
 import type { ThreadAssistantMessagePart, ThreadMessageLike } from '@assistant-ui/react';
 import type { LivePart } from '../hooks/useSSE';
 import type { ContentBlock, RawMessage } from '../types';
+import { parseStoredTime } from './answerPlacement';
+
+/** `{ createdAt }` for a stored row, or nothing when the API sent no (valid) time — so existing shapes stay unchanged. */
+function storedAt(msg: RawMessage): { createdAt?: Date } {
+  const t = parseStoredTime(msg.createdAt);
+  return t === null ? {} : { createdAt: new Date(t) };
+}
 
 /**
  * db.ts stores messages as content blocks: a tool call and its result are
@@ -46,7 +53,7 @@ export function foldRawMessages(raw: RawMessage[]): ThreadMessageLike[] {
             ? { type: 'text' as const, text: b.text }
             : { type: 'image' as const, image: `data:${b.source.media_type};base64,${b.source.data}` },
         );
-      result.push({ id, role: 'user', content: parts.length > 0 ? parts : [{ type: 'text', text: '' }] });
+      result.push({ id, role: 'user', content: parts.length > 0 ? parts : [{ type: 'text', text: '' }], ...storedAt(msg) });
       continue;
     }
 
@@ -96,7 +103,7 @@ export function foldRawMessages(raw: RawMessage[]): ThreadMessageLike[] {
     if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
       result[result.length - 1] = { ...prev, content: [...(prev.content as ThreadAssistantMessagePart[]), ...parts] };
     } else {
-      result.push({ id: String(msg.id), role: 'assistant', content: parts });
+      result.push({ id: String(msg.id), role: 'assistant', content: parts, ...storedAt(msg) });
     }
   }
 

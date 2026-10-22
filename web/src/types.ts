@@ -36,6 +36,8 @@ export interface RawMessage {
   id: number;
   role: string; // 'user' | 'assistant' | 'summary' (a compaction marker) — kept loose because db.ts's MessageParam type is loose
   content: string | ContentBlock[] | { text: string; upTo: number; replaced: number };
+  /** When the row was stored (SQLite UTC, "YYYY-MM-DD HH:MM:SS"). */
+  createdAt?: string;
 }
 
 export type ReasoningEffort = 'low' | 'medium' | 'high';

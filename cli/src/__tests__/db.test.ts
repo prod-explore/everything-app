@@ -13,6 +13,7 @@ import {
   updateConversation,
   deleteConversation,
   getMessages,
+  getMessagesTimed,
   appendMessage,
   clearMessages,
   getSetting,
@@ -93,6 +94,16 @@ describe('db.ts integration', () => {
     assert.deepEqual(messages[2].content, [
       { type: 'tool_result', tool_use_id: 'call_1', content: 'file.txt', is_error: false },
     ]);
+  });
+
+  it('getMessagesTimed adds the creation time (UTC) and leaves getMessages untouched', () => {
+    const { id } = createConversation(db, { title: 'timed' });
+    appendMessage(db, id, 'user', 'hello');
+    const timed = getMessagesTimed(db, id);
+    assert.equal(timed.length, 1);
+    assert.match(timed[0].createdAt, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    assert.equal(timed[0].content, 'hello');
+    assert.equal('createdAt' in getMessages(db, id)[0], false);
   });
 
   it('clearMessages empties history without deleting the conversation itself', () => {

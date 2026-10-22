@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { AssistantRuntimeProvider, SelectionToolbarPrimitive, ThreadPrimitive } from '@assistant-ui/react';
+import { useEffect, useMemo, useRef } from 'react';
+import { AssistantRuntimeProvider, SelectionToolbarPrimitive, ThreadPrimitive, useAuiState } from '@assistant-ui/react';
 import { Quote } from 'lucide-react';
 import { useEverythingAppRuntime } from '../../lib/runtime';
 import { Composer } from './Composer';
@@ -10,7 +10,9 @@ import { ChatStatus, ContextMeter, EffortSelect } from './ChatStatus';
 import { CompactionNotice } from './CompactionNotice';
 import { useConversationState } from '../../hooks/useConversationState';
 import type { useApprovals } from '../../hooks/useApprovals';
-import { AnsweredTrail } from '../gazeta/AnsweredTrail';
+import { AnsweredLine } from '../gazeta/AnsweredLine';
+import { useAnsweredQuestions } from '../../hooks/useAnsweredQuestions';
+import { AT_END, parseStoredTime, placeAnswers } from '../../lib/answerPlacement';
 import { Onboarding } from './Onboarding';
 
 const STICK_PX = 160; // closer than this to the bottom = the reader is "following" the conversation
@@ -44,6 +46,42 @@ function useFollowBottom(conversationId: string) {
   return content;
 }
 
+/** The message list; each answered agent question is shown under the reply of the turn that asked it. */
+function Transcript({ conversationId }: { conversationId: string }) {
+  const answered = useAnsweredQuestions(conversationId);
+  const messages = useAuiState(s => s.thread.messages);
+  const placed = useMemo(
+    () =>
+      placeAnswers(
+        messages.map(m => ({ id: m.id, role: m.role, at: m.createdAt ? m.createdAt.getTime() : null })),
+        answered.map(a => ({ id: a.id, askedAt: parseStoredTime(a.createdAt), answeredAt: parseStoredTime(a.respondedAt) })),
+      ),
+    [messages, answered],
+  );
+  const byId = useMemo(() => new Map(answered.map(a => [a.id, a])), [answered]);
+  const lines = (key: string) => {
+    const items = (placed.get(key) ?? []).flatMap(id => byId.get(id) ?? []);
+    return items.length === 0 ? null : (
+      <div className="space-y-1.5" aria-label="Twoje odpowiedzi">
+        {items.map(i => <AnsweredLine key={i.id} item={i} />)}
+      </div>
+    );
+  };
+  return (
+    <>
+      <ThreadPrimitive.Messages>
+        {({ message }) => (
+          <>
+            {message.role === 'user' ? <UserBubble /> : message.role === 'system' ? <CompactionNotice /> : <AssistantBubble />}
+            {lines(message.id)}
+          </>
+        )}
+      </ThreadPrimitive.Messages>
+      {lines(AT_END)}
+    </>
+  );
+}
+
 export function ChatView({
   conversationId,
   onOpenSettings,
@@ -65,12 +103,7 @@ export function ChatView({
             <ThreadPrimitive.Empty>
               <Onboarding onOpenSettings={onOpenSettings} />
             </ThreadPrimitive.Empty>
-            <ThreadPrimitive.Messages>
-              {({ message }) =>
-                message.role === 'user' ? <UserBubble key={message.id} /> : message.role === 'system' ? <CompactionNotice key={message.id} /> : <AssistantBubble key={message.id} />
-              }
-            </ThreadPrimitive.Messages>
-            <AnsweredTrail conversationId={conversationId} />
+            <Transcript conversationId={conversationId} />
             <InlineApprovals pending={approvals.pending} respond={approvals.respond} />
           </div>
         </ThreadPrimitive.Viewport>

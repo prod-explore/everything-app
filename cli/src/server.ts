@@ -62,6 +62,7 @@ import {
   updateConversation,
   deleteConversation,
   getMessages,
+  getMessagesTimed,
   getConversationState,
   setConversationState,
   REASONING_EFFORTS,
@@ -968,7 +969,7 @@ ${formatHumanResponse(response)}` };
   app.get('/api/conversations/:id/messages', (req, res) => {
     const conv = getConversation(db, req.params.id);
     if (!conv) { res.status(404).json({ error: 'conversation not found' }); return; }
-    res.json({ messages: getMessages(db, req.params.id) });
+    res.json({ messages: getMessagesTimed(db, req.params.id) });
   });
 
   app.delete('/api/conversations/:id/messages', (req, res) => {

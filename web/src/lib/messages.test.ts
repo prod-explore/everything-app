@@ -19,6 +19,22 @@ describe('foldRawMessages', () => {
     expect(call).toMatchObject({ toolCallId: 't1', toolName: 'run_bash', result: 'a.txt', isError: false, argsText: '{"command":"ls"}' });
   });
 
+  it('carries the stored time of user and assistant rows (the first row of a turn for the merged reply)', () => {
+    const raw: RawMessage[] = [
+      { id: 1, role: 'user', content: 'go', createdAt: '2026-10-22 10:00:00' },
+      { id: 2, role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'read_file', input: {} }], createdAt: '2026-10-22 10:00:05' },
+      { id: 3, role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'x' }], createdAt: '2026-10-22 10:00:06' },
+      { id: 4, role: 'assistant', content: [{ type: 'text', text: 'done' }], createdAt: '2026-10-22 10:00:09' },
+    ];
+    const out = foldRawMessages(raw);
+    expect(out.map(m => m.createdAt?.toISOString())).toEqual(['2026-10-22T10:00:00.000Z', '2026-10-22T10:00:05.000Z']);
+  });
+
+  it('leaves createdAt off when the API sent no time', () => {
+    const out = foldRawMessages([{ id: 1, role: 'user', content: 'hi' }]);
+    expect('createdAt' in out[0]!).toBe(false);
+  });
+
   it('reads one turn with several tool rounds as a single assistant message, in order', () => {
     const raw: RawMessage[] = [
       { id: 1, role: 'user', content: 'go' },

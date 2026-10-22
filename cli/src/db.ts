@@ -515,6 +515,17 @@ export function getMessages(db: Database.Database, conversationId: string): Mess
   return rows.map(r => ({ id: r.id, role: r.role, content: JSON.parse(r.content) }));
 }
 
+/**
+ * getMessages plus each row's creation time (SQLite UTC, "YYYY-MM-DD HH:MM:SS") — for the chat view, which places
+ * things such as answered questions by time. Not used to build a turn, so the extra field never reaches a model.
+ */
+export function getMessagesTimed(db: Database.Database, conversationId: string): Array<MessageParam & { createdAt: string }> {
+  const rows = db
+    .prepare(`SELECT id, role, content, created_at as createdAt FROM messages WHERE conversation_id = ? AND is_active = 1 ORDER BY id ASC`)
+    .all(conversationId) as Array<{ id: number; role: string; content: string; createdAt: string }>;
+  return rows.map(r => ({ id: r.id, role: r.role, content: JSON.parse(r.content), createdAt: r.createdAt }));
+}
+
 /** Every message including inactive branches — for history/debugging, not for building a turn. */
 export function getAllMessagesFull(db: Database.Database, conversationId: string): FullMessageRow[] {
   const rows = db
