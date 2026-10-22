@@ -68,7 +68,11 @@ function MainApp() {
     refresh: refreshConversations,
   } = useConversations();
   const gazeta = useGazetaStore();
-  const [dockTool, setDockTool] = useState<DockTool | null>(null);
+  // Tools in the right dock (Agents, Files, Git) can be open together; they share the dock's height. The browser is a separate toggle.
+  const [dockTools, setDockTools] = useState<DockTool[]>([]);
+  const toggleDockTool = useCallback((t: DockTool) => setDockTools(cur => (cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t])), []);
+  const openDockTool = useCallback((t: DockTool) => setDockTools(cur => (cur.includes(t) ? cur : [...cur, t])), []);
+  const closeDockTool = useCallback((t: DockTool) => setDockTools(cur => cur.filter(x => x !== t)), []);
   const [agentsRefresh, setAgentsRefresh] = useState(0);
   const [budgetWarning, setBudgetWarning] = useState<BudgetWarning | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -202,8 +206,8 @@ function MainApp() {
       const name = (e as CustomEvent<{ name: string }>).detail.name;
       if (name === 'new') void createConversation();
       else if (name === 'search') setSearchOpen(true);
-      else if (name === 'agents') setDockTool('agents');
-      else if (name === 'files') setDockTool('files');
+      else if (name === 'agents') openDockTool('agents');
+      else if (name === 'files') openDockTool('files');
       else if (name === 'init' && selectedId) {
         void sendMessage(selectedId, INIT_PROMPT).catch(() => {});
       }
@@ -355,8 +359,8 @@ function MainApp() {
         onToggleSidebar={() => (window.matchMedia('(min-width: 768px)').matches ? toggleSidebarCollapsed() : setSidebarOpen(o => !o))}
         onOpenBrowser={() => setBrowserPanelOpen(o => !o)}
         browserPanelOpen={browserPanelOpen}
-        dockTool={dockTool}
-        onToggleTool={t => setDockTool(cur => (cur === t ? null : t))}
+        dockTools={dockTools}
+        onToggleTool={toggleDockTool}
       />
       {providerRetry && (
         <div role="status" className="flex items-center justify-between gap-3 border-b border-border px-4 py-2 text-xs text-fg-secondary">
@@ -372,13 +376,13 @@ function MainApp() {
           <ChatView conversationId={selectedId} onOpenSettings={() => openSettings('models')} approvals={approvals} />
         </div>
 
-        {/* Right dock: browser on top, artifacts below. Side column on desktop, full-screen sheet on mobile. */}
-        {(browserPanelOpen || dockTool) && (
+        {/* Right dock: browser on top, the open tools (agents, files, git) below, sharing the height. Side column on desktop, sheet on mobile. */}
+        {(browserPanelOpen || dockTools.length > 0) && (
           <>
           <div
             className="fixed inset-0 z-40 bg-black/60 md:hidden"
             aria-hidden="true"
-            onClick={() => { setBrowserPanelOpen(false); setDockTool(null); }}
+            onClick={() => { setBrowserPanelOpen(false); setDockTools([]); }}
           />
           <aside
             style={{ '--dock-w': `${clampDock(dockWidth)}px` } as CSSProperties}
@@ -408,16 +412,16 @@ function MainApp() {
             <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
               <Suspense fallback={<p className="px-3 py-4 text-center text-xs text-fg-tertiary">Loading…</p>}>
               {browserPanelOpen && (
-                <BrowserPanel conversationId={selectedId} onClose={() => setBrowserPanelOpen(false)} fill={!dockTool} />
+                <BrowserPanel conversationId={selectedId} onClose={() => setBrowserPanelOpen(false)} fill={dockTools.length === 0} />
               )}
-              {dockTool === 'agents' && selectedId && (
-                <AgentsPanel conversationId={selectedId} refreshKey={agentsRefresh} budgetWarning={budgetWarning} onClose={() => setDockTool(null)} />
+              {dockTools.includes('agents') && selectedId && (
+                <AgentsPanel conversationId={selectedId} refreshKey={agentsRefresh} budgetWarning={budgetWarning} onClose={() => closeDockTool('agents')} />
               )}
-              {dockTool === 'files' && selectedId && (
-                <ExplorerPanel key={workspaceOwner ?? ''} owner={workspaceOwner ?? selectedId} pinsRefresh={pinsRefresh} onClose={() => setDockTool(null)} />
+              {dockTools.includes('files') && selectedId && (
+                <ExplorerPanel key={workspaceOwner ?? ''} owner={workspaceOwner ?? selectedId} pinsRefresh={pinsRefresh} onClose={() => closeDockTool('files')} />
               )}
-              {dockTool === 'git' && workspaceOwner && (
-                <GitPanel key={workspaceOwner} projectId={workspaceOwner} onConnect={() => openSettings('github')} onClose={() => setDockTool(null)} />
+              {dockTools.includes('git') && workspaceOwner && (
+                <GitPanel key={workspaceOwner} projectId={workspaceOwner} onConnect={() => openSettings('github')} onClose={() => closeDockTool('git')} />
               )}
               </Suspense>
             </div>
@@ -427,8 +431,8 @@ function MainApp() {
         <RightRail
           browserOpen={browserPanelOpen}
           onToggleBrowser={() => setBrowserPanelOpen(o => !o)}
-          tool={dockTool}
-          onToggleTool={t => setDockTool(cur => (cur === t ? null : t))}
+          tools={dockTools}
+          onToggleTool={toggleDockTool}
         />
       </div>
 

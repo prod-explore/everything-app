@@ -5,12 +5,13 @@ import type { DockTool } from '../../App';
 export function RightRail({
   browserOpen,
   onToggleBrowser,
-  tool,
+  tools: open,
   onToggleTool,
 }: {
   browserOpen: boolean;
   onToggleBrowser: () => void;
-  tool: DockTool | null;
+  /** Tools currently open in the dock; any number of them can be open at once. */
+  tools: DockTool[];
   onToggleTool: (tool: DockTool) => void;
 }) {
   const button = (active: boolean, label: string, onClick: () => void, icon: React.ReactNode) => (
@@ -36,7 +37,7 @@ export function RightRail({
     <nav className="hidden w-12 shrink-0 flex-col items-center gap-1 border-l border-border bg-bg py-2 md:flex" aria-label="Panels">
       {button(browserOpen, browserOpen ? 'Hide browser' : 'Show browser', onToggleBrowser, <Globe size={18} />)}
       <div className="my-1 h-px w-6 bg-border" />
-      {tools.map(t => button(tool === t.id, tool === t.id ? `Hide ${t.label}` : t.label, () => onToggleTool(t.id), t.icon))}
+      {tools.map(t => button(open.includes(t.id), open.includes(t.id) ? `Hide ${t.label}` : t.label, () => onToggleTool(t.id), t.icon))}
     </nav>
   );
 }

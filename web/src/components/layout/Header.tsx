@@ -24,7 +24,7 @@ export function Header({
   onToggleSidebar,
   onOpenBrowser,
   browserPanelOpen,
-  dockTool,
+  dockTools,
   onToggleTool,
   conversationId,
   ghost = false,
@@ -42,7 +42,8 @@ export function Header({
   onToggleSidebar: () => void;
   onOpenBrowser: () => void;
   browserPanelOpen: boolean;
-  dockTool: DockTool | null;
+  /** Dock tools currently open (several can be open at once). */
+  dockTools: DockTool[];
   onToggleTool: (tool: DockTool) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -131,8 +132,8 @@ export function Header({
               <Globe size={15} /> {browserPanelOpen ? 'Hide browser' : 'Browser'}
             </button>
             {TOOLS.map(t => (
-              <button key={t.id} role="menuitem" className={itemClass(dockTool === t.id)} onClick={pick(() => onToggleTool(t.id))}>
-                <t.icon size={15} /> {dockTool === t.id ? `Hide ${t.label}` : t.label}
+              <button key={t.id} role="menuitem" className={itemClass(dockTools.includes(t.id))} onClick={pick(() => onToggleTool(t.id))}>
+                <t.icon size={15} /> {dockTools.includes(t.id) ? `Hide ${t.label}` : t.label}
               </button>
             ))}
             {conversationId && (

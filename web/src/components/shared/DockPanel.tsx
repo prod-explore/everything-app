@@ -4,7 +4,8 @@ import { X } from 'lucide-react';
 /** Common frame for right-dock panels (Agents, Files, Source Control, GitHub): header + scrollable body. */
 export function DockPanel({ title, icon, onClose, actions, children }: PropsWithChildren<{ title: string; icon?: ReactNode; onClose: () => void; actions?: ReactNode }>) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col border-b border-border" aria-label={title}>
+    // Several panels can be open together and split the dock's height; none shrinks below a usable size (the dock scrolls instead).
+    <section className="flex min-h-[9rem] flex-1 basis-0 flex-col border-b border-border" aria-label={title}>
       <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
         {icon && <span className="text-fg-secondary">{icon}</span>}
         <h2 className="flex-1 truncate text-sm font-medium text-fg">{title}</h2>
