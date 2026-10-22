@@ -64,11 +64,11 @@ function QuoteButton() {
 /** Replaces the normal bubble while a user message is being edited — the ambient composer scope resolves to this message's own edit composer inside MessagePrimitive.Root. */
 function EditComposer() {
   return (
-    <ComposerPrimitive.Root className="ml-auto flex w-[75%] flex-col gap-2 rounded-message border border-border-hover bg-bg-secondary p-2.5">
+    <ComposerPrimitive.Root className="flex w-full flex-col gap-2 rounded-message border border-border-hover bg-bg-secondary p-2.5">
       <ComposerPrimitive.Input
         rows={1}
         autoFocus
-        className="max-h-32 resize-none bg-transparent text-sm text-fg outline-none"
+        className="max-h-64 w-full resize-none bg-transparent text-sm text-fg outline-none"
       />
       <div className="flex justify-end gap-1">
         <ComposerPrimitive.Cancel asChild>
@@ -88,8 +88,9 @@ function EditComposer() {
 
 export function UserBubble() {
   const isEditing = useAuiState(s => s.composer.isEditing);
+  // While editing, the row takes its full width: a shrink-to-fit row would squeeze the edit box to a sliver.
   return (
-    <MessagePrimitive.Root className="group ml-auto flex max-w-[85%] flex-col items-end gap-1">
+    <MessagePrimitive.Root className={`group ml-auto flex max-w-[85%] flex-col items-end gap-1 ${isEditing ? 'w-full' : ''}`}>
       {isEditing ? (
         <EditComposer />
       ) : (
