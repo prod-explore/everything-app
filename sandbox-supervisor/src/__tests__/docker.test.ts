@@ -63,6 +63,32 @@ describe('container hardening', () => {
     assert.match(h.Tmpfs!['/home/agent']!, /uid=2000,gid=3000/);
   });
 
+  it('the sandbox clock follows SANDBOX_TZ, else TZ; a bad name is dropped; none = the image default', () => {
+    assert.equal(configFromEnv({}).timezone, '');
+    assert.equal(configFromEnv({ TZ: 'Europe/Warsaw' }).timezone, 'Europe/Warsaw');
+    assert.equal(configFromEnv({ TZ: 'UTC', SANDBOX_TZ: 'America/Argentina/Buenos_Aires' }).timezone, 'America/Argentina/Buenos_Aires');
+    assert.equal(configFromEnv({ SANDBOX_TZ: 'Europe/Warsaw; rm -rf /' }).timezone, '');
+    assert.equal(configFromEnv({ SANDBOX_TZ: '../../etc/passwd' }).timezone, '');
+    assert.ok(buildCreateOptions(configFromEnv({ TZ: 'Europe/Warsaw' }), spec).Env!.includes('TZ=Europe/Warsaw'));
+    assert.ok(!buildCreateOptions(configFromEnv({}), spec).Env!.some(e => e.startsWith('TZ=')));
+  });
+
+  it('terminals and one-shot commands get TZ too, so sandboxes created before it was set show the right time', async () => {
+    const seen: Array<{ Env?: string[] }> = [];
+    const docker = {
+      getContainer: () => ({
+        exec: async (o: { Env?: string[] }) => {
+          seen.push(o);
+          throw new Error('stop here');
+        },
+      }),
+    } as unknown as Docker;
+    const ops = new DockerodeOps(configFromEnv({ TZ: 'Europe/Warsaw' }), docker);
+    await assert.rejects(ops.exec('c', 'date', 1000), /stop here/);
+    await assert.rejects(ops.shellFactory('c')(), /stop here/);
+    assert.deepEqual(seen.map(o => o.Env), [['TZ=Europe/Warsaw'], ['TZ=Europe/Warsaw']]);
+  });
+
   it('garbage env values fall back to the defaults', () => {
     const cfg = configFromEnv({ SANDBOX_CPUS: 'lots', SANDBOX_MEMORY_MB: '-5', SANDBOX_PIDS_LIMIT: '' });
     assert.equal(cfg.cpus, 1);

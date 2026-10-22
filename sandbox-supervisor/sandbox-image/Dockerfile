@@ -8,10 +8,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # in /workspace) work and persist in the workspace volume; `pip install --user` lands in the tmpfs $HOME.
 # procps is required: the supervisor's terminal kill-tree uses pgrep.
 # git is required: checkpoints/rollback are git snapshots taken inside the sandbox.
+# tzdata is required: the supervisor sets TZ (SANDBOX_TZ), which only works with the zone files installed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash git curl wget ca-certificates openssh-client \
     nodejs npm python3 python3-pip python3-venv build-essential \
-    procps jq ripgrep unzip less findutils \
+    procps jq ripgrep unzip less findutils tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /usr/lib/python3*/EXTERNALLY-MANAGED
 

@@ -27,7 +27,12 @@ export interface DockerConfig {
   readonlyRootfs: boolean;
   tmpSizeMb: number;
   homeSizeMb: number;
+  /** IANA zone the sandboxes' clocks show (`date`, logs, cron-like scripts). Empty = the image's default, UTC. */
+  timezone: string;
 }
+
+/** An IANA zone name such as Europe/Warsaw or America/Argentina/Buenos_Aires; anything else is ignored rather than passed on. */
+const ZONE_RE = /^[A-Za-z][A-Za-z0-9_+\-]*(\/[A-Za-z0-9_+\-]+)*$/;
 
 const num = (v: string | undefined, fallback: number, parse = parseInt) => {
   const n = v === undefined || v === '' ? NaN : parse(v, 10);
@@ -48,7 +53,22 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): DockerConfi
     readonlyRootfs: env['SANDBOX_READONLY_ROOTFS'] !== 'false',
     tmpSizeMb: num(env['SANDBOX_TMP_MB'], 512),
     homeSizeMb: num(env['SANDBOX_HOME_MB'], 256),
+    timezone: zoneFromEnv(env),
   };
+}
+
+/** SANDBOX_TZ, else the deployment's TZ (the same setting the web server uses for its "today"). */
+function zoneFromEnv(env: NodeJS.ProcessEnv): string {
+  const zone = (env['SANDBOX_TZ'] || env['TZ'] || '').trim();
+  return ZONE_RE.test(zone) ? zone : '';
+}
+
+/**
+ * TZ for a process in a sandbox. Set on the container AND on every exec: a stopped sandbox keeps the environment it
+ * was created with, so sandboxes made before the zone was configured would otherwise keep showing UTC.
+ */
+export function tzEnv(cfg: Pick<DockerConfig, 'timezone'>): string[] {
+  return cfg.timezone ? [`TZ=${cfg.timezone}`] : [];
 }
 
 /**
@@ -69,7 +89,7 @@ export function buildCreateOptions(cfg: DockerConfig, spec: SandboxSpec): Docker
     Labels: { [LABEL]: '1', [OWNER_LABEL]: spec.ownerId },
     User: cfg.user,
     WorkingDir: WORKSPACE,
-    Env: [`HOME=${cfg.home}`, 'TMPDIR=/tmp'],
+    Env: [`HOME=${cfg.home}`, 'TMPDIR=/tmp', ...tzEnv(cfg)],
     Tty: false,
     HostConfig: {
       // Named volume only. Never a host path, never /var/run/docker.sock.
@@ -295,7 +315,7 @@ export class DockerodeOps implements DockerOps {
     return new Promise((resolve, reject) => {
       const container = this.docker.getContainer(id);
       container
-        .exec({ Cmd: ['bash', '-c', command], AttachStdout: true, AttachStderr: true, WorkingDir: '/workspace' })
+        .exec({ Cmd: ['bash', '-c', command], AttachStdout: true, AttachStderr: true, WorkingDir: '/workspace', Env: tzEnv(this.cfg) })
         .then(exec => {
           const timer = setTimeout(() => reject(new Error(`Command timed out after ${timeoutMs}ms`)), timeoutMs);
           exec.start({ hijack: true, stdin: false }, (err, stream) => {
@@ -343,6 +363,7 @@ export class DockerodeOps implements DockerOps {
         AttachStderr: true,
         Tty: false,
         WorkingDir: '/workspace',
+        Env: tzEnv(this.cfg),
       });
       const stream = (await exec.start({ hijack: true, stdin: true })) as Duplex;
 

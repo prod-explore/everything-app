@@ -43,6 +43,8 @@ services:
       MAX_TERMINALS_PER_SANDBOX: ${MAX_TERMINALS_PER_SANDBOX:-4}
       SANDBOX_MEMORY_MB: ${SANDBOX_MEMORY_MB:-512}
       SANDBOX_CPUS: ${SANDBOX_CPUS:-1}
+      # The clock inside sandboxes (`date`): the deployment's time zone, so a sandbox agrees with the person using it.
+      SANDBOX_TZ: ${TZ:-UTC}
       # Workspace quota per project, enforced by measuring (30 s): warn at 90%, stop a sandbox that keeps writing past it.
       # The files are never deleted. 0 = no quota.
       SANDBOX_WORKSPACE_MB: ${SANDBOX_WORKSPACE_MB:-2048}
