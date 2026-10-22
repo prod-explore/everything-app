@@ -15,6 +15,8 @@ export function formatRunResult(r: TerminalRunResult, timeoutMs: number): { text
     lines.push(`[terminal "${r.terminal}" ended (the shell exited); the next command opens a fresh one]`);
   }
   if (r.exitCode !== null) lines.push(`exit code: ${r.exitCode}`);
+  // The terminal keeps its directory, the file tools always start from /workspace: say where the shell is whenever it is not at the root.
+  if (r.cwd && r.cwd !== '/workspace') lines.push(`[cwd: ${r.cwd}]`);
   if (r.notice) lines.push(`[${r.notice}]`);
   return { text: lines.filter(l => l !== '').join('\n'), isError: r.exitCode !== 0 };
 }
@@ -24,7 +26,8 @@ export function registerRunBash(server: McpServer, { config, supervisor }: ToolC
     'run_bash',
     'Run a shell command in a persistent terminal inside the project sandbox. ' +
       'A terminal is a long-lived bash: the working directory, exported variables and shell functions carry over to the next command ' +
-      'in the same terminal. Use separate named terminals for separate jobs (e.g. "dev", "tests"); the default is "main". ' +
+      'in the same terminal; when it is not /workspace, the result ends with [cwd: …]. The file tools (read_file, write_file, …) always resolve relative paths from /workspace, not from the terminal\'s directory. ' +
+      'Use separate named terminals for separate jobs (e.g. "dev", "tests"); the default is "main". ' +
       'stdout and stderr are merged. The sandbox has internet access and /workspace persists across chats, restarts and idle periods ' +
       '(everything else is read-only or temporary: /tmp and $HOME are wiped when the sandbox stops; you are not root, so apt and global installs are unavailable — install project-locally). ' +
       `A command is limited to ${Math.round(MAX_COMMAND_MS / 1000)}s; if it times out the terminal is killed. ` +

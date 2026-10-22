@@ -25,6 +25,8 @@ export interface RunResult {
   output: string;
   /** null when the shell died or timed out before the command reported one. */
   exitCode: number | null;
+  /** Where the shell is when the command ends (a command can `cd`); null when the shell died or timed out. */
+  cwd: string | null;
   timedOut: boolean;
   /** Output beyond maxOutputChars was dropped. */
   truncated: boolean;
@@ -50,7 +52,7 @@ export interface TerminalManagerOptions {
 
 const NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
 export const DEFAULT_TERMINAL = 'main';
-const WINDOW = 1024;
+const WINDOW = 8192; // the tail scanned for the end marker; it carries the working directory, so room for a long path
 
 class Terminal {
   readonly createdAt: number;
@@ -92,7 +94,7 @@ class Terminal {
 
   private execute(command: string, timeoutMs: number): Promise<RunResult> {
     if (this.closed) {
-      return Promise.resolve({ output: '', exitCode: null, timedOut: false, truncated: false, terminalClosed: true });
+      return Promise.resolve({ output: '', exitCode: null, cwd: null, timedOut: false, truncated: false, terminalClosed: true });
     }
     this.busy = true;
     this.lastActivityAt = this.opts.now();
@@ -103,9 +105,9 @@ class Terminal {
       let window = '';
       let truncated = false;
       let settled = false;
-      const endRe = new RegExp(`\\n${this.marker}(\\d+)__\\n`);
+      const endRe = new RegExp(`\\n${this.marker}(\\d+)__([A-Za-z0-9+/=]*)__\\n`);
 
-      const finish = (result: Omit<RunResult, 'truncated' | 'terminalClosed'> & { terminalClosed?: boolean }) => {
+      const finish = (result: Omit<RunResult, 'truncated' | 'terminalClosed' | 'cwd'> & { terminalClosed?: boolean; cwd?: string | null }) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -113,7 +115,7 @@ class Terminal {
         this.exitListener = null;
         this.busy = false;
         this.lastActivityAt = this.opts.now();
-        resolve({ truncated, terminalClosed: this.closed, ...result });
+        resolve({ truncated, terminalClosed: this.closed, cwd: null, ...result });
       };
 
       const clean = (): string => {
@@ -135,7 +137,7 @@ class Terminal {
         }
         window = (window + chunk).slice(-WINDOW);
         const m = endRe.exec(window);
-        if (m) finish({ output: clean(), exitCode: Number(m[1]), timedOut: false });
+        if (m) finish({ output: clean(), exitCode: Number(m[1]), cwd: m[2] ? Buffer.from(m[2], 'base64').toString('utf8') : null, timedOut: false });
       };
 
       this.exitListener = () => finish({ output: clean(), exitCode: null, timedOut: false });
@@ -153,7 +155,8 @@ class Terminal {
       const b64 = Buffer.from(command, 'utf8').toString('base64');
       this.shell.write(
         `eval "$(printf %s '${b64}' | base64 -d)" < /dev/null\n` +
-          `__ea_rc=$?\nprintf '\\n${this.marker}%s__\\n' "$__ea_rc"\n`,
+          // The marker line also carries the working directory (base64: no character in a path can end the line early).
+          `__ea_rc=$?\nprintf '\\n${this.marker}%s__%s__\\n' "$__ea_rc" "$(printf %s "$PWD" | base64 | tr -d '\\n')"\n`,
       );
     });
   }

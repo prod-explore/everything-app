@@ -25,6 +25,13 @@ describe('TerminalManager', () => {
     assert.equal(r.output, '/tmp/ea-term-test\nbar\nhi there\n');
   });
 
+  it('reports the directory the command left the shell in (spaces included)', async () => {
+    const m = make();
+    assert.equal((await m.run('main', 'true', 5000)).cwd, '/tmp');
+    await m.run('main', 'mkdir -p "/tmp/ea cwd test" && cd "/tmp/ea cwd test"', 5000);
+    assert.equal((await m.run('main', 'echo hi', 5000)).cwd, '/tmp/ea cwd test');
+  });
+
   it('merges stderr and reports non-zero exit codes', async () => {
     const r = await make().run('main', 'echo out; echo err >&2; exit_code() { return 7; }; exit_code', 5000);
     assert.match(r.output, /out/);

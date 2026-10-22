@@ -45,6 +45,11 @@ describe('run_bash result formatting', () => {
     assert.deepEqual(formatRunResult(base, 1000), { text: 'hi\nexit code: 0', isError: false });
   });
 
+  it('says where the terminal is when it is not at the workspace root', () => {
+    assert.equal(formatRunResult({ ...base, cwd: '/workspace/app' }, 1000).text, 'hi\nexit code: 0\n[cwd: /workspace/app]');
+    assert.equal(formatRunResult({ ...base, cwd: '/workspace' }, 1000).text, 'hi\nexit code: 0');
+  });
+
   it('passes on the disk quota notice without turning it into an error', () => {
     const r = formatRunResult({ ...base, notice: 'The workspace is 95 MB of its 100 MB quota.' }, 1000);
     assert.equal(r.isError, false);

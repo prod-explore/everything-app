@@ -9,6 +9,8 @@ export interface TerminalRunResult {
   /** stdout and stderr merged, in the order the command wrote them. */
   output: string;
   exitCode: number | null;
+  /** Where the terminal is after the command (it keeps its directory between commands). */
+  cwd?: string | null;
   timedOut: boolean;
   truncated: boolean;
   /** The shell no longer exists; the next command in this terminal starts a fresh one (cwd/env reset). */
