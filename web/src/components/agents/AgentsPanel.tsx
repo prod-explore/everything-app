@@ -3,8 +3,9 @@ import { Bot, ChevronDown, ChevronRight, Send, Square } from 'lucide-react';
 import { getRunTranscript, listConversationRuns, messageRun, stopRun } from '../../api';
 import type { BudgetWarning, RunRow } from '../../types';
 import { DockPanel, PanelMessage } from '../shared/DockPanel';
+import { ACTIVE_RUN_STATUSES } from '../../lib/agents';
 
-const ACTIVE = new Set(['running', 'waiting_input', 'waiting_children']);
+const ACTIVE = ACTIVE_RUN_STATUSES;
 
 const STATUS_STYLE: Record<string, string> = {
   running: 'bg-accent/15 text-accent',

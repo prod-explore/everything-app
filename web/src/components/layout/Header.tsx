@@ -26,6 +26,7 @@ export function Header({
   browserPanelOpen,
   dockTools,
   onToggleTool,
+  agentCount = 0,
   conversationId,
   ghost = false,
 }: {
@@ -45,6 +46,8 @@ export function Header({
   /** Dock tools currently open (several can be open at once). */
   dockTools: DockTool[];
   onToggleTool: (tool: DockTool) => void;
+  /** Worker agents running in this chat. */
+  agentCount?: number;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -134,6 +137,7 @@ export function Header({
             {TOOLS.map(t => (
               <button key={t.id} role="menuitem" className={itemClass(dockTools.includes(t.id))} onClick={pick(() => onToggleTool(t.id))}>
                 <t.icon size={15} /> {dockTools.includes(t.id) ? `Hide ${t.label}` : t.label}
+                {t.id === 'agents' && agentCount > 0 && <span className="ml-auto rounded-full bg-accent px-1.5 text-[10px] font-semibold leading-4 text-bg">{agentCount}</span>}
               </button>
             ))}
             {conversationId && (

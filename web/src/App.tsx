@@ -19,6 +19,7 @@ import { GazetaContext, useGazetaStore } from './hooks/useGazeta';
 const AgentsPanel = lazy(() => import('./components/agents/AgentsPanel').then(m => ({ default: m.AgentsPanel })));
 const ExplorerPanel = lazy(() => import('./components/workspace/ExplorerPanel').then(m => ({ default: m.ExplorerPanel })));
 const GitPanel = lazy(() => import('./components/git/GitPanel').then(m => ({ default: m.GitPanel })));
+import { useActiveAgentCount } from './hooks/useActiveAgents';
 import { useApprovals } from './hooks/useApprovals';
 import { useModels } from './hooks/useModels';
 import { useSSE } from './hooks/useSSE';
@@ -79,6 +80,7 @@ function MainApp() {
   const openDockTool = useCallback((t: DockTool) => setDockTools(cur => (cur.includes(t) ? cur : [...cur, t])), []);
   const closeDockTool = useCallback((t: DockTool) => setDockTools(cur => cur.filter(x => x !== t)), []);
   const [agentsRefresh, setAgentsRefresh] = useState(0);
+  const activeAgents = useActiveAgentCount(selectedId, agentsRefresh);
   const [budgetWarning, setBudgetWarning] = useState<BudgetWarning | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [gazetaOpen, setGazetaOpen] = useState(false);
@@ -366,6 +368,7 @@ function MainApp() {
         browserPanelOpen={browserPanelOpen}
         dockTools={dockTools}
         onToggleTool={toggleDockTool}
+        agentCount={activeAgents}
       />
       {providerRetry && (
         <div role="status" className="flex items-center justify-between gap-3 border-b border-border px-4 py-2 text-xs text-fg-secondary">
@@ -445,6 +448,7 @@ function MainApp() {
           onToggleBrowser={() => setBrowserPanelOpen(o => !o)}
           tools={dockTools}
           onToggleTool={toggleDockTool}
+          agentCount={activeAgents}
         />
       </div>
 
