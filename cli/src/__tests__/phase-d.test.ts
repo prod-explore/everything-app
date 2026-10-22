@@ -8,7 +8,7 @@ import { ToolRegistry } from '../tool-registry.js';
 import type { McpConnectionLike } from '../mcp-client.js';
 import { OpenAiCompatClient, ProviderHttpError } from '../providers/openai-compat.js';
 import { ProviderNotConfiguredError, ProviderRouter } from '../providers/router.js';
-import { classifyError, contextLimitFromMessage } from '../providers/errors.js';
+import { classifyError, contextLimitFromMessage, describeReset } from '../providers/errors.js';
 import { estimateTokens, planCompaction, renderTranscript, summarizeHistory, trimForContext, withSummary } from '../context.js';
 import { parseTodos, projectInstructionsPrompt } from '../chat-tools.js';
 import { appendMessage, appendSummary, createConversation, deactivateMessagesFrom, deleteMessagesFrom, getConversationState, getMessages, loadLlmHistory, openDb, runMigrations, setConversationState } from '../db.js';
@@ -93,6 +93,25 @@ describe('classifyError', () => {
     assert.equal(classifyError(http400('Invalid tool call: looks like object, can\'t find closing')).kind, 'tool_parse');
     const other = classifyError(new Error('something odd'));
     assert.deepEqual([other.kind, other.message], ['unknown', 'something odd']);
+  });
+
+  it('a used-up provider quota says who, and when it comes back', () => {
+    const body = JSON.stringify({ error: { message: 'agy: Subscription quota exhausted: Individual quota reached. Resets in 1h29m29s.', type: 'rate_limit_error', code: 'upstream_quota_exhausted', provider: 'agy', model: 'claude-sonnet-4-6', upstream_status: 429, reset_at: '2099-10-23T01:29:29.000Z' } });
+    const i = classifyError(http400(body, 429));
+    assert.deepEqual([i.kind, i.transient], ['budget_exhausted', false]);
+    assert.match(i.message, /^agy \(through \w+\) has used up its quota — it comes back on 23 Oct at \d\d:\d\d\. Pick another model until then\.$/);
+    const bare = classifyError(http400('{"error":{"code":"upstream_quota_exhausted"}}', 429));
+    assert.match(bare.message, /has used up its quota\. Pick another model until then\./);
+  });
+
+  it('describeReset: today shows the time, another day the date; past or garbage shows nothing', () => {
+    const now = new Date('2026-10-23T00:10:00Z');
+    const at = (iso: string) => describeReset(`{"reset_at":"${iso}"}`, now, 'Europe/Warsaw');
+    assert.equal(at('2026-10-23T01:29:29Z'), 'at 03:29');
+    assert.equal(at('2026-10-24T05:00:00Z'), 'on 24 Oct at 07:00');
+    assert.equal(at('2026-10-22T23:00:00Z'), undefined);
+    assert.equal(at('soon'), undefined);
+    assert.equal(describeReset('{}', now), undefined);
   });
 
   it('a 400 that merely mentions tokens is not an overflow', () => {

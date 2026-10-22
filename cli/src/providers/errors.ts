@@ -58,6 +58,25 @@ export function looksLikeContextOverflow(status: number, detail: string): boolea
   return CONTEXT_PATTERNS.some(re => re.test(detail));
 }
 
+/** Quota or budget used up (MindGate's `budget_exhausted` / `upstream_quota_exhausted`, OpenAI's `insufficient_quota`). */
+const QUOTA_CODE = /budget_exhausted|upstream_quota_exhausted|insufficient_quota/i;
+const PROVIDER_QUOTA_CODE = /upstream_quota_exhausted|insufficient_quota/i;
+
+/**
+ * `"reset_at":"2026-10-23T01:29:29.000Z"` in an error body → "at 01:29" (today) or "on 24 Oct at 01:29", in the server's
+ * time zone (set TZ for the container). Undefined when the body names no usable future time.
+ */
+export function describeReset(detail: string, now: Date = new Date(), timeZone?: string): string | undefined {
+  const m = /"reset_at"\s*:\s*"([^"]+)"/.exec(detail);
+  const at = m ? new Date(m[1]!) : null;
+  if (!at || Number.isNaN(at.getTime()) || at.getTime() <= now.getTime()) return undefined;
+  const zone = timeZone ? { timeZone } : {};
+  const time = at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', ...zone });
+  const day = (d: Date) => d.toLocaleDateString('en-CA', zone);
+  if (day(at) === day(now)) return `at ${time}`;
+  return `on ${at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...zone })} at ${time}`;
+}
+
 export function classifyError(err: unknown, redact: (s: string) => string = s => s): Incident {
   const raw = err instanceof Error ? err.message : String(err);
   const text = redact(raw);
@@ -77,8 +96,15 @@ export function classifyError(err: unknown, redact: (s: string) => string = s =>
         transient: false,
       };
     }
-    if (/budget_exhausted/i.test(detail)) {
-      return { kind: 'budget_exhausted', message: `${err.provider} says its budget is used up. Top it up on the provider's side or pick another model.`, transient: false };
+    if (QUOTA_CODE.test(detail)) {
+      const when = describeReset(detail);
+      if (PROVIDER_QUOTA_CODE.test(detail)) {
+        // MindGate names the provider behind it in `provider`; say that one, since this gateway is only the messenger.
+        const behind = /"provider"\s*:\s*"([^"]+)"/.exec(detail)?.[1];
+        const who = behind && behind !== err.provider ? `${behind} (through ${err.provider})` : err.provider;
+        return { kind: 'budget_exhausted', message: `${who} has used up its quota${when ? ` — it comes back ${when}` : ''}. Pick another model until then.`, transient: false };
+      }
+      return { kind: 'budget_exhausted', message: `${err.provider} says its budget is used up${when ? ` — it resets ${when}` : ''}. Top it up on the provider's side or pick another model.`, transient: false };
     }
     if (status === 401 || status === 403) {
       return { kind: 'auth', message: `${err.provider} rejected the API key (HTTP ${status}). Check it in Settings → Models.`, transient: false };

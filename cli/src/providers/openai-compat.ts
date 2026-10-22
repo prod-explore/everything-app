@@ -519,10 +519,11 @@ export function fromChatResponse(json: OaiResponse, requestedModel: string, ctx:
 const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
 
 /**
- * Error codes a gateway (MindGate) puts in `{ error: { code } }` for failures that waiting cannot fix: the budget is
- * spent until its reset. A plain 429 (`rate_limited`) is still retried; this one must fail fast with its message.
+ * Error codes a gateway (MindGate) or provider puts in `{ error: { code } }` for failures that waiting cannot fix: the
+ * budget or subscription quota is spent until its reset. A plain 429 (`rate_limited`) is still retried; these must fail
+ * fast with their message.
  */
-const NO_RETRY_CODES = new Set(['budget_exhausted']);
+const NO_RETRY_CODES = new Set(['budget_exhausted', 'upstream_quota_exhausted', 'insufficient_quota']);
 
 function errorCode(body: string): string | undefined {
   try {
@@ -869,7 +870,7 @@ export class OpenAiCompatClient implements LlmClient {
           }
         }
         const gaveUp = budget !== undefined && retryable ? ` (retried for ${Math.round((Date.now() - startedAt) / 60_000)} min, then gave up)` : '';
-        throw new ProviderHttpError(this.name, status, this.redact(errBody.slice(0, 500)) + gaveUp);
+        throw new ProviderHttpError(this.name, status, this.redact(errBody.slice(0, 800)) + gaveUp);
       } finally {
         cleanup();
       }

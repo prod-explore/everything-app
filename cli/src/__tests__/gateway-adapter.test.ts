@@ -41,6 +41,12 @@ describe('gateway adapter', () => {
     assert.equal(calls.length, 1);
   });
 
+  it('a provider quota behind the gateway fails fast too — waiting seconds cannot fix it', async () => {
+    const { c, calls } = client(() => new Response(JSON.stringify({ error: { code: 'upstream_quota_exhausted', message: 'agy: quota used up', reset_at: '2099-01-01T00:00:00Z' } }), { status: 429, headers: { 'Retry-After': '5369' } }));
+    await assert.rejects(() => ask(c), /quota used up/);
+    assert.equal(calls.length, 1);
+  });
+
   it('a plain rate limit is still retried', async () => {
     const { c, calls } = client((_u, n) => n < 3
       ? new Response(JSON.stringify({ error: { code: 'rate_limited', message: 'slow down' } }), { status: 429 })
