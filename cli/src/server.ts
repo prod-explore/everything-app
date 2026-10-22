@@ -65,6 +65,7 @@ import {
   getConversationState,
   setConversationState,
   REASONING_EFFORTS,
+  DEFAULT_EFFORT,
   type ConversationState,
   getAllMessagesFull,
   appendMessage,
@@ -1001,9 +1002,9 @@ ${formatHumanResponse(response)}` };
   app.patch('/api/conversations/:id/state', (req, res) => {
     if (!getConversation(db, req.params.id)) { res.status(404).json({ error: 'conversation not found' }); return; }
     const { effort, clearTodos } = (req.body ?? {}) as Record<string, unknown>;
-    if (effort !== undefined && effort !== null && !(REASONING_EFFORTS as readonly unknown[]).includes(effort)) { res.status(400).json({ error: 'effort: low, medium, high or null' }); return; }
+    if (effort !== undefined && effort !== null && !(REASONING_EFFORTS as readonly unknown[]).includes(effort)) { res.status(400).json({ error: 'effort: low, medium, high or null (null = medium)' }); return; }
     const next = setConversationState(db, req.params.id, {
-      ...(effort !== undefined ? { effort: effort as ConversationState['effort'] } : {}),
+      ...(effort !== undefined ? { effort: effort === null ? DEFAULT_EFFORT : (effort as ConversationState['effort']) } : {}),
       ...(clearTodos === true ? { todos: [] } : {}),
     });
     const body = publicState(req.params.id, next);
@@ -1191,7 +1192,7 @@ ${formatHumanResponse(response)}` };
             tools: turnTools,
             systemPrompt: effectiveSystem,
             contextWindow: info.contextLength,
-            reasoningEffort: state.effort ?? undefined,
+            reasoningEffort: state.effort,
             onContext: (c: { used: number; limit?: number }) => {
               setConversationState(db, convId, { lastInputTokens: c.used });
               sse.emit(convId, 'turn:context', { used: c.used, limit: c.limit ?? null });

@@ -197,7 +197,7 @@ export function getConversationState(conversationId: string): Promise<Conversati
 
 export function patchConversationState(
   conversationId: string,
-  patch: Partial<{ effort: ReasoningEffort | null; clearTodos: boolean }>,
+  patch: Partial<{ effort: ReasoningEffort; clearTodos: boolean }>,
 ): Promise<ConversationStateInfo> {
   return request(`/api/conversations/${conversationId}/state`, { method: 'PATCH', body: JSON.stringify(patch) });
 }

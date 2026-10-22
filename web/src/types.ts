@@ -44,7 +44,7 @@ export interface TodoItem { content: string; status: TodoStatus }
 
 /** What the chat shows beyond its messages (GET /api/conversations/:id/state). */
 export interface ConversationStateInfo {
-  effort: ReasoningEffort | null;
+  effort: ReasoningEffort;
   /** Whether the current model accepts a reasoning effort at all. */
   effortSupported: boolean;
   todos: TodoItem[];

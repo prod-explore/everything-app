@@ -74,13 +74,12 @@ export function ChatStatus({ api, running }: { api: ConversationStateApi; runnin
           <label className="flex items-center gap-1" title="How hard the model thinks before answering">
             Effort
             <select
-              value={s.effort ?? ''}
-              onChange={e => void api.setEffort((e.target.value || null) as ReasoningEffort | null)}
+              value={s.effort}
+              onChange={e => void api.setEffort(e.target.value as ReasoningEffort)}
               disabled={running}
               className="rounded-button border border-border bg-bg px-1 py-0.5 text-xs text-fg outline-none disabled:opacity-40"
               aria-label="Reasoning effort"
             >
-              <option value="">default</option>
               <option value="low">low</option>
               <option value="medium">medium</option>
               <option value="high">high</option>

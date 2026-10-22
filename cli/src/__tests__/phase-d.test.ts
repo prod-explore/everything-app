@@ -256,7 +256,7 @@ describe('compaction view in the database', () => {
     const db = openDb(':memory:');
     runMigrations(db);
     const { id } = createConversation(db, {});
-    assert.deepEqual(getConversationState(db, id), { effort: null, todos: [], lastInputTokens: null });
+    assert.deepEqual(getConversationState(db, id), { effort: 'medium', todos: [], lastInputTokens: null });
     setConversationState(db, id, { effort: 'high', lastInputTokens: 1234 });
     setConversationState(db, id, { todos: [{ content: 'x', status: 'pending' }] });
     assert.deepEqual(getConversationState(db, id), { effort: 'high', todos: [{ content: 'x', status: 'pending' }], lastInputTokens: 1234 });
@@ -501,13 +501,14 @@ describe('server: conversation state', () => {
     const t = await boot({ model: { contextLength: 50_000, supportsEffort: true }, script: () => msg([text('hi')], 'end_turn') });
     try {
       const s0 = (await req(t.port, 'GET', `/api/conversations/${t.conv}/state`)).json;
-      assert.deepEqual([s0.effort, s0.effortSupported, s0.todos, s0.context], [null, true, [], { used: null, limit: 50_000 }]);
+      assert.deepEqual([s0.effort, s0.effortSupported, s0.todos, s0.context], ['medium', true, [], { used: null, limit: 50_000 }]);
       assert.equal('mode' in s0, false);
       assert.equal((await req(t.port, 'PATCH', `/api/conversations/${t.conv}/state`, { effort: 'extreme' })).status, 400);
       const s1 = (await req(t.port, 'PATCH', `/api/conversations/${t.conv}/state`, { effort: 'low' })).json;
       assert.equal(s1.effort, 'low');
       setConversationState(t.db, t.conv, { todos: [{ content: 'a', status: 'pending' }] });
-      assert.deepEqual((await req(t.port, 'PATCH', `/api/conversations/${t.conv}/state`, { clearTodos: true, effort: null })).json.todos, []);
+      const s2 = (await req(t.port, 'PATCH', `/api/conversations/${t.conv}/state`, { clearTodos: true, effort: null })).json;
+      assert.deepEqual([s2.todos, s2.effort], [[], 'medium']); // null is "back to the default", not "unset"
       assert.equal((await req(t.port, 'GET', '/api/conversations/nope/state')).status, 404);
     } finally {
       t.stop();

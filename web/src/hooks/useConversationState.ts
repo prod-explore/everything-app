@@ -31,7 +31,7 @@ export function useConversationState(conversationId: string | null, live: LiveTu
     [conversationId],
   );
 
-  const setEffort = useCallback((effort: ReasoningEffort | null) => patch({ effort }), [patch]);
+  const setEffort = useCallback((effort: ReasoningEffort) => patch({ effort }), [patch]);
   const clearTodos = useCallback(() => patch({ clearTodos: true }), [patch]);
 
   /** Returns true when something was actually summarised. */

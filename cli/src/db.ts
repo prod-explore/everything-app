@@ -574,11 +574,13 @@ export function appendSummary(db: Database.Database, conversationId: string, con
 
 export type ReasoningEffort = 'low' | 'medium' | 'high';
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
+/** What a chat uses until someone changes it. There is no "unset": models that take an effort always get one. */
+export const DEFAULT_EFFORT: ReasoningEffort = 'medium';
 export type TodoStatus = 'pending' | 'in_progress' | 'completed';
 export interface TodoItem { content: string; status: TodoStatus }
 
 export interface ConversationState {
-  effort: ReasoningEffort | null;
+  effort: ReasoningEffort;
   todos: TodoItem[];
   lastInputTokens: number | null;
 }
@@ -587,11 +589,12 @@ export function getConversationState(db: Database.Database, conversationId: stri
   const r = db
     .prepare(`SELECT effort, todos, last_input_tokens as lastInputTokens FROM conversation_state WHERE conversation_id = ?`)
     .get(conversationId) as { effort: string | null; todos: string; lastInputTokens: number | null } | undefined;
-  if (!r) return { effort: null, todos: [], lastInputTokens: null };
+  if (!r) return { effort: DEFAULT_EFFORT, todos: [], lastInputTokens: null };
   let todos: TodoItem[] = [];
   try { todos = JSON.parse(r.todos) as TodoItem[]; } catch { /* keep empty */ }
   return {
-    effort: (REASONING_EFFORTS as readonly string[]).includes(r.effort ?? '') ? (r.effort as ReasoningEffort) : null,
+    // A row from before this default existed holds NULL: it reads as the default too.
+    effort: (REASONING_EFFORTS as readonly string[]).includes(r.effort ?? '') ? (r.effort as ReasoningEffort) : DEFAULT_EFFORT,
     todos,
     lastInputTokens: r.lastInputTokens,
   };
