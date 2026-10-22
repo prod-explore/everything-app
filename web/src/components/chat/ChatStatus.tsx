@@ -54,62 +54,76 @@ function useChatCommands(api: ConversationStateApi, running: boolean) {
   });
 }
 
-/** Reasoning effort, and how full the model's context window is. */
+/** The chat's task list and the one-line result of the last context action. The controls live in the composer row. */
 export function ChatStatus({ api, running }: { api: ConversationStateApi; running: boolean }) {
-  const s = api.state;
   useChatCommands(api, running);
-  if (!s) return null;
-  const { used, limit } = s.context;
-  const pct = used !== null && limit ? Math.min(100, Math.round((used / limit) * 100)) : null;
-  const hot = pct !== null && pct >= 75;
-
   return (
     <>
       <TodoPanel api={api} />
-      {/* Zero-height anchor: the row floats over the bottom edge of the chat instead of taking a strip of its own;
-          the controls are frosted pills, so messages scrolling underneath stay readable. */}
-      <div className="pointer-events-none relative z-10 h-0">
-      <div className="absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-1.5 text-xs text-fg-tertiary [&>*]:pointer-events-auto [&>*]:rounded-full [&>*]:bg-bg/50 [&>*]:px-2 [&>*]:py-0.5 [&>*]:backdrop-blur-md [&>*]:shadow-[0_0_12px_8px_var(--color-bg)]">
-        {s.effortSupported && (
-          <label className="flex items-center gap-1" title="How hard the model thinks before answering">
-            Effort
-            <select
-              value={s.effort}
-              onChange={e => void api.setEffort(e.target.value as ReasoningEffort)}
-              disabled={running}
-              className="rounded-button border border-border bg-bg px-1 py-0.5 text-xs text-fg outline-none disabled:opacity-40"
-              aria-label="Reasoning effort"
-            >
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-            </select>
-          </label>
-        )}
+      {api.note && (
+        <div className="mx-auto w-full max-w-3xl px-3 pt-1.5 text-xs text-fg-tertiary" role="status">
+          {api.note}
+        </div>
+      )}
+    </>
+  );
+}
 
-        {used !== null && (
-          <span className="ml-auto flex items-center gap-2" title={limit ? `${used.toLocaleString('en-US')} of ${limit.toLocaleString('en-US')} tokens in the last request` : `${used.toLocaleString('en-US')} tokens in the last request`}>
-            {pct !== null && (
-              <span className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-tertiary" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Context used">
-                <span className={`block h-full ${hot ? 'bg-danger' : 'bg-fg-tertiary'}`} style={{ width: `${pct}%` }} />
-              </span>
-            )}
-            <span className={hot ? 'text-danger' : ''}>{fmt(used)}{limit ? ` / ${fmt(limit)}` : ' tokens'}</span>
+/** Reasoning effort — sits left of the message box, next to the attach button. Renders nothing for models without effort levels. */
+export function EffortSelect({ api, running }: { api: ConversationStateApi; running: boolean }) {
+  const s = api.state;
+  if (!s?.effortSupported) return null;
+  return (
+    <label className="flex h-[42px] shrink-0 items-center gap-1.5 text-xs text-fg-tertiary" title="How hard the model thinks before answering">
+      <span className="max-sm:sr-only">Effort</span>
+      <select
+        value={s.effort}
+        onChange={e => void api.setEffort(e.target.value as ReasoningEffort)}
+        disabled={running}
+        className="rounded-button border border-border bg-bg-secondary px-1.5 py-1.5 text-xs text-fg outline-none focus:border-border-hover disabled:opacity-40"
+        aria-label="Reasoning effort"
+      >
+        <option value="low">low</option>
+        <option value="medium">medium</option>
+        <option value="high">high</option>
+      </select>
+    </label>
+  );
+}
+
+/** How full the model's context window is, plus Compact — sits right of the message box, next to the send button. */
+export function ContextMeter({ api, running }: { api: ConversationStateApi; running: boolean }) {
+  const s = api.state;
+  if (!s || s.context.used === null) return null;
+  const { used, limit } = s.context;
+  const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : null;
+  const hot = pct !== null && pct >= 75;
+  const title = limit
+    ? `${used.toLocaleString('en-US')} of ${limit.toLocaleString('en-US')} tokens in the last request`
+    : `${used.toLocaleString('en-US')} tokens in the last request`;
+
+  return (
+    <div className="flex h-[42px] shrink-0 items-center gap-2 text-xs text-fg-tertiary">
+      <span className="flex items-center gap-2" title={title}>
+        {pct !== null && (
+          <span className="h-1.5 w-12 overflow-hidden rounded-full bg-bg-tertiary max-sm:hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Context used">
+            <span className={`block h-full ${hot ? 'bg-danger' : 'bg-fg-tertiary'}`} style={{ width: `${pct}%` }} />
           </span>
         )}
-        {used !== null && (pct === null || pct >= 40) && (
-          <button
-            onClick={() => void api.compact()}
-            disabled={running || api.busy}
-            title="Summarise the older part of this chat to free context. The messages stay visible."
-            className="flex items-center gap-1 rounded-button border border-border px-2 py-0.5 hover:text-fg-secondary disabled:opacity-40"
-          >
-            {api.busy ? <Loader2 size={12} className="animate-spin" /> : <Minimize2 size={12} />} Compact
-          </button>
-        )}
-        {api.note && <span className="text-fg-tertiary" role="status">{api.note}</span>}
-      </div>
-      </div>
-    </>
+        <span className={`whitespace-nowrap ${hot ? 'text-danger' : ''}`}>{fmt(used)}{limit ? ` / ${fmt(limit)}` : ' tokens'}</span>
+      </span>
+      {(pct === null || pct >= 40) && (
+        <button
+          type="button"
+          onClick={() => void api.compact()}
+          disabled={running || api.busy}
+          title="Compact: summarise the older part of this chat to free context. The messages stay visible."
+          aria-label="Compact the conversation"
+          className="rounded-button border border-border p-1.5 hover:text-fg-secondary disabled:opacity-40"
+        >
+          {api.busy ? <Loader2 size={13} className="animate-spin" /> : <Minimize2 size={13} />}
+        </button>
+      )}
+    </div>
   );
 }

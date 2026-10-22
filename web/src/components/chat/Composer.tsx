@@ -1,4 +1,5 @@
 import { AttachmentPrimitive, ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react';
+import type { ReactNode } from 'react';
 import { AlertTriangle, Minimize2, Paperclip, RotateCw, Send, X } from 'lucide-react';
 import type { TurnErrorKind } from '../../types';
 import { StopButton } from './StopButton';
@@ -10,6 +11,8 @@ export function Composer({
   errorDetail,
   onRetry,
   onCompactAndRetry,
+  leading,
+  trailing,
 }: {
   /** Set when the last turn ended in an error or was aborted — see lib/runtime.ts. */
   error?: string;
@@ -19,6 +22,10 @@ export function Composer({
   onRetry?: () => void;
   /** Offered when the conversation no longer fits the model's window. */
   onCompactAndRetry?: () => void;
+  /** Controls between the attach button and the message box (reasoning effort). */
+  leading?: ReactNode;
+  /** Controls between the message box and the send button (context meter). */
+  trailing?: ReactNode;
 }) {
   return (
     <div className="border-t border-border bg-bg">
@@ -82,12 +89,16 @@ export function Composer({
           <Paperclip size={16} />
         </ComposerPrimitive.AddAttachment>
 
+        {leading}
+
         <ComposerPrimitive.Input
           id="composer-input"
           rows={1}
           placeholder="Message…"
           className="max-h-32 flex-1 resize-none rounded-button border border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-border-hover"
         />
+
+        {trailing}
 
         <ThreadPrimitive.If running={false}>
           <ComposerPrimitive.Send aria-label="Send message" className="shrink-0 rounded-button bg-fg p-2.5 text-bg transition-opacity disabled:opacity-30">

@@ -6,7 +6,7 @@ import { Composer } from './Composer';
 import { ChatQuestions } from '../gazeta/ChatQuestions';
 import { InlineApprovals } from '../approval/InlineApprovals';
 import { AssistantBubble, UserBubble } from './MessageBubble';
-import { ChatStatus } from './ChatStatus';
+import { ChatStatus, ContextMeter, EffortSelect } from './ChatStatus';
 import { CompactionNotice } from './CompactionNotice';
 import { useConversationState } from '../../hooks/useConversationState';
 import type { useApprovals } from '../../hooks/useApprovals';
@@ -60,7 +60,7 @@ export function ChatView({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ThreadPrimitive.Root className="flex h-full flex-col">
-        <ThreadPrimitive.Viewport className="flex flex-1 flex-col overflow-y-auto px-4 pb-12 pt-6">
+        <ThreadPrimitive.Viewport className="flex flex-1 flex-col overflow-y-auto px-4 pb-6 pt-6">
           <div ref={content} className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5">
             <ThreadPrimitive.Empty>
               <Onboarding onOpenSettings={onOpenSettings} />
@@ -80,10 +80,11 @@ export function ChatView({
             <Quote size={12} /> Quote
           </SelectionToolbarPrimitive.Quote>
         </SelectionToolbarPrimitive.Root>
-        {/* Before the question panel: the status row floats over the bottom edge of the messages, so it must not sit on top of a card. */}
         <ChatStatus api={convState} running={live.running} />
         <ChatQuestions conversationId={conversationId} />
         <Composer
+          leading={<EffortSelect api={convState} running={live.running} />}
+          trailing={<ContextMeter api={convState} running={live.running} />}
           error={error}
           errorKind={live.errorKind}
           errorDetail={live.errorDetail}
