@@ -69,7 +69,7 @@ export function ChatStatus({ api, running }: { api: ConversationStateApi; runnin
       {/* Zero-height anchor: the row floats over the bottom edge of the chat instead of taking a strip of its own;
           the controls are frosted pills, so messages scrolling underneath stay readable. */}
       <div className="pointer-events-none relative z-10 h-0">
-      <div className="absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-3xl flex-wrap items-center justify-end gap-x-2 gap-y-1 px-3 pb-1.5 text-xs text-fg-tertiary [&>*]:pointer-events-auto [&>*]:rounded-full [&>*]:bg-bg/50 [&>*]:px-2 [&>*]:py-0.5 [&>*]:backdrop-blur-md [&>*]:shadow-[0_0_12px_8px_var(--color-bg)]">
+      <div className="absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-1.5 text-xs text-fg-tertiary [&>*]:pointer-events-auto [&>*]:rounded-full [&>*]:bg-bg/50 [&>*]:px-2 [&>*]:py-0.5 [&>*]:backdrop-blur-md [&>*]:shadow-[0_0_12px_8px_var(--color-bg)]">
         {s.effortSupported && (
           <label className="flex items-center gap-1" title="How hard the model thinks before answering">
             Effort
@@ -88,7 +88,7 @@ export function ChatStatus({ api, running }: { api: ConversationStateApi; runnin
         )}
 
         {used !== null && (
-          <span className="flex items-center gap-2" title={limit ? `${used.toLocaleString('en-US')} of ${limit.toLocaleString('en-US')} tokens in the last request` : `${used.toLocaleString('en-US')} tokens in the last request`}>
+          <span className="ml-auto flex items-center gap-2" title={limit ? `${used.toLocaleString('en-US')} of ${limit.toLocaleString('en-US')} tokens in the last request` : `${used.toLocaleString('en-US')} tokens in the last request`}>
             {pct !== null && (
               <span className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-tertiary" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Context used">
                 <span className={`block h-full ${hot ? 'bg-danger' : 'bg-fg-tertiary'}`} style={{ width: `${pct}%` }} />
