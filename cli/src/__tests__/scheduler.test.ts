@@ -146,4 +146,68 @@ describe('Scheduler', () => {
     t.scheduler.stop();
     assert.equal(listRuns(t.db, s.id)[0]!.status, 'error');
   });
+
+  it('a schedule limited to N runs runs N times and then stops by itself', async () => {
+    const t = setup();
+    const s = createSchedule(t.db, { ...base, maxRuns: 2 }, T0);
+    for (const at of ['2026-10-23T09:00:10Z', '2026-10-24T09:00:10Z', '2026-10-25T09:00:10Z']) {
+      t.at(at);
+      await t.scheduler.tick();
+      await t.scheduler.idle();
+    }
+    assert.equal(t.started.length, 2);
+    const after = getSchedule(t.db, s.id)!;
+    assert.deepEqual([after.runCount, after.nextRunAt, after.finished], [2, null, true]);
+  });
+
+  it('a slot that is skipped does not use up one of the runs', async () => {
+    const t = setup();
+    const s = createSchedule(t.db, { ...base, maxRuns: 1 }, T0);
+    startRun(t.db, s.id, 'manual'); // still going from before
+    t.at('2026-10-23T09:00:10Z');
+    await t.scheduler.tick();
+    assert.equal(t.started.length, 0);
+    assert.equal(listRuns(t.db, s.id).find(r => r.status === 'skipped')?.summary, 'The previous run was still going.');
+    const mid = getSchedule(t.db, s.id)!;
+    assert.deepEqual([mid.runCount, mid.finished, mid.nextRunAt], [0, false, '2026-10-24T09:00:00.000Z']);
+  });
+
+  it('"run now" does not count against the limit', async () => {
+    const t = setup();
+    const s = createSchedule(t.db, { ...base, maxRuns: 1 }, T0);
+    t.scheduler.runNow(s.id);
+    await t.scheduler.idle();
+    const after = getSchedule(t.db, s.id)!;
+    assert.deepEqual([after.runCount, after.finished], [0, false]);
+    t.at('2026-10-23T09:00:10Z');
+    await t.scheduler.tick();
+    await t.scheduler.idle();
+    assert.equal(t.started.filter(x => x.trigger === 'schedule').length, 1);
+  });
+
+  it('a one-time schedule runs once at its moment and never again', async () => {
+    const t = setup();
+    const s = createSchedule(t.db, { ...base, cron: '2026-10-23T12:00' }, T0); // 12:00 UTC
+    t.at('2026-10-23T11:59:00Z');
+    await t.scheduler.tick();
+    assert.equal(t.started.length, 0);
+    t.at('2026-10-23T12:00:05Z');
+    await t.scheduler.tick();
+    await t.scheduler.idle();
+    assert.deepEqual(t.started, [{ name: 'Stocks', trigger: 'schedule' }]);
+    assert.equal(getSchedule(t.db, s.id)!.finished, true);
+    t.at('2026-10-24T12:00:05Z');
+    await t.scheduler.tick();
+    assert.equal(t.started.length, 1);
+  });
+
+  it('a one-time schedule whose moment passed while the app was down is skipped with a reason, not run a day late', async () => {
+    const t = setup();
+    const s = createSchedule(t.db, { ...base, cron: '2026-10-23T12:00' }, T0);
+    t.at('2026-10-23T16:00:00Z');
+    await t.scheduler.tick();
+    assert.equal(t.started.length, 0);
+    assert.match(listRuns(t.db, s.id)[0]!.summary ?? '', /not running at the time/);
+    assert.equal(getSchedule(t.db, s.id)!.nextRunAt, null);
+  });
 });

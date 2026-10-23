@@ -140,6 +140,11 @@ export interface PendingApproval {
   commands?: { command: string; prefix: string; decision: 'allow' | 'ask' | 'deny'; reason: string }[];
   /** Why this call needs a fresh approval (e.g. a page looked like a prompt injection). */
   warning?: string;
+  projectId?: string;
+  /** Who is waiting for this when it is not a person at the keyboard (a scheduled run), and for how long. */
+  note?: string;
+  /** A scheduled run that did not wait: it went on without this call; only "Always" still means something. */
+  late?: boolean;
 }
 
 export type CommandMode = 'strict' | 'auto' | 'allowlist';
@@ -446,8 +451,18 @@ export interface Schedule {
   /** Without this a run only uses models tagged `free`. */
   allowPaid: boolean;
   enabled: boolean;
+  /** Stop after this many automatic runs (null = go on). "Run now" does not count. */
+  maxRuns: number | null;
+  runCount: number;
+  /** 0 = a call that needs approval is refused at once and the run goes on; N = wait up to N minutes for an answer in Gazeta. */
+  approvalWaitMin: number;
   nextRunAt: string | null;
   lastRunAt: string | null;
+  /** A one-time or limited task that has used up its runs. */
+  finished: boolean;
+  /** Set for a wake-up the assistant scheduled for itself: the chat it will continue. */
+  conversationId: string | null;
+  chain: number;
   createdAt: string;
   lastRun?: ScheduleRun | null;
 }
@@ -462,6 +477,8 @@ export interface ScheduleInput {
   projectId: string | null;
   allowPaid: boolean;
   enabled: boolean;
+  maxRuns: number | null;
+  approvalWaitMin: number;
 }
 
 export type SchedulePreview = { ok: true; next: string[] } | { ok: false; error: string };

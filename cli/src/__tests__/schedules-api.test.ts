@@ -164,19 +164,127 @@ describe('scheduled tasks over HTTP', () => {
     assert.ok(list.lastRunAt);
   });
 
-  it('a tool that needs approval is refused at once — nobody can click — and the run goes on', async () => {
+  const pendingOf = async (convId: string) =>
+    ((await request(port, 'GET', '/api/pending-approvals')).json.pending as Array<Record<string, any>>).filter(p => p.conversationId === convId);
+  const toolThenAnswer = (_p: Llm.MessageCreateParamsNonStreaming, n: number) => (n === 1
+    ? message([toolUse('c1', 'srv__danger')], 'tool_use')
+    : message([text('Done with what I could.')], 'end_turn'));
+  const listRunsOf = async (id: string) => (await request(port, 'GET', `/api/schedules/${id}/runs`)).json.runs as Array<{ status: string; conversationId: string | null }>;
+  const runReachedApproval = (id: string) => async () => !!(await lastRun(id))?.conversationId && (await pendingOf((await lastRun(id)).conversationId)).length === 1;
+
+  it('by default a call that needs approval is refused at once and the run goes on; the same approval card waits for "Always", which lets the next run through', async () => {
     requests.length = 0;
     executed.length = 0;
-    script = (_p, n) => (n === 1
-      ? message([toolUse('c1', 'srv__danger')], 'tool_use')
-      : message([text('Could not use the tool; here is what I know.')], 'end_turn'));
+    script = toolThenAnswer;
     const s = (await create({ name: 'Needs approval' })).json;
+    assert.equal(s.approvalWaitMin, 0);
     await request(port, 'POST', `/api/schedules/${s.id}/run`);
     await until(async () => (await lastRun(s.id))?.status === 'done', 'the run to finish');
     assert.deepEqual(executed, []);
     const second = JSON.stringify(requests[1]!.messages);
     assert.match(second, /Not executed/);
-    assert.match(second, /nobody is watching this scheduled run/);
+    assert.match(second, /does not wait for approvals/);
+    assert.match(JSON.stringify(requests[0]!.system), /refused right away/);
+
+    // The request is an ordinary pending approval (what Gazeta lists next to everything else), marked as late.
+    const run = await lastRun(s.id);
+    const [card] = await pendingOf(run.conversationId);
+    assert.ok(card, 'the request is left in the list');
+    assert.equal(card!.late, true);
+    assert.match(card!.note, /Needs approval.*did not wait/);
+    assert.match(card!.toolLabel, /danger/);
+
+    // "Once" means nothing for a run that is over; "Always" is a standing grant.
+    const answered = await request(port, 'POST', '/api/approve', { id: card!.id, approved: true, scope: 'always' });
+    assert.equal(answered.status, 200);
+    assert.equal((await pendingOf(run.conversationId)).length, 0);
+    const grants = (await request(port, 'GET', '/api/approval/grants')).json.grants as Array<{ id: string; toolLabel: string; scope: string }>;
+    const granted = grants.filter(g => /danger/.test(g.toolLabel));
+    assert.equal(granted.length, 1);
+    assert.equal(granted[0]!.scope, 'always');
+
+    // The next run is not stopped by it.
+    requests.length = 0;
+    await request(port, 'POST', `/api/schedules/${s.id}/run`);
+    await until(async () => (await listRunsOf(s.id)).filter(r => r.status === 'done').length === 2, 'the second run to finish');
+    assert.deepEqual(executed, ['danger']);
+
+    for (const g of granted) await request(port, 'DELETE', `/api/approval/grants/${g.id}`);
+  });
+
+  it('with a wait set the run pauses on a normal pending approval (not late), and approving it once lets that one call through', async () => {
+    requests.length = 0;
+    executed.length = 0;
+    script = toolThenAnswer;
+    const s = (await create({ name: 'Waits', approvalWaitMin: 5 })).json;
+    await request(port, 'POST', `/api/schedules/${s.id}/run`);
+    await until(runReachedApproval(s.id), 'the request to appear');
+    const run = await lastRun(s.id);
+    assert.equal(run.status, 'running');
+    assert.deepEqual(executed, []);
+    assert.match(JSON.stringify(requests[0]!.system), /at most 5 minutes/);
+    const [card] = await pendingOf(run.conversationId);
+    assert.equal(card!.late, undefined);
+    assert.match(card!.note, /Waits.*is paused on this call/);
+
+    assert.equal((await request(port, 'POST', '/api/approve', { id: card!.id, approved: true, scope: 'once' })).status, 200);
+    await until(async () => (await lastRun(s.id))?.status === 'done', 'the run to go on');
+    assert.deepEqual(executed, ['danger']);
+    // "Once" is not remembered.
+    const grants = (await request(port, 'GET', '/api/approval/grants')).json.grants as Array<{ toolLabel: string }>;
+    assert.equal(grants.filter(g => /danger/.test(g.toolLabel)).length, 0);
+  });
+
+  it('a denial refuses the call, and the run goes on without it', async () => {
+    requests.length = 0;
+    executed.length = 0;
+    script = toolThenAnswer;
+    const s = (await create({ name: 'Denied', approvalWaitMin: 5 })).json;
+    await request(port, 'POST', `/api/schedules/${s.id}/run`);
+    await until(runReachedApproval(s.id), 'the request to appear');
+    const [card] = await pendingOf((await lastRun(s.id)).conversationId);
+    await request(port, 'POST', '/api/approve', { id: card!.id, approved: false, scope: 'once' });
+    await until(async () => (await lastRun(s.id))?.status === 'done', 'the run to finish');
+    assert.deepEqual(executed, []);
+    assert.match(JSON.stringify(requests[1]!.messages), /Rejected by user/);
+  });
+
+  it('stopping the run while it waits takes its request out of the list', async () => {
+    requests.length = 0;
+    executed.length = 0;
+    script = toolThenAnswer;
+    const s = (await create({ name: 'Stopped', approvalWaitMin: 5 })).json;
+    await request(port, 'POST', `/api/schedules/${s.id}/run`);
+    await until(runReachedApproval(s.id), 'the request to appear');
+    const run = await lastRun(s.id);
+    await request(port, 'POST', `/api/conversations/${run.conversationId}/kill`);
+    await until(async () => (await pendingOf(run.conversationId)).length === 0, 'the request to go away');
+    await until(async () => (await lastRun(s.id))?.status !== 'running', 'the run to end');
+    assert.deepEqual(executed, []);
+  });
+
+  it('one-time and limited schedules: created, shown as such, and refused when they make no sense', async () => {
+    const soon = new Date(Date.now() + 36 * 3600_000).toISOString().slice(0, 16);
+    const once = await create({ name: 'Once', cron: soon, timezone: 'UTC' });
+    assert.equal(once.status, 201);
+    assert.deepEqual([once.json.finished, once.json.maxRuns, once.json.cron], [false, null, `${soon}:00`]);
+    assert.ok(once.json.nextRunAt);
+
+    const few = await create({ name: 'Few', maxRuns: 3 });
+    assert.deepEqual([few.json.maxRuns, few.json.runCount, few.json.finished], [3, 0, false]);
+    const raised = await request(port, 'PATCH', `/api/schedules/${few.json.id}`, { maxRuns: 5 });
+    assert.equal(raised.json.maxRuns, 5);
+    const unlimited = await request(port, 'PATCH', `/api/schedules/${few.json.id}`, { maxRuns: null });
+    assert.equal(unlimited.json.maxRuns, null);
+
+    assert.match((await create({ cron: '2020-01-01T08:00', timezone: 'UTC' })).json.error, /already passed/);
+    assert.match((await create({ maxRuns: 0 })).json.error, /whole number/);
+    assert.match((await create({ maxRuns: 'many' })).json.error, /number or null/);
+    assert.match((await create({ approvalWaitMin: 9999 })).json.error, /minutes/);
+
+    const preview = await request(port, 'GET', `/api/schedules/preview?cron=${encodeURIComponent(soon)}&timezone=UTC`);
+    assert.equal(preview.json.ok, true);
+    assert.equal(preview.json.next.length, 1);
   });
 
   it('refuses a paid model unless the task allows it, and says so in Gazeta', async () => {

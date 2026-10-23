@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import {
   attachConversation,
+  countRun,
   dueSchedules,
   finishRun,
   getSchedule,
@@ -96,19 +97,29 @@ export class Scheduler {
       const overdueMs = now.getTime() - new Date(s.nextRunAt!).getTime();
       let next: Date | null = null;
       try { next = nextRunAfter(s.cron, s.timezone, now); } catch { /* an unusable stored schedule is left without a next time */ }
-      setNextRun(this.db, s.id, next);
       const trigger: RunTrigger = overdueMs > 2 * this.tickMs ? 'catchup' : 'schedule';
 
+      // A wake-up is a promise the agent made to itself in a chat: it comes late rather than never (however long the app was
+      // down), and it waits for a free slot instead of being dropped.
+      const wake = s.conversationId !== null;
       let skip: string | null = null;
       if (hasActiveRun(this.db, s.id)) skip = 'The previous run was still going.';
-      else if (overdueMs > this.catchUpWindowMs) skip = 'The app was not running at the time.';
-      else if (this.inFlight.size >= this.maxConcurrent) skip = 'Too many scheduled runs were going at once.';
+      else if (!wake && overdueMs > this.catchUpWindowMs) skip = 'The app was not running at the time.';
+      else if (this.inFlight.size >= this.maxConcurrent) {
+        if (wake) continue;
+        skip = 'Too many scheduled runs were going at once.';
+      }
+
+      // A slot that is skipped does not use up one of a limited schedule's runs; the one that really starts may be the last.
+      const lastOne = !skip && s.maxRuns !== null && s.runCount + 1 >= s.maxRuns;
+      setNextRun(this.db, s.id, lastOne ? null : next);
 
       if (skip) {
         recordSkipped(this.db, s.id, trigger, skip, now);
         this.deps.onChange?.(s.id);
         continue;
       }
+      countRun(this.db, s.id);
       this.launch(s, trigger);
     }
   }

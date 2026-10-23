@@ -47,6 +47,15 @@ function readFields(body: unknown): SchedulePatch {
     if (typeof b[k] !== 'boolean') throw new ScheduleError(`"${k}" must be true or false.`);
     out[k] = b[k] as boolean;
   }
+  // The range is checked with the rest of the schedule; here only the type.
+  if (b['maxRuns'] !== undefined) {
+    if (b['maxRuns'] !== null && typeof b['maxRuns'] !== 'number') throw new ScheduleError('"maxRuns" must be a number or null.');
+    out.maxRuns = b['maxRuns'] as number | null;
+  }
+  if (b['approvalWaitMin'] !== undefined) {
+    if (typeof b['approvalWaitMin'] !== 'number') throw new ScheduleError('"approvalWaitMin" must be a number.');
+    out.approvalWaitMin = b['approvalWaitMin'];
+  }
   return out;
 }
 

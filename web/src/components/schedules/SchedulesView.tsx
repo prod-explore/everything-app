@@ -71,6 +71,9 @@ function ScheduleRow({
   const [confirming, setConfirming] = useState(false);
   const last = schedule.lastRun;
   const running = last?.status === 'running';
+  // A wake-up is the assistant's own alarm in a chat: it has no history of its own, nothing to edit or run by hand.
+  const wake = schedule.conversationId !== null;
+  const zone = wake ? Intl.DateTimeFormat().resolvedOptions().timeZone : schedule.timezone;
   const btn = 'rounded-full p-1.5 text-fg-tertiary hover:bg-bg-tertiary hover:text-fg disabled:opacity-40';
   return (
     <li className="rounded-container border border-border bg-bg p-3">
@@ -78,12 +81,19 @@ function ScheduleRow({
         <div className="min-w-0 flex-1">
           <p className={`truncate text-sm font-medium ${schedule.enabled ? 'text-fg' : 'text-fg-tertiary'}`}>{schedule.name}</p>
           <p className="mt-0.5 text-xs text-fg-secondary">
-            {describeCron(schedule.cron)} <span className="text-fg-tertiary">· {schedule.timezone}</span>
+            {wake ? (
+              'The assistant will continue this chat'
+            ) : (
+              <>
+                {describeCron(schedule.cron)} <span className="text-fg-tertiary">· {schedule.timezone}</span>
+              </>
+            )}
           </p>
           <p className="mt-0.5 text-xs text-fg-tertiary">
-            {nextLine(schedule)}
+            {nextLine({ ...schedule, timezone: zone })}
             {projectName && <> · {projectName}</>}
             {schedule.allowPaid && <> · paid models allowed</>}
+            {schedule.approvalWaitMin > 0 && <> · waits up to {schedule.approvalWaitMin} min for approvals</>}
           </p>
           {last && (
             <p className={`mt-0.5 text-xs ${STATUS_CLASS[last.status]}`}>
@@ -93,28 +103,39 @@ function ScheduleRow({
           )}
         </div>
         <div className="flex shrink-0 items-center">
-          <button onClick={onRunNow} disabled={busy || running} className={btn} aria-label={`Run ${schedule.name} now`} title={running ? 'Running now' : 'Run now'}>
-            <Play size={15} />
-          </button>
+          {wake && onOpenConversation && (
+            <button onClick={() => onOpenConversation(schedule.conversationId!)} className={btn} aria-label={`Open the chat of ${schedule.name}`} title="Open the chat">
+              <MessageSquare size={15} />
+            </button>
+          )}
+          {!wake && (
+            <button onClick={onRunNow} disabled={busy || running} className={btn} aria-label={`Run ${schedule.name} now`} title={running ? 'Running now' : 'Run now'}>
+              <Play size={15} />
+            </button>
+          )}
           <button onClick={onToggleEnabled} disabled={busy} className={btn} aria-label={schedule.enabled ? `Pause ${schedule.name}` : `Resume ${schedule.name}`} title={schedule.enabled ? 'Pause' : 'Resume'}>
             {schedule.enabled ? <Pause size={15} /> : <RefreshCw size={15} />}
           </button>
-          <button onClick={onToggleHistory} className={`${btn} ${historyOpen ? 'text-fg' : ''}`} aria-label={`History of ${schedule.name}`} aria-expanded={historyOpen} title="History">
-            <History size={15} />
-          </button>
-          <button onClick={onEdit} disabled={busy} className={btn} aria-label={`Edit ${schedule.name}`} title="Edit">
-            <Pencil size={15} />
-          </button>
-          <button onClick={() => setConfirming(true)} disabled={busy} className={btn} aria-label={`Delete ${schedule.name}`} title="Delete">
+          {!wake && (
+            <>
+              <button onClick={onToggleHistory} className={`${btn} ${historyOpen ? 'text-fg' : ''}`} aria-label={`History of ${schedule.name}`} aria-expanded={historyOpen} title="History">
+                <History size={15} />
+              </button>
+              <button onClick={onEdit} disabled={busy} className={btn} aria-label={`Edit ${schedule.name}`} title="Edit">
+                <Pencil size={15} />
+              </button>
+            </>
+          )}
+          <button onClick={() => setConfirming(true)} disabled={busy} className={btn} aria-label={`${wake ? 'Cancel' : 'Delete'} ${schedule.name}`} title={wake ? 'Cancel' : 'Delete'}>
             <Trash2 size={15} />
           </button>
         </div>
       </div>
       {confirming && (
         <div className="mt-2 flex items-center justify-end gap-2 text-xs text-fg-secondary" role="alert">
-          Delete this task and its history? The chats it started stay.
+          {wake ? 'Cancel this wake-up? The chat stays as it is.' : 'Delete this task and its history? The chats it started stay.'}
           <Button variant="danger" className="!px-3 !py-1 text-xs" onClick={onDelete}>
-            Delete
+            {wake ? 'Cancel wake-up' : 'Delete'}
           </Button>
           <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => setConfirming(false)}>
             Keep

@@ -80,6 +80,11 @@ export interface PendingApproval {
   commands?: SubcommandVerdict[];
   /** Why this call must be approved by hand even though a grant/policy might cover it. */
   warning?: string;
+  projectId?: string;
+  /** Who is waiting for this and for how long, when it is not a person at the keyboard (a scheduled run). */
+  note?: string;
+  /** A scheduled run that did not wait: the call was refused at once, the card stays so "Always" can still help the next run. */
+  late?: boolean;
 }
 
 export interface ApprovalDecision {
@@ -92,9 +97,17 @@ type ConfirmCtx = {
   projectId?: string; modelId?: string; skillId?: string; timeoutSeconds?: number;
   /** Always prompt (once only), with this warning — e.g. after a suspected prompt injection. */
   forcePrompt?: string;
-  /** Nobody can answer (a scheduled run): what is not already allowed is refused at once instead of waiting for a click. */
+  /** Nobody is at the keyboard (a scheduled run). The request is the same card as in a chat — it shows up in Gazeta. */
   unattended?: boolean;
+  /** Unattended only: how long the run waits for an answer. 0 (or nothing) = refuse at once and carry on. */
+  unattendedWaitSeconds?: number;
+  /** Unattended only: whose run this is (the schedule's name), for the card. */
+  origin?: string;
 };
+
+/** Requests of runs that did not wait stay in the list this long, and at most this many. */
+const LATE_TTL_MS = 7 * 24 * 3600 * 1000;
+const LATE_MAX = 50;
 
 export class WebApprovalGate {
   private readonly db: Database.Database;
@@ -168,23 +181,31 @@ export class WebApprovalGate {
       }
     }
 
-    if (ctx?.unattended) {
+    const id = randomUUID();
+    const unattended = ctx?.unattended === true;
+    const waitSeconds = unattended ? Math.max(0, ctx?.unattendedWaitSeconds ?? 0) : 0;
+    const timeoutMs = unattended ? (waitSeconds > 0 ? waitSeconds * 1000 : undefined) : ctx?.timeoutSeconds ? ctx.timeoutSeconds * 1000 : undefined;
+    const entry: PendingApproval = {
+      id, conversationId, projectId: ctx?.projectId, toolLabel, args, dangerous, createdAt: new Date().toISOString(), timeoutMs, commands, warning: ctx?.forcePrompt,
+    };
+    const who = ctx?.origin ? `Scheduled task "${ctx.origin}"` : 'A scheduled run';
+
+    if (unattended && waitSeconds === 0) {
+      // Nobody is there and the run does not wait: refuse now, but leave the request in the list (Gazeta) so "Always" can still help the next run.
       audit('unattended_denied');
+      this.leaveForLater({ ...entry, late: true, note: `${who} did not wait for this and went on without it. Choose "Always" to let it do this on its next runs.` });
       return {
         approved: false,
-        reason: 'nobody is watching this scheduled run, so it cannot ask for approval. The user can allow this for good ("Always allow") in a normal chat; otherwise do without it',
+        reason: 'this scheduled run does not wait for approvals, so the call was refused (the request is in the user\'s Gazeta for next time). Carry on without it and say in your final answer what you could not do',
       };
     }
-
-    const id = randomUUID();
-    const timeoutMs = ctx?.timeoutSeconds ? ctx.timeoutSeconds * 1000 : undefined;
-    const entry: PendingApproval = { id, conversationId, toolLabel, args, dangerous, createdAt: new Date().toISOString(), timeoutMs, commands, warning: ctx?.forcePrompt };
+    if (unattended) entry.note = `${who} is paused on this call. If nobody answers within ${Math.round(waitSeconds / 60)} min, it goes on without it.`;
 
     return new Promise<ApprovalDecision>(resolve => {
       const onAbort = () => settle(false);
       let timer: ReturnType<typeof setTimeout> | undefined;
 
-      const settle = (approved: boolean) => {
+      const settle = (approved: boolean, reason?: string) => {
         signal?.removeEventListener('abort', onAbort);
         if (timer) clearTimeout(timer);
         this.pending.delete(id);
@@ -194,16 +215,42 @@ export class WebApprovalGate {
           toolArgs: JSON.stringify(args),
           conversationId,
         });
-        resolve({ approved });
+        resolve({ approved, ...(reason ? { reason } : {}) });
       };
 
       if (timeoutMs) {
-        timer = setTimeout(() => settle(false), timeoutMs);
+        timer = setTimeout(
+          () => settle(false, unattended ? `nobody answered within ${Math.round(timeoutMs / 60000)} min. Carry on without this call and say in your final answer what you could not do` : undefined),
+          timeoutMs,
+        );
       }
       this.pending.set(id, { entry, resolve: settle, timer });
       signal?.addEventListener('abort', onAbort, { once: true });
       try { this.onPending?.(entry); } catch { /* a notification problem never blocks the approval */ }
     });
+  }
+
+  /** A request of a run that has already gone on: it waits in the list for "Always", then drops out (or after a week). */
+  private leaveForLater(entry: PendingApproval): void {
+    const late = [...this.pending.values()].filter(p => p.entry.late);
+    while (late.length >= LATE_MAX) {
+      const oldest = late.shift()!;
+      if (oldest.timer) clearTimeout(oldest.timer);
+      this.pending.delete(oldest.entry.id);
+    }
+    const drop = () => { this.pending.delete(entry.id); };
+    const timer = setTimeout(drop, LATE_TTL_MS);
+    timer.unref?.();
+    this.pending.set(entry.id, {
+      entry,
+      timer,
+      resolve: approved => {
+        clearTimeout(timer);
+        drop();
+        logApprovalAudit(this.db, { action: approved ? 'granted' : 'denied', toolLabel: entry.toolLabel, toolArgs: JSON.stringify(entry.args), conversationId: entry.conversationId });
+      },
+    });
+    try { this.onPending?.(entry); } catch { /* a notification problem never blocks the approval */ }
   }
 
   private grantChatScopeInMemory(conversationId: string, toolLabel: string): void {
@@ -238,6 +285,8 @@ export class WebApprovalGate {
   ): boolean {
     const p = this.pending.get(id);
     if (!p) return false;
+    // The run of a late request is long gone: only a standing grant means anything.
+    if (p.entry.late && scope !== 'always') scope = 'once';
     if (approved && !p.entry.dangerous) {
       if (scope !== 'once') {
         const projectId = ctx?.projectId ?? null;
@@ -246,10 +295,7 @@ export class WebApprovalGate {
         const effective = scope === 'project' && !projectId ? 'chat' : scope;
         // A subject needs both halves; a half-filled one would never match either.
         const scoped = ctx?.subjectType && ctx?.subjectId;
-        // Shell tools grant the sub-command prefixes the human just saw (never the whole tool).
-        const labels = p.entry.commands
-          ? [...new Set(p.entry.commands.filter(c => c.decision === 'ask' && c.prefix && c.prefix !== '__SUBST__').map(c => commandGrantLabel(c.prefix)))]
-          : [p.entry.toolLabel];
+        const labels = this.grantLabels(p.entry);
         for (const toolLabel of labels) createApprovalGrant(this.db, {
           toolLabel,
           scope: effective,
@@ -263,6 +309,14 @@ export class WebApprovalGate {
     }
     p.resolve(approved);
     return true;
+  }
+
+  /** What "allow for good" would cover for this call: the sub-command prefixes the human saw for a shell tool, else the tool itself. A dangerous call is never covered. */
+  grantLabels(req: { toolLabel: string; dangerous: boolean; commands?: SubcommandVerdict[] }): string[] {
+    if (req.dangerous) return [];
+    return req.commands
+      ? [...new Set(req.commands.filter(c => c.decision === 'ask' && c.prefix && c.prefix !== '__SUBST__').map(c => commandGrantLabel(c.prefix)))]
+      : [req.toolLabel];
   }
 
   /** Returns all persisted grants (from DB), optionally filtered. */

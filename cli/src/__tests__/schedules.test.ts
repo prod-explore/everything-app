@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb, runMigrations, createConversation } from '../db.js';
 import {
-  KEEP_RUNS, MAX_SCHEDULES, ScheduleError, createSchedule, deleteSchedule, dueSchedules, finishRun, getSchedule, hasActiveRun, interruptRunning,
+  KEEP_RUNS, MAX_SCHEDULES, ScheduleError, countRun, createSchedule, deleteSchedule, dueSchedules, finishRun, getSchedule, hasActiveRun, interruptRunning,
   lastRuns, listRuns, nextRunAfter, pruneRuns, recordSkipped, setNextRun, startRun, updateSchedule, upcomingRuns, validateSchedule,
 } from '../schedules.js';
 
@@ -167,5 +167,109 @@ describe('runs', () => {
 describe('getSchedule', () => {
   it('is null for an unknown id', () => {
     assert.equal(getSchedule(fresh(), 'nope'), null);
+  });
+});
+
+describe('one-time schedules', () => {
+  const NOW = new Date('2026-10-23T10:00:00Z');
+  const mk = (db: ReturnType<typeof openDb>, cron: string, extra = {}) => createSchedule(db, { name: 'once', prompt: 'p', cron, timezone: 'Europe/Warsaw', ...extra }, NOW);
+
+  it('a local date and time is read in the schedule\'s own zone (summer time, then winter time)', () => {
+    const db = fresh();
+    assert.equal(mk(db, '2026-10-24T08:30').nextRunAt, '2026-10-24T06:30:00.000Z');
+    assert.equal(mk(db, '2026-12-24T08:30').nextRunAt, '2026-12-24T07:30:00.000Z');
+  });
+
+  it('is stored with seconds, so a form value and a typed one are the same thing', () => {
+    const db = fresh();
+    assert.equal(mk(db, ' 2026-10-24T08:30 ').cron, '2026-10-24T08:30:00');
+    assert.equal(mk(db, '2026-10-24T08:30:00').cron, '2026-10-24T08:30:00');
+  });
+
+  it('refuses a moment that has already passed, and nonsense', () => {
+    const db = fresh();
+    assert.throws(() => mk(db, '2026-10-23T09:00'), /already passed/);
+    assert.throws(() => mk(db, '2026-13-40T08:30'), ScheduleError);
+  });
+
+  it('is not subject to the 15-minute rule, and has no run limit of its own', () => {
+    const db = fresh();
+    const s = mk(db, '2026-10-24T08:30', { maxRuns: 5 });
+    assert.equal(s.maxRuns, null);
+  });
+
+  it('is finished once its moment has come, and editing it to a new moment brings it back', () => {
+    const db = fresh();
+    const s = mk(db, '2026-10-24T08:30');
+    assert.equal(s.finished, false);
+    setNextRun(db, s.id, null); // what the scheduler does when it starts the run
+    assert.equal(getSchedule(db, s.id)!.finished, true);
+    // A paused one is not "finished", just paused.
+    const paused = updateSchedule(db, s.id, { enabled: false }, NOW)!;
+    assert.equal(paused.finished, false);
+    const again = updateSchedule(db, s.id, { cron: '2026-11-02T09:00', enabled: true }, NOW)!;
+    assert.equal(again.finished, false);
+    assert.equal(again.nextRunAt, '2026-11-02T08:00:00.000Z');
+  });
+
+  it('a one-time schedule that already ran can be renamed without being asked for a new date', () => {
+    const db = fresh();
+    const s = mk(db, '2026-10-24T08:30');
+    setNextRun(db, s.id, null);
+    const later = new Date('2026-10-25T10:00:00Z');
+    const renamed = updateSchedule(db, s.id, { name: 'renamed' }, later)!;
+    assert.equal(renamed.name, 'renamed');
+    assert.equal(renamed.finished, true);
+  });
+});
+
+describe('limited schedules', () => {
+  const NOW = new Date('2026-10-23T10:00:00Z');
+  const mk = (db: ReturnType<typeof openDb>, extra = {}) => createSchedule(db, { name: 'few', prompt: 'p', cron: '0 9 * * *', timezone: 'UTC', ...extra }, NOW);
+
+  it('stores the limit and starts the counter at zero; no limit by default', () => {
+    const db = fresh();
+    const s = mk(db, { maxRuns: 3 });
+    assert.deepEqual([s.maxRuns, s.runCount, s.finished], [3, 0, false]);
+    assert.equal(mk(db).maxRuns, null);
+  });
+
+  it('only accepts a whole number from 1 to 1000', () => {
+    const db = fresh();
+    for (const bad of [0, -1, 1.5, 1001, '3' as unknown as number]) assert.throws(() => mk(db, { maxRuns: bad }), /whole number/);
+  });
+
+  it('is finished when the counter reaches the limit; raising the limit continues, a new timetable starts over', () => {
+    const db = fresh();
+    const s = mk(db, { maxRuns: 2 });
+    countRun(db, s.id); countRun(db, s.id);
+    setNextRun(db, s.id, null); // the scheduler stops scheduling at the last run
+    assert.equal(getSchedule(db, s.id)!.finished, true);
+
+    const more = updateSchedule(db, s.id, { maxRuns: 4 }, NOW)!;
+    assert.deepEqual([more.finished, more.runCount, more.nextRunAt], [false, 2, '2026-10-24T09:00:00.000Z']);
+
+    countRun(db, s.id); countRun(db, s.id);
+    setNextRun(db, s.id, null);
+    const restarted = updateSchedule(db, s.id, { cron: '0 10 * * *' }, NOW)!;
+    assert.deepEqual([restarted.finished, restarted.runCount], [false, 0]);
+  });
+
+  it('pausing and resuming a finished one does not bring it back', () => {
+    const db = fresh();
+    const s = mk(db, { maxRuns: 1 });
+    countRun(db, s.id);
+    setNextRun(db, s.id, null);
+    updateSchedule(db, s.id, { enabled: false }, NOW);
+    const resumed = updateSchedule(db, s.id, { enabled: true }, NOW)!;
+    assert.equal(resumed.nextRunAt, null);
+    assert.equal(resumed.finished, true);
+  });
+
+  it('the wait for an approval is 0 by default and bounded', () => {
+    const db = fresh();
+    assert.equal(mk(db).approvalWaitMin, 0);
+    assert.equal(mk(db, { approvalWaitMin: 90 }).approvalWaitMin, 90);
+    for (const bad of [-1, 721, 2.5]) assert.throws(() => mk(db, { approvalWaitMin: bad }), /minutes/);
   });
 });

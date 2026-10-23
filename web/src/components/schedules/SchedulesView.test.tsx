@@ -27,6 +27,12 @@ const sched = (over: Partial<Schedule> = {}): Schedule => ({
   projectId: null,
   allowPaid: false,
   enabled: true,
+  maxRuns: null,
+  runCount: 0,
+  approvalWaitMin: 0,
+  finished: false,
+  conversationId: null,
+  chain: 0,
   nextRunAt: '2026-07-02T08:00:00.000Z',
   lastRunAt: '2026-07-01T08:00:00.000Z',
   createdAt: '2026-06-01T00:00:00.000Z',
@@ -157,7 +163,7 @@ describe('Schedule form', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Create' }));
     await waitFor(() => expect(api.createSchedule).toHaveBeenCalled());
     expect(api.createSchedule).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'Stocks', prompt: 'Report the price of AAPL', cron: '0 8 * * 1-5', model: null, projectId: null, allowPaid: false, enabled: true }),
+      expect.objectContaining({ name: 'Stocks', prompt: 'Report the price of AAPL', cron: '0 8 * * 1-5', model: null, projectId: null, allowPaid: false, enabled: true, maxRuns: null, approvalWaitMin: 0 }),
     );
     // back on the list afterwards
     expect(await screen.findByRole('button', { name: /New task/ })).toBeInTheDocument();
@@ -202,5 +208,115 @@ describe('Schedule form', () => {
     await userEvent.type(within(form).getByLabelText('Name'), 'Renamed');
     await userEvent.click(within(form).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.updateSchedule).toHaveBeenCalledWith('s1', expect.objectContaining({ name: 'Renamed', cron: '*/30 * * * *', allowPaid: true })));
+  });
+
+  it('schedules a one-time run from a date and time', async () => {
+    await openForm();
+    await userEvent.type(screen.getByLabelText('Name'), 'Remind me');
+    await userEvent.type(screen.getByLabelText('What should the agent do?'), 'Check the parcel status');
+    await userEvent.selectOptions(screen.getByLabelText('Repeats'), '__once__');
+    const when = screen.getByLabelText('Date and time');
+    fireEvent.change(when, { target: { value: '2026-12-24T08:30' } });
+    expect(screen.queryByLabelText('Number of runs')).not.toBeInTheDocument();
+    await waitFor(() => expect(api.previewSchedule).toHaveBeenCalledWith('2026-12-24T08:30', expect.any(String)));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(api.createSchedule).toHaveBeenCalled());
+    expect(api.createSchedule).toHaveBeenCalledWith(expect.objectContaining({ cron: '2026-12-24T08:30', maxRuns: null }));
+  });
+
+  it('cannot be saved as a one-time task without a date', async () => {
+    await openForm();
+    await userEvent.type(screen.getByLabelText('Name'), 'X');
+    await userEvent.type(screen.getByLabelText('What should the agent do?'), 'Y');
+    await userEvent.selectOptions(screen.getByLabelText('Repeats'), '__once__');
+    fireEvent.change(screen.getByLabelText('Date and time'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    expect(await screen.findByText('Pick a date and time.')).toBeInTheDocument();
+  });
+
+  it('limits a repeating task to a number of runs', async () => {
+    await openForm();
+    await userEvent.type(screen.getByLabelText('Name'), 'Few');
+    await userEvent.type(screen.getByLabelText('What should the agent do?'), 'Do it');
+    expect(screen.getByLabelText('Number of runs')).toBeDisabled();
+    await userEvent.click(screen.getByLabelText('Stop after'));
+    const n = screen.getByLabelText('Number of runs');
+    expect(n).toBeEnabled();
+    expect(n).toHaveValue(5);
+    fireEvent.change(n, { target: { value: '3' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(api.createSchedule).toHaveBeenCalledWith(expect.objectContaining({ maxRuns: 3 })));
+  });
+
+  it('chooses to wait for an approval in Gazeta, or to go on without it', async () => {
+    await openForm();
+    await userEvent.type(screen.getByLabelText('Name'), 'Waits');
+    await userEvent.type(screen.getByLabelText('What should the agent do?'), 'Do it');
+    const wait = screen.getByLabelText('When the agent needs an approval');
+    expect(wait).toHaveValue('0');
+    await userEvent.selectOptions(wait, '60');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(api.createSchedule).toHaveBeenCalledWith(expect.objectContaining({ approvalWaitMin: 60 })));
+  });
+
+  it('edits a one-time task starting from its date', async () => {
+    api.listSchedules.mockResolvedValue({ schedules: [sched({ cron: '2026-12-24T08:30:00', finished: false })] });
+    open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Job offers' }));
+    const form = await screen.findByRole('form', { name: 'Edit scheduled task' });
+    expect(within(form).getByLabelText('Repeats')).toHaveValue('__once__');
+    expect(within(form).getByLabelText('Date and time')).toHaveValue('2026-12-24T08:30');
+  });
+});
+
+describe('SchedulesView list: one-time and limited tasks', () => {
+  it('says "Once" for a one-time task and that a used-up one is finished', async () => {
+    api.listSchedules.mockResolvedValue({ schedules: [sched({ cron: '2026-12-24T08:30:00', nextRunAt: null, finished: true, lastRunAt: '2026-12-24T07:30:00.000Z' })] });
+    open();
+    expect(await screen.findByText(/Once, 2026-12-24 08:30/)).toBeInTheDocument();
+    expect(screen.getByText(/Finished — it ran once/)).toBeInTheDocument();
+  });
+
+  it('shows which run of a limited task is next, and when it is used up', async () => {
+    api.listSchedules.mockResolvedValue({ schedules: [sched({ maxRuns: 3, runCount: 1 })] });
+    open();
+    expect(await screen.findByText(/run 2 of 3/)).toBeInTheDocument();
+    api.listSchedules.mockResolvedValue({ schedules: [sched({ maxRuns: 3, runCount: 3, nextRunAt: null, finished: true })] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText(/Finished — 3 of 3 runs done/)).toBeInTheDocument();
+  });
+
+  it('shows that a task waits for approvals', async () => {
+    api.listSchedules.mockResolvedValue({ schedules: [sched({ approvalWaitMin: 30 })] });
+    open();
+    expect(await screen.findByText(/waits up to 30 min for approvals/)).toBeInTheDocument();
+  });
+});
+
+describe('SchedulesView list: wake-ups the assistant set for itself', () => {
+  const wake = () => sched({ id: 'w1', name: 'Wake-up: check the build', cron: '2026-12-24T08:30:00', timezone: 'UTC', conversationId: 'chat-9', chain: 1 });
+
+  it('shows a wake-up as the assistant continuing a chat, without run-now, history or edit', async () => {
+    api.listSchedules.mockResolvedValue({ schedules: [wake()] });
+    const onOpenConversation = vi.fn();
+    open({ onOpenConversation });
+    expect(await screen.findByText('The assistant will continue this chat')).toBeInTheDocument();
+    for (const name of [/^Run .* now$/, /^History of/, /^Edit /]) expect(screen.queryByRole('button', { name })).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open the chat of Wake-up: check the build' }));
+    expect(onOpenConversation).toHaveBeenCalledWith('chat-9');
+  });
+
+  it('cancels a wake-up after asking', async () => {
+    api.listSchedules.mockResolvedValue({ schedules: [wake()] });
+    api.deleteSchedule.mockResolvedValue({ ok: true });
+    open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Cancel Wake-up: check the build' }));
+    expect(screen.getByText(/Cancel this wake-up\?/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel wake-up' }));
+    await waitFor(() => expect(api.deleteSchedule).toHaveBeenCalledWith('w1'));
   });
 });

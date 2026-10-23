@@ -3,6 +3,7 @@ import { AlarmClock, FolderOpen, Ghost, MessageSquarePlus, Newspaper, Pencil, Pl
 import type { ConversationSummary, ProjectListItem } from '../../types';
 import { Button } from '../shared/Button';
 import { GazetaCounter } from '../gazeta/GazetaCounter';
+import { MoveToProject } from './MoveToProject';
 
 export type SidebarView = 'chats' | 'projects';
 
@@ -17,6 +18,8 @@ export function Sidebar({
   onCreate,
   onRename,
   onDelete,
+  onMoveToProject,
+  onNewProjectFromChat,
   onOpenGazeta,
   onOpenSchedules,
   onOpenSettings,
@@ -36,6 +39,9 @@ export function Sidebar({
   onCreate: (projectId?: string, ghost?: boolean) => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
+  /** Put a chat into a project (null = out of its project, back to the quick chats). */
+  onMoveToProject: (id: string, projectId: string | null) => void;
+  onNewProjectFromChat: (id: string) => void;
   onOpenGazeta: () => void;
   onOpenSchedules: () => void;
   onOpenSettings: () => void;
@@ -127,6 +133,7 @@ export function Sidebar({
                     <span className="truncate">{c.title}</span>
                   </button>
                 )}
+                <MoveToProject conversation={c} projects={projects} onMove={onMoveToProject} onNewProject={onNewProjectFromChat} />
                 <button
                   onClick={() => startEdit(c)}
                   className="shrink-0 rounded p-1 text-fg-tertiary opacity-0 hover:text-fg group-hover:opacity-100 [@media(hover:none)]:opacity-100"
@@ -206,6 +213,7 @@ export function Sidebar({
                               {c.title}
                             </button>
                           )}
+                          <MoveToProject conversation={c} projects={projects} size={12} className="!p-0.5" onMove={onMoveToProject} onNewProject={onNewProjectFromChat} />
                           <button
                             onClick={() => startEdit(c)}
                             className="shrink-0 rounded p-0.5 text-fg-tertiary opacity-0 hover:text-fg group-hover:opacity-100 [@media(hover:none)]:opacity-100"

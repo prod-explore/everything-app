@@ -15,6 +15,8 @@ const POLL_MS = 2000;
  */
 export function useApprovals(conversationId: string | null): {
   pending: PendingApproval[];
+  /** Everything the gate holds, whatever chat it belongs to — what Gazeta lists next to its other entries. */
+  all: PendingApproval[];
   respond: (id: string, approved: boolean, scope?: ApprovalScope) => Promise<void>;
 } {
   // Everything the gate reports; the list for THIS conversation is derived below, so switching conversations
@@ -22,7 +24,6 @@ export function useApprovals(conversationId: string | null): {
   const [all, setAll] = useState<PendingApproval[]>([]);
 
   useEffect(() => {
-    if (!conversationId) return;
     let cancelled = false;
 
     async function poll() {
@@ -40,7 +41,7 @@ export function useApprovals(conversationId: string | null): {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [conversationId]);
+  }, []);
 
   const pending = useMemo(() => (conversationId ? all.filter(p => p.conversationId === conversationId) : []), [all, conversationId]);
 
@@ -53,5 +54,5 @@ export function useApprovals(conversationId: string | null): {
     await apiApprove(id, approved, scope);
   };
 
-  return { pending, respond };
+  return { pending, all, respond };
 }

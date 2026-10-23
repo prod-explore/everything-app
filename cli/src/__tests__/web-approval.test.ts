@@ -23,23 +23,67 @@ describe('WebApprovalGate', () => {
     assert.equal(gate.listPending().length, 0);
   });
 
-  it('an unattended call is refused at once instead of waiting, but a standing "always" grant still lets it through', async () => {
+  it('an unattended run that does not wait is refused at once, its request stays in the list, and "Always" on it lets the next run through', async () => {
     const gate = new WebApprovalGate(freshDb());
-    const refused = await gate.confirmDetailed('conv-1', 'obsidian/write_note', { path: 'a.md' }, undefined, { unattended: true });
+    const refused = await gate.confirmDetailed('conv-1', 'obsidian/write_note', { path: 'a.md' }, undefined, { unattended: true, origin: 'Morning news' });
     assert.equal(refused.approved, false);
-    assert.match(refused.reason!, /nobody is watching/);
-    assert.equal(gate.listPending().length, 0, 'nothing is left waiting for a click');
+    assert.match(refused.reason!, /does not wait/);
 
-    // A grant the user made earlier in a normal chat applies to an unattended run too.
+    const [late] = gate.listPending();
+    assert.equal(late.late, true, 'the request is left for the user, like any other pending approval');
+    assert.match(late.note!, /Morning news/);
+
+    // "Once" means nothing for a run that has gone on, so it grants nothing; "Always" is a standing grant.
+    gate.resolve(late.id, true, 'once');
+    assert.equal(gate.listPending().length, 0);
+    assert.equal((await gate.confirmDetailed('conv-2', 'obsidian/write_note', { path: 'b.md' }, undefined, { unattended: true })).approved, false);
+    gate.resolve(gate.listPending()[0].id, true, 'always');
+    assert.equal(gate.listPending().length, 0);
+    const allowed = await gate.confirmDetailed('conv-3', 'obsidian/write_note', { path: 'c.md' }, undefined, { unattended: true });
+    assert.equal(allowed.approved, true, 'a grant made in Gazeta applies to the next unattended run');
+
+    // …but a dangerous-looking call always needs a human, so it is refused even with the grant, and never covered by "Always".
+    const dangerous = await gate.confirmDetailed('conv-3', 'obsidian/write_note', { path: 'c.md', note: 'delete account' }, undefined, { unattended: true, forcePrompt: 'check this' });
+    assert.equal(dangerous.approved, false);
+  });
+
+  it('an unattended run with a wait is a normal pending approval: answered in time it goes on, otherwise it is refused with a reason', async () => {
+    const gate = new WebApprovalGate(freshDb());
+    const answered = gate.confirmDetailed('c1', 'obsidian/write_note', { path: 'a.md' }, undefined, { unattended: true, unattendedWaitSeconds: 60, origin: 'Morning news', projectId: 'p1' });
+    const [entry] = gate.listPending();
+    assert.equal(entry.late, undefined);
+    assert.equal(entry.projectId, 'p1');
+    assert.match(entry.note!, /Morning news.*60 min|Morning news.*1 min/);
+    gate.resolve(entry.id, true, 'once');
+    assert.equal((await answered).approved, true);
+
+    const timedOut = await gate.confirmDetailed('c2', 'obsidian/write_note', { path: 'b.md' }, undefined, { unattended: true, unattendedWaitSeconds: 0.05 });
+    assert.equal(timedOut.approved, false);
+    assert.match(timedOut.reason!, /nobody answered/);
+    assert.equal(gate.listPending().length, 0, 'a request that ran out is not left behind');
+  });
+
+  it('a standing grant or the policy still decides before an unattended run is asked anything', async () => {
+    const gate = new WebApprovalGate(freshDb());
     const first = gate.confirm('conv-2', 'obsidian/write_note', { path: 'b.md' });
     gate.resolve(gate.listPending()[0].id, true, 'always');
     await first;
-    const allowed = await gate.confirmDetailed('conv-3', 'obsidian/write_note', { path: 'c.md' }, undefined, { unattended: true });
-    assert.equal(allowed.approved, true);
+    const decision = await gate.confirmDetailed('c1', 'obsidian/write_note', { path: 'a.md' }, undefined, { unattended: true, unattendedWaitSeconds: 60 });
+    assert.equal(decision.approved, true);
+    assert.equal(gate.listPending().length, 0);
+  });
 
-    // …but a dangerous-looking call always needs a human, so unattended it is refused even with the grant.
-    const dangerous = await gate.confirmDetailed('conv-3', 'obsidian/write_note', { path: 'c.md', note: 'delete account' }, undefined, { unattended: true, forcePrompt: 'check this' });
-    assert.equal(dangerous.approved, false);
+  it('grantLabels: the tool itself, the sub-command prefixes for a shell tool, and nothing for a dangerous call', () => {
+    const gate = new WebApprovalGate(freshDb());
+    assert.deepEqual(gate.grantLabels({ toolLabel: 'obsidian/write_note', dangerous: false }), ['obsidian/write_note']);
+    assert.deepEqual(gate.grantLabels({ toolLabel: 'obsidian/write_note', dangerous: true }), []);
+    const shell = gate.grantLabels({
+      toolLabel: 'sandbox/run_bash',
+      dangerous: false,
+      commands: [{ command: 'git push origin main', decision: 'ask', prefix: 'git push' }, { command: 'ls', decision: 'allow', prefix: 'ls' }] as never,
+    });
+    assert.equal(shell.length, 1);
+    assert.match(shell[0]!, /git push/);
   });
 
   it('resolve() on an unknown id returns false and does not throw', () => {

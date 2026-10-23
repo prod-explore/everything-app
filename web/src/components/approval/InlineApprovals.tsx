@@ -7,6 +7,25 @@ import { MarkdownText } from '../chat/MarkdownText';
 
 type Respond = (id: string, approved: boolean, scope?: ApprovalScope) => Promise<void>;
 
+/** Who is waiting for this when it is not a person at the keyboard (a scheduled run). */
+function Note({ approval }: { approval: PendingApproval }) {
+  if (!approval.note) return null;
+  return <p className="mb-2 text-xs text-fg-secondary">{approval.note}</p>;
+}
+
+/**
+ * A request of a scheduled run that has already gone on without it: "Approve once" and "For this chat" mean nothing any more,
+ * only a standing "Always" helps the next run.
+ */
+function LateActions({ busy, danger, answer }: { busy: boolean; danger: boolean; answer: (approved: boolean, scope: ApprovalScope) => Promise<void> }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Button variant="ghost" disabled={busy} onClick={() => void answer(false, 'once')}>Dismiss</Button>
+      {!danger && <Button variant="primary" disabled={busy} onClick={() => void answer(true, 'always')}>Always allow</Button>}
+    </div>
+  );
+}
+
 /** Worker approvals are labelled "[agent researcher] srv/tool" (or "[subagent] …") by the server. */
 function splitLabel(label: string): { agent: string | null; tool: string } {
   const m = /^\[(agent ([^\]]+)|subagent)\]\s*/.exec(label);
@@ -41,6 +60,7 @@ function DomainCard({ approval, agent, respond }: { approval: PendingApproval; a
       {approval.warning && (
         <p className="mb-2 rounded-button border border-danger/40 bg-danger/5 px-2 py-1.5 text-xs text-danger">{approval.warning}</p>
       )}
+      <Note approval={approval} />
       <p className="mb-1 text-xs text-fg-secondary">
         {viaBrowser ? 'The assistant wants to open this site in the browser and click around on it.' : 'The assistant wants to read a page from this site.'}
       </p>
@@ -48,22 +68,27 @@ function DomainCard({ approval, agent, respond }: { approval: PendingApproval; a
         <p className="mb-1 text-xs text-fg-secondary">This address is not in your message or in the search results, so it needs your OK.</p>
       )}
       {url && <p className="mb-3 break-all font-mono text-xs text-fg-tertiary">{url}</p>}
-      <div className="flex flex-wrap gap-2">
-        <Button variant="ghost" disabled={busy} onClick={() => void answer(false, 'once')}>Deny</Button>
-        <Button variant="primary" disabled={busy} onClick={() => void answer(true, 'once')}>Allow once</Button>
-        {!once && (
-          <>
-            <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'chat')}>For this chat</Button>
-            <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'always')}>Always</Button>
-          </>
-        )}
-      </div>
+      {approval.late ? (
+        <LateActions busy={busy} danger={once} answer={answer} />
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="ghost" disabled={busy} onClick={() => void answer(false, 'once')}>Deny</Button>
+          <Button variant="primary" disabled={busy} onClick={() => void answer(true, 'once')}>Allow once</Button>
+          {!once && (
+            <>
+              <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'chat')}>For this chat</Button>
+              <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'always')}>Always</Button>
+            </>
+          )}
+        </div>
+      )}
       {viaBrowser && <p className="mt-2 text-xs text-fg-tertiary">“Allow once” lasts until this browser session is closed.</p>}
     </div>
   );
 }
 
-function ApprovalCard({ approval, respond }: { approval: PendingApproval; respond: Respond }) {
+/** The approval card — the same one in a chat and in Gazeta (the gate behind it is one and the same). */
+export function ApprovalCard({ approval, respond }: { approval: PendingApproval; respond: Respond }) {
   const [busy, setBusy] = useState(false);
   const { agent, tool } = splitLabel(approval.toolLabel);
   if (tool.startsWith('web:')) return <DomainCard approval={approval} agent={agent} respond={respond} />;
@@ -113,6 +138,7 @@ function ApprovalCard({ approval, respond }: { approval: PendingApproval; respon
       {approval.warning && (
         <p className="mb-2 rounded-button border border-danger/40 bg-danger/5 px-2 py-1.5 text-xs text-danger">{approval.warning}</p>
       )}
+      <Note approval={approval} />
       <div className="mb-2 flex items-center gap-2 text-fg">
         <friendly.icon size={14} className="shrink-0" />
         <span className="text-xs">{friendly.label}</span>
@@ -137,18 +163,22 @@ function ApprovalCard({ approval, respond }: { approval: PendingApproval; respon
           {JSON.stringify(approval.args, null, 2)}
         </pre>
       )}
-      <div className="flex flex-wrap gap-2">
-        <Button variant="ghost" disabled={busy} onClick={() => void answer(false, 'once')}>Deny</Button>
-        <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={() => void answer(true, 'once')}>
-          Approve once
-        </Button>
-        {!danger && (
-          <>
-            <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'chat')}>For this chat</Button>
-            <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'always')}>Always</Button>
-          </>
-        )}
-      </div>
+      {approval.late ? (
+        <LateActions busy={busy} danger={danger} answer={answer} />
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="ghost" disabled={busy} onClick={() => void answer(false, 'once')}>Deny</Button>
+          <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={() => void answer(true, 'once')}>
+            Approve once
+          </Button>
+          {!danger && (
+            <>
+              <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'chat')}>For this chat</Button>
+              <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'always')}>Always</Button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

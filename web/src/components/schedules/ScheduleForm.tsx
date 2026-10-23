@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { previewSchedule } from '../../api';
-import { CRON_PRESETS, formatWhen, localTimeZone, presetFor, timeZoneChoices } from '../../lib/schedules';
+import { APPROVAL_WAITS, CRON_PRESETS, defaultOnce, formatWhen, isOnceCron, localTimeZone, onceInputValue, presetFor, timeZoneChoices } from '../../lib/schedules';
 import type { ModelOption, ProjectListItem, Schedule, SchedulePreview, ScheduleInput } from '../../types';
 import { Button } from '../shared/Button';
 import { ModelOptions } from '../shared/ModelOptions';
@@ -8,6 +8,8 @@ import { ModelOptions } from '../shared/ModelOptions';
 const INPUT_CLASS =
   'w-full rounded-button border border-border bg-bg px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-border-hover';
 const CUSTOM = '__custom__';
+const ONCE = '__once__';
+type Mode = 'preset' | 'custom' | 'once';
 const MAX_PROMPT = 8000;
 
 const EMPTY: ScheduleInput = {
@@ -19,6 +21,8 @@ const EMPTY: ScheduleInput = {
   projectId: null,
   allowPaid: false,
   enabled: true,
+  maxRuns: null,
+  approvalWaitMin: 0,
 };
 
 function Field({ label, hint, htmlFor, children }: { label: string; hint?: string; htmlFor?: string; children: React.ReactNode }) {
@@ -51,10 +55,10 @@ export function ScheduleForm({
   const uid = useId();
   const [draft, setDraft] = useState<ScheduleInput>(() =>
     initial
-      ? { name: initial.name, prompt: initial.prompt, cron: initial.cron, timezone: initial.timezone, model: initial.model, projectId: initial.projectId, allowPaid: initial.allowPaid, enabled: initial.enabled }
+      ? { name: initial.name, prompt: initial.prompt, cron: initial.cron, timezone: initial.timezone, model: initial.model, projectId: initial.projectId, allowPaid: initial.allowPaid, enabled: initial.enabled, maxRuns: initial.maxRuns, approvalWaitMin: initial.approvalWaitMin }
       : EMPTY,
   );
-  const [custom, setCustom] = useState(() => !presetFor(draft.cron));
+  const [mode, setMode] = useState<Mode>(() => (isOnceCron(draft.cron) ? 'once' : presetFor(draft.cron) ? 'preset' : 'custom'));
   const [preview, setPreview] = useState<SchedulePreview | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +77,7 @@ export function ScheduleForm({
   }, [draft.cron, draft.timezone]);
 
   const zones = timeZoneChoices(draft.timezone);
-  const missing = !draft.name.trim() ? 'Give it a name.' : !draft.prompt.trim() ? 'Say what the agent should do.' : null;
+  const missing = !draft.name.trim() ? 'Give it a name.' : !draft.prompt.trim() ? 'Say what the agent should do.' : !draft.cron.trim() ? 'Pick a date and time.' : null;
   // A timetable the server rejects is already spelled out in the preview box; it only blocks saving.
   const problem = missing ?? (preview && !preview.ok ? preview.error : null);
   const projectsUsable = projects.filter(p => !p.ghost);
@@ -117,10 +121,12 @@ export function ScheduleForm({
         <Field label="Repeats" htmlFor={`${uid}-preset`}>
           <select
             id={`${uid}-preset`}
-            value={custom ? CUSTOM : presetFor(draft.cron)?.cron ?? CUSTOM}
+            value={mode === 'once' ? ONCE : mode === 'custom' ? CUSTOM : presetFor(draft.cron)?.cron ?? CUSTOM}
             onChange={e => {
-              if (e.target.value === CUSTOM) setCustom(true);
-              else { setCustom(false); set('cron', e.target.value); }
+              const v = e.target.value;
+              if (v === ONCE) { setMode('once'); setDraft(d => ({ ...d, cron: isOnceCron(d.cron) ? d.cron : defaultOnce(), maxRuns: null })); }
+              else if (v === CUSTOM) setMode('custom');
+              else { setMode('preset'); set('cron', v); }
             }}
             className={INPUT_CLASS}
           >
@@ -129,6 +135,7 @@ export function ScheduleForm({
                 {p.label}
               </option>
             ))}
+            <option value={ONCE}>Once, at a date and time…</option>
             <option value={CUSTOM}>Custom (cron)…</option>
           </select>
         </Field>
@@ -143,7 +150,13 @@ export function ScheduleForm({
         </Field>
       </div>
 
-      {custom && (
+      {mode === 'once' && (
+        <Field label="Date and time" htmlFor={`${uid}-once`} hint="In the time zone chosen above. It runs once and is then finished.">
+          <input id={`${uid}-once`} type="datetime-local" value={onceInputValue(draft.cron)} onChange={e => set('cron', e.target.value)} className={INPUT_CLASS} />
+        </Field>
+      )}
+
+      {mode === 'custom' && (
         <Field label="Cron expression" htmlFor={`${uid}-cron`} hint="minute hour day-of-month month day-of-week, e.g. 30 7 * * 1-5. Not more often than every 15 minutes.">
           <input id={`${uid}-cron`} value={draft.cron} onChange={e => set('cron', e.target.value)} className={`${INPUT_CLASS} font-mono`} spellCheck={false} />
         </Field>
@@ -167,6 +180,26 @@ export function ScheduleForm({
           <p className="text-fg-tertiary">Checking the schedule…</p>
         )}
       </div>
+
+      {mode !== 'once' && (
+        <div className="flex flex-wrap items-center gap-2 text-sm text-fg-secondary">
+          <label className="flex cursor-pointer items-center gap-2">
+            <input type="checkbox" checked={draft.maxRuns !== null} onChange={e => set('maxRuns', e.target.checked ? 5 : null)} className="h-4 w-4 accent-[var(--color-fg)]" />
+            Stop after
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={1000}
+            aria-label="Number of runs"
+            disabled={draft.maxRuns === null}
+            value={draft.maxRuns ?? ''}
+            onChange={e => set('maxRuns', e.target.value === '' ? 1 : Math.max(1, Math.min(1000, Math.trunc(Number(e.target.value)) || 1)))}
+            className="w-20 rounded-button border border-border bg-bg px-2 py-1 text-sm text-fg outline-none focus:border-border-hover disabled:opacity-40"
+          />
+          <span>runs</span>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Model" htmlFor={`${uid}-model`} hint="By default the model of the Agents slot, and only a free one unless you allow paid models below.">
@@ -201,9 +234,22 @@ export function ScheduleForm({
         </label>
       </div>
 
-      <p className="rounded-button bg-bg px-3 py-2 text-xs text-fg-tertiary">
-        Nobody is watching a scheduled run: anything that would ask for your approval is refused, unless you already answered “Always” to it on an approval card or it is allowed in policy.json. The result lands in Gazeta.
-      </p>
+      <Field
+        label="When the agent needs an approval"
+        htmlFor={`${uid}-wait`}
+        hint="Nobody is at the keyboard during a run. What you already allowed for good (“Always”, or policy.json) just works; anything else is asked in Gazeta, with a notification. “Always allow” there is remembered, so the next runs do not stop at the same thing."
+      >
+        <select id={`${uid}-wait`} value={draft.approvalWaitMin} onChange={e => set('approvalWaitMin', Number(e.target.value))} className={INPUT_CLASS}>
+          {!APPROVAL_WAITS.some(w => w.minutes === draft.approvalWaitMin) && <option value={draft.approvalWaitMin}>{`Wait for my answer in Gazeta, up to ${draft.approvalWaitMin} minutes`}</option>}
+          {APPROVAL_WAITS.map(w => (
+            <option key={w.minutes} value={w.minutes}>
+              {w.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <p className="rounded-button bg-bg px-3 py-2 text-xs text-fg-tertiary">The result of each run lands in Gazeta, and the chat it ran in stays in your list.</p>
 
       {(error || (missing && (draft.name || draft.prompt))) && (
         <p className="text-xs text-danger" role="alert">

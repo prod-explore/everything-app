@@ -168,6 +168,38 @@ function MainApp() {
     if (projectId) void refreshProjects(); // conversationCount changed
   }
 
+  // A chat joins a project, or leaves it (null). The server refuses ghost chats and ghost projects; say why instead of failing silently.
+  async function handleMoveToProject(id: string, projectId: string | null) {
+    try {
+      await updateConversation(id, { projectId });
+    } catch (e) {
+      window.alert((e as Error).message);
+      return;
+    }
+    await Promise.all([refreshConversations(), refreshProjects()]);
+    // Follow the chat to where it went, so it does not seem to vanish.
+    if (projectId) {
+      setSelectedProjectId(projectId);
+      setSidebarView('projects');
+    } else {
+      setSidebarView('chats');
+    }
+  }
+
+  // "New project from this chat": the project takes the chat's title, and the chat moves into it.
+  async function handleNewProjectFromChat(id: string) {
+    const chat = conversations.find(c => c.id === id);
+    try {
+      const project = await createProject((chat?.title ?? '').replace(/^⏰\s*/, '').trim().slice(0, 80) || 'New project');
+      await updateConversation(id, { projectId: project.id });
+      await Promise.all([refreshConversations(), refreshProjects()]);
+      setSelectedProjectId(project.id);
+      setSidebarView('projects');
+    } catch (e) {
+      window.alert((e as Error).message);
+    }
+  }
+
   async function handleDelete(id: string) {
     await deleteConversation(id);
     void refreshProjects();
@@ -347,6 +379,8 @@ function MainApp() {
       }}
       onCreate={handleCreate}
       onRename={renameConversation}
+      onMoveToProject={handleMoveToProject}
+      onNewProjectFromChat={handleNewProjectFromChat}
       onDelete={handleDelete}
       onCreateProject={() => setNewProjectOpen(true)}
       sidebarView={sidebarView}
@@ -359,8 +393,8 @@ function MainApp() {
       onOpenGazeta={() => setGazetaOpen(true)}
       onOpenSchedules={() => setSchedulesOpen(true)}
       onOpenSettings={() => setSettingsOpen(true)}
-      gazetaCount={gazeta.pending.length}
-      gazetaUrgent={gazeta.urgentCount}
+      gazetaCount={gazeta.pending.length + approvals.all.length}
+      gazetaUrgent={gazeta.urgentCount + approvals.all.filter(a => !a.late).length}
     >
       <Header
         title={selected?.title ?? ''}
@@ -471,12 +505,12 @@ function MainApp() {
       {newProjectOpen && <NewProjectModal onSubmit={submitNewProject} onClose={() => setNewProjectOpen(false)} />}
       <Suspense fallback={null}>
       {gazetaOpen && (
-        <GazetaView onClose={() => setGazetaOpen(false)} onOpenConversation={id => setSelectedId(id)} projects={projects} />
+        <GazetaView onClose={() => setGazetaOpen(false)} onOpenConversation={id => setSelectedId(id)} projects={projects} approvals={approvals.all} onApproval={approvals.respond} />
       )}
       {schedulesOpen && (
         <SchedulesView onClose={() => setSchedulesOpen(false)} onOpenConversation={id => setSelectedId(id)} projects={projects} refreshKey={schedulesRefresh} />
       )}
-      <ApprovalBanner pending={approvals.pending} respond={approvals.respond} active={gazetaOpen || settingsOpen || schedulesOpen} />
+      <ApprovalBanner pending={approvals.pending} respond={approvals.respond} active={settingsOpen || schedulesOpen} />
       {settingsOpen && <SettingsModal key={settingsTab} initialTab={settingsTab} onClose={() => setSettingsOpen(false)} conversationId={selectedId ?? undefined} />}
       </Suspense>
       {searchOpen && (

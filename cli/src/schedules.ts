@@ -14,6 +14,19 @@ export const MAX_PROMPT = 8000;
 export const MIN_INTERVAL_MS = 15 * 60_000;
 /** Runs kept per schedule; older rows are removed after each run. */
 export const KEEP_RUNS = 100;
+/** Most automatic runs a schedule can be limited to, and the longest a run may wait for an approval. */
+export const MAX_RUN_LIMIT = 1000;
+export const MAX_APPROVAL_WAIT_MIN = 720;
+/**
+ * Wake-ups: the agent waking itself up later in the same chat (schedule_wakeup). They are schedules too — one time, bound to a
+ * chat — but kept apart from the user's own 50: a few per chat, and a chain of them without a word from the user is cut.
+ */
+export const MAX_WAKEUPS_PER_CHAT = 5;
+export const MAX_WAKEUPS = 100;
+export const MAX_WAKE_CHAIN = 10;
+export const MAX_WAKE_MINUTES = 14 * 24 * 60;
+/** How long a wake-up run waits for an approval before it goes on without the call. */
+export const WAKE_APPROVAL_WAIT_MIN = 30;
 
 export class ScheduleError extends Error {}
 
@@ -32,8 +45,20 @@ export interface Schedule {
   /** Without this a run only uses models tagged `free` (the same guard as agents). */
   allowPaid: boolean;
   enabled: boolean;
+  /** Stop after this many automatic runs (null = go on). A "Run now" does not count. */
+  maxRuns: number | null;
+  /** Automatic runs that have started so far. */
+  runCount: number;
+  /** 0 = a call that needs approval is refused at once and the run goes on; N = the run waits up to N minutes for an answer in Gazeta. */
+  approvalWaitMin: number;
   nextRunAt: string | null;
   lastRunAt: string | null;
+  /** A one-time or limited schedule that has used up its runs: nothing more will happen unless it is edited. */
+  finished: boolean;
+  /** Set for a wake-up: the chat it continues (null = an ordinary task that starts a fresh chat each time). */
+  conversationId: string | null;
+  /** Wake-ups only: how many wake-ups in a row led here without a message from the user. */
+  chain: number;
   createdAt: string;
 }
 
@@ -58,6 +83,11 @@ export interface ScheduleInput {
   projectId?: string | null;
   allowPaid?: boolean;
   enabled?: boolean;
+  maxRuns?: number | null;
+  approvalWaitMin?: number;
+  /** A wake-up of this chat (see MAX_WAKEUPS_PER_CHAT), not a task of its own. */
+  conversationId?: string | null;
+  chain?: number;
 }
 
 // ─── when ────────────────────────────────────────────────────────────────────
@@ -73,8 +103,21 @@ function validTimezone(tz: string): boolean {
   }
 }
 
+/** A one-time schedule is written as a local date and time ("2026-10-24T08:30"), read in the schedule's time zone. */
+const ONCE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/;
+
+export function isOnce(expr: string): boolean {
+  return ONCE_RE.test(expr.trim());
+}
+
+/** The text stored for a schedule: trimmed, and a one-time moment always with seconds. */
+export function normalizeCron(expr: string): string {
+  const t = expr.trim();
+  return isOnce(t) && t.length === 16 ? `${t}:00` : t;
+}
+
 function cronOf(expr: string, timezone: string): Cron {
-  return new Cron(expr, { timezone, paused: true });
+  return new Cron(normalizeCron(expr), { timezone, paused: true });
 }
 
 /**
@@ -84,6 +127,16 @@ function cronOf(expr: string, timezone: string): Cron {
 export function validateSchedule(expr: string, timezone: string, now: Date = new Date()): void {
   const trimmed = expr.trim();
   if (!validTimezone(timezone)) throw new ScheduleError(`"${timezone}" is not a time zone (use a name such as Europe/Warsaw or UTC).`);
+  if (isOnce(trimmed)) {
+    let at: Date | null;
+    try {
+      at = cronOf(trimmed, timezone).nextRun(now);
+    } catch (err) {
+      throw new ScheduleError(`That is not a valid date and time: ${(err as Error).message}`);
+    }
+    if (!at) throw new ScheduleError('That moment has already passed. Pick a time in the future.');
+    return;
+  }
   const fields = trimmed.split(/\s+/);
   if (!ALIASES.has(trimmed.toLowerCase()) && fields.length !== 5) {
     throw new ScheduleError('A schedule has five fields: minute hour day-of-month month day-of-week (for example "30 8 * * 1-5").');
@@ -122,10 +175,19 @@ interface ScheduleDbRow {
   project_id: string | null;
   allow_paid: number;
   enabled: number;
+  max_runs: number | null;
+  run_count: number;
+  approval_wait_min: number;
+  conversation_id: string | null;
+  chain: number;
   next_run_at: string | null;
   last_run_at: string | null;
   created_at: string;
 }
+
+/** Nothing more is going to happen: a one-time moment that came, or a limit that was reached. */
+const isFinished = (r: ScheduleDbRow): boolean =>
+  r.enabled === 1 && r.next_run_at === null && (isOnce(r.cron) || (r.max_runs !== null && r.run_count >= r.max_runs));
 
 const toSchedule = (r: ScheduleDbRow): Schedule => ({
   id: r.id,
@@ -137,8 +199,14 @@ const toSchedule = (r: ScheduleDbRow): Schedule => ({
   projectId: r.project_id,
   allowPaid: r.allow_paid === 1,
   enabled: r.enabled === 1,
+  maxRuns: r.max_runs,
+  runCount: r.run_count,
+  approvalWaitMin: r.approval_wait_min,
   nextRunAt: r.next_run_at,
   lastRunAt: r.last_run_at,
+  finished: isFinished(r),
+  conversationId: r.conversation_id,
+  chain: r.chain,
   createdAt: r.created_at,
 });
 
@@ -175,6 +243,22 @@ function cleanText(label: string, raw: unknown, max: number): string {
   return t;
 }
 
+function cleanLimit(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > MAX_RUN_LIMIT) {
+    throw new ScheduleError(`The number of runs must be a whole number from 1 to ${MAX_RUN_LIMIT}.`);
+  }
+  return raw;
+}
+
+function cleanWait(raw: unknown): number {
+  if (raw === undefined || raw === null) return 0;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0 || raw > MAX_APPROVAL_WAIT_MIN) {
+    throw new ScheduleError(`The wait for an approval must be a whole number of minutes from 0 to ${MAX_APPROVAL_WAIT_MIN}.`);
+  }
+  return raw;
+}
+
 export function getSchedule(db: Database.Database, id: string): Schedule | null {
   const row = db.prepare(`SELECT * FROM schedules WHERE id = ?`).get(id) as ScheduleDbRow | undefined;
   return row ? toSchedule(row) : null;
@@ -188,16 +272,26 @@ export function createSchedule(db: Database.Database, input: ScheduleInput, now:
   const name = cleanText('The name', input.name, MAX_NAME);
   const prompt = cleanText('The task', input.prompt, MAX_PROMPT);
   validateSchedule(input.cron, input.timezone, now);
-  const count = (db.prepare(`SELECT COUNT(*) AS n FROM schedules`).get() as { n: number }).n;
-  if (count >= MAX_SCHEDULES) throw new ScheduleError(`At most ${MAX_SCHEDULES} schedules.`);
+  const maxRuns = isOnce(input.cron) ? null : cleanLimit(input.maxRuns);
+  const approvalWaitMin = cleanWait(input.approvalWaitMin);
+  const conversationId = input.conversationId || null;
+  if (conversationId) {
+    const mine = (db.prepare(`SELECT COUNT(*) AS n FROM schedules WHERE conversation_id = ? AND next_run_at IS NOT NULL`).get(conversationId) as { n: number }).n;
+    if (mine >= MAX_WAKEUPS_PER_CHAT) throw new ScheduleError(`This chat already has ${MAX_WAKEUPS_PER_CHAT} wake-ups waiting. Let one of them happen first.`);
+    const all = (db.prepare(`SELECT COUNT(*) AS n FROM schedules WHERE conversation_id IS NOT NULL`).get() as { n: number }).n;
+    if (all >= MAX_WAKEUPS) throw new ScheduleError(`At most ${MAX_WAKEUPS} wake-ups at once.`);
+  } else {
+    const count = (db.prepare(`SELECT COUNT(*) AS n FROM schedules WHERE conversation_id IS NULL`).get() as { n: number }).n;
+    if (count >= MAX_SCHEDULES) throw new ScheduleError(`At most ${MAX_SCHEDULES} schedules.`);
+  }
   const enabled = input.enabled !== false;
   const next = enabled ? nextRunAfter(input.cron, input.timezone, now) : null;
   const row = db
     .prepare(
-      `INSERT INTO schedules (name, prompt, cron, timezone, model, project_id, allow_paid, enabled, next_run_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+      `INSERT INTO schedules (name, prompt, cron, timezone, model, project_id, allow_paid, enabled, max_runs, approval_wait_min, conversation_id, chain, next_run_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
     )
-    .get(name, prompt, input.cron.trim(), input.timezone, input.model || null, input.projectId || null, input.allowPaid ? 1 : 0, enabled ? 1 : 0, next ? iso(next) : null) as ScheduleDbRow;
+    .get(name, prompt, normalizeCron(input.cron), input.timezone, input.model || null, input.projectId || null, input.allowPaid ? 1 : 0, enabled ? 1 : 0, maxRuns, approvalWaitMin, conversationId, Math.max(0, Math.trunc(input.chain ?? 0)), next ? iso(next) : null) as ScheduleDbRow;
   return toSchedule(row);
 }
 
@@ -209,20 +303,29 @@ export function updateSchedule(db: Database.Database, id: string, patch: Schedul
   const merged = {
     name: patch.name !== undefined ? cleanText('The name', patch.name, MAX_NAME) : cur.name,
     prompt: patch.prompt !== undefined ? cleanText('The task', patch.prompt, MAX_PROMPT) : cur.prompt,
-    cron: patch.cron !== undefined ? patch.cron.trim() : cur.cron,
+    cron: patch.cron !== undefined ? normalizeCron(patch.cron) : cur.cron,
     timezone: patch.timezone !== undefined ? patch.timezone : cur.timezone,
     model: patch.model !== undefined ? patch.model || null : cur.model,
     projectId: patch.projectId !== undefined ? patch.projectId || null : cur.projectId,
     allowPaid: patch.allowPaid !== undefined ? patch.allowPaid === true : cur.allowPaid,
     enabled: patch.enabled !== undefined ? patch.enabled === true : cur.enabled,
+    maxRuns: patch.maxRuns !== undefined ? cleanLimit(patch.maxRuns) : cur.maxRuns,
+    approvalWaitMin: patch.approvalWaitMin !== undefined ? cleanWait(patch.approvalWaitMin) : cur.approvalWaitMin,
   };
-  validateSchedule(merged.cron, merged.timezone, now);
-  // The next run is recomputed when the timing changed or the schedule was switched on; otherwise it stays as it was.
-  const retime = patch.cron !== undefined || patch.timezone !== undefined || merged.enabled !== cur.enabled;
-  const next = !merged.enabled ? null : retime || !cur.nextRunAt ? nextRunAfter(merged.cron, merged.timezone, now) : new Date(cur.nextRunAt);
+  // A moment in time has no run limit; it simply happens once.
+  if (isOnce(merged.cron)) merged.maxRuns = null;
+  // Only a changed timetable has to be valid *now* (a one-time moment that has come is allowed to stay as the record of what ran).
+  const retimed = patch.cron !== undefined || patch.timezone !== undefined;
+  if (retimed || !isOnce(merged.cron)) validateSchedule(merged.cron, merged.timezone, now);
+  // A new timetable is a new plan: its run counter starts again.
+  const runCount = retimed ? 0 : cur.runCount;
+  const exhausted = merged.maxRuns !== null && runCount >= merged.maxRuns;
+  // The next run is recomputed when the timing changed or the schedule was switched on or its limit changed; otherwise it stays as it was.
+  const retime = retimed || merged.enabled !== cur.enabled || merged.maxRuns !== cur.maxRuns;
+  const next = !merged.enabled || exhausted ? null : retime || !cur.nextRunAt ? nextRunAfter(merged.cron, merged.timezone, now) : new Date(cur.nextRunAt);
   db.prepare(
-    `UPDATE schedules SET name = ?, prompt = ?, cron = ?, timezone = ?, model = ?, project_id = ?, allow_paid = ?, enabled = ?, next_run_at = ? WHERE id = ?`,
-  ).run(merged.name, merged.prompt, merged.cron, merged.timezone, merged.model, merged.projectId, merged.allowPaid ? 1 : 0, merged.enabled ? 1 : 0, next ? iso(next) : null, id);
+    `UPDATE schedules SET name = ?, prompt = ?, cron = ?, timezone = ?, model = ?, project_id = ?, allow_paid = ?, enabled = ?, max_runs = ?, run_count = ?, approval_wait_min = ?, next_run_at = ? WHERE id = ?`,
+  ).run(merged.name, merged.prompt, merged.cron, merged.timezone, merged.model, merged.projectId, merged.allowPaid ? 1 : 0, merged.enabled ? 1 : 0, merged.maxRuns, runCount, merged.approvalWaitMin, next ? iso(next) : null, id);
   return getSchedule(db, id);
 }
 
@@ -232,6 +335,11 @@ export function deleteSchedule(db: Database.Database, id: string): boolean {
 
 export function setNextRun(db: Database.Database, id: string, next: Date | null): void {
   db.prepare(`UPDATE schedules SET next_run_at = ? WHERE id = ?`).run(next ? iso(next) : null, id);
+}
+
+/** One more automatic run has started (a manual "Run now" is not counted). */
+export function countRun(db: Database.Database, id: string): void {
+  db.prepare(`UPDATE schedules SET run_count = run_count + 1 WHERE id = ?`).run(id);
 }
 
 export function markRan(db: Database.Database, id: string, at: Date): void {

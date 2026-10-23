@@ -38,7 +38,8 @@ import { GitHubCredentials } from './github.js';
 import { createGithubRoutes, latestOwnerConversation } from './github-routes.js';
 import { Scheduler, type RunOutcome } from './scheduler.js';
 import { createScheduleRoutes } from './schedule-routes.js';
-import type { Schedule } from './schedules.js';
+import { deleteSchedule, type Schedule } from './schedules.js';
+import { createTaskTool, schedulingPrompt, wakeupTool } from './schedule-tools.js';
 import { createConnectorRoutes, migrateConnectors } from './connector-routes.js';
 import { createWebRoutes } from './web-routes.js';
 import { Notifier, NotifyConfigError, NOTIFY_VAULT_KEY, normalizeWebhookUrl, saveNotifyConfig } from './notifier.js';
@@ -125,14 +126,30 @@ function textOfHistory(msgs: Llm.MessageParam[]): string {
     .trim();
 }
 
+/** Added to the system prompt of a wake-up: the agent set this alarm itself, in a chat the user may not be reading. */
+const wakeupPrompt = (maxSteps: number, approvalWaitMin: number): string =>
+  'This turn is a wake-up you scheduled yourself with schedule_wakeup; the message above is the prompt you left for yourself. ' +
+  'The user may not be reading this chat: if you need an answer from them, use request_human_input with wait=false, and use post_report when they should be told something while away (your answer also stays in this chat). ' +
+  `A tool that needs approval pauses for at most ${approvalWaitMin} minutes and is then refused; do not retry a refused call. ` +
+  `You have at most ${maxSteps} steps. If the thing you were waiting for has not happened yet, you may wake yourself up again.`;
+
 /** Added to the system prompt of a scheduled run: nobody is there to answer, and the final answer is the deliverable. */
-const unattendedPrompt = (maxSteps: number): string =>
-  'This is an automated, scheduled run. Nobody is watching and nobody can answer questions or approve tool calls: ' +
-  'a tool that needs approval is refused, so work with what you are allowed to use and do not retry a refused call. ' +
+const unattendedPrompt = (maxSteps: number, approvalWaitMin = 0): string =>
+  'This is an automated, scheduled run. Nobody is watching: nobody can answer questions in this chat. ' +
+  (approvalWaitMin > 0
+    ? `A tool that needs approval pauses the run while the user is asked in Gazeta (for at most ${approvalWaitMin} minutes); if the answer does not come, the call is refused. `
+    : 'A tool that needs approval is refused right away (the request is left in the user\'s Gazeta for next time). ') +
+  'Work with what you are allowed to use, do not retry a refused call, and say in your final answer what you could not do for lack of approval. ' +
   'Do not ask the user anything now (if something truly needs them later, use request_human_input with wait=false). ' +
   `You have at most ${maxSteps} steps, so be economical. Finish with one complete, self-contained final answer: it is posted to the user's Gazeta inbox as the report of this run, so write it for someone who reads it later without the conversation.`;
 
 /** Steps a scheduled run may take, and the longest it may run. */
+/** The user's time zone for what the agent schedules ("at 08:30"): TZ of the container, else the machine's, else UTC. */
+const USER_TIMEZONE = (() => {
+  const tz = process.env['TZ'] || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return tz; } catch { return 'UTC'; }
+})();
+
 const SCHEDULE_MAX_STEPS = Number(process.env['SCHEDULE_MAX_STEPS']) > 0 ? Number(process.env['SCHEDULE_MAX_STEPS']) : 25;
 
 function isValidAuthHeader(header: string | undefined, expectedToken: string): boolean {
@@ -562,8 +579,11 @@ ${formatHumanResponse(response)}` };
     });
   }
 
-  function buildVirtualTools(convId: string, rootRunId: string, signal: AbortSignal, unattended = false): VirtualTool[] {
+  function buildVirtualTools(convId: string, rootRunId: string, signal: AbortSignal, unattended = false, wakeChain?: number): VirtualTool[] {
     const conv = getConversation(db, convId);
+    // Time tools: in a chat the user is in, both; in a wake-up, only another wake-up (a task that creates tasks would run away).
+    const timeDeps = { db, convId, projectId: conv?.projectId ?? null, timezone: USER_TIMEZONE, wakeChain, onChange: (id: string) => { sse.emitAll('schedule:changed', { id }); } };
+    const timeTools: VirtualTool[] = !conv || conv.ghost || (unattended && wakeChain === undefined) ? [] : [wakeupTool(timeDeps), ...(unattended ? [] : [createTaskTool(timeDeps)])];
     const origin: Origin = { convId, projectId: conv?.projectId ?? null, runId: rootRunId, agent: 'assistant', unattended };
     const announce = (st: ConversationState) => sse.emit(convId, 'conversation:state', publicState(convId, st));
     return [
@@ -571,6 +591,7 @@ ${formatHumanResponse(response)}` };
       reportTool(origin),
       todoTool(db, convId, announce),
       proposePlanTool(),
+      ...timeTools,
       ...agents.agentTools(rootRunId, signal),
       ...workspaceFileTools(convId, rootRunId),
       ...webToolsFor(convId),
@@ -1089,12 +1110,13 @@ ${formatHumanResponse(response)}` };
     content: Llm.MessageParam['content'],
     userMessageId: number,
     /** `unattended`: nobody is watching (a scheduled run) — see unattendedPrompt and ConfirmCtx.unattended. */
-    opts: { unattended?: boolean; maxSteps?: number } = {},
+    opts: { unattended?: boolean; maxSteps?: number; schedule?: Schedule; wakeChain?: number } = {},
   ): number {
     const counter = (turnCounters.get(convId) ?? 0) + 1;
     turnCounters.set(convId, counter);
     const turnId = counter;
     const unattendedTurn = opts.unattended === true;
+    const runSchedule = opts.schedule;
     const controller = new AbortController();
     abortControllers.set(convId, controller);
     turnStates.set(convId, { id: turnId, status: 'running' });
@@ -1144,7 +1166,12 @@ ${formatHumanResponse(response)}` };
           effectiveSystem += '\n\n' + FILE_TOOLS_PROMPT;
         }
         effectiveSystem += '\n\n' + (conv.ghost ? GHOST_PROMPT : WEB_TOOLS_PROMPT + ' ' + PREVIEW_PROMPT);
-        if (opts.unattended) effectiveSystem += '\n\n' + unattendedPrompt(opts.maxSteps ?? SCHEDULE_MAX_STEPS);
+        const wakeTurn = opts.wakeChain !== undefined;
+        if (!conv.ghost && (!opts.unattended || wakeTurn)) effectiveSystem += '\n\n' + schedulingPrompt(new Date(), USER_TIMEZONE, opts.unattended === true);
+        if (opts.unattended) {
+          const waitMin = opts.schedule?.approvalWaitMin ?? 0;
+          effectiveSystem += '\n\n' + (wakeTurn ? wakeupPrompt(opts.maxSteps ?? SCHEDULE_MAX_STEPS, waitMin) : unattendedPrompt(opts.maxSteps ?? SCHEDULE_MAX_STEPS, waitMin));
+        }
 
         // The orchestrator needs to know which models it may hand work to — generated from the catalog, so it can't drift.
         // In a ghost chat that is only the local ones.
@@ -1233,7 +1260,7 @@ ${formatHumanResponse(response)}` };
               setConversationState(db, convId, { lastInputTokens: c.used });
               sse.emit(convId, 'turn:context', { used: c.used, limit: c.limit ?? null });
             },
-            virtualTools: buildVirtualTools(convId, rootRun.id, controller.signal, opts.unattended === true),
+            virtualTools: buildVirtualTools(convId, rootRun.id, controller.signal, opts.unattended === true, opts.wakeChain),
             ...(opts.maxSteps !== undefined ? { maxSteps: opts.maxSteps } : {}),
             drainInbox: () => drainRunMessages(db, rootRun.id).map(m => `[message from ${m.fromLabel}]
 ${m.body}`),
@@ -1255,6 +1282,7 @@ ${m.body}`),
                 modelId: effectiveModel,
                 forcePrompt: opts?.forcePrompt,
                 unattended: unattendedTurn,
+                ...(runSchedule ? { unattendedWaitSeconds: runSchedule.approvalWaitMin * 60, origin: runSchedule.name } : {}),
               });
               sse.emit(convId, 'approval:resolved', { toolLabel: label, approved: decision.approved, reason: decision.reason });
               return decision;
@@ -1373,6 +1401,7 @@ ${m.body}`),
    * daily job never goes quiet without anyone noticing.
    */
   async function runScheduledTurn(s: Schedule, trigger: string, attach: (convId: string) => void): Promise<RunOutcome> {
+    if (s.conversationId) return runWakeup(s, attach);
     const problem = (error: string, conversationId: string | null = null, partial = ''): RunOutcome => {
       postScheduleReport(s, conversationId, `Scheduled task failed: ${s.name}`, `${error}${partial ? `\n\nWhat it had written so far:\n\n${partial}` : ''}`);
       return { status: 'error', error, conversationId };
@@ -1401,7 +1430,7 @@ ${m.body}`),
     attach(convId);
     const conv = getConversation(db, convId)!;
     const userMessageId = appendMessage(db, convId, 'user', s.prompt);
-    kickoffLiveTurn(convId, conv, [], s.prompt, userMessageId, { unattended: true, maxSteps: SCHEDULE_MAX_STEPS });
+    kickoffLiveTurn(convId, conv, [], s.prompt, userMessageId, { unattended: true, maxSteps: SCHEDULE_MAX_STEPS, schedule: s });
     await turnPromises.get(convId);
 
     const state = getTurnState(convId);
@@ -1413,6 +1442,35 @@ ${m.body}`),
     const own = listGazetaItems(db, undefined, { conversationId: convId, type: 'report' });
     if (own.length === 0) postScheduleReport(s, convId, s.name, text || '(The run finished without writing anything.)');
     return { status: 'done', conversationId: convId, summary: (text || '').replace(/\s+/g, ' ').slice(0, 200) || null };
+  }
+
+  /**
+   * A wake-up the agent set for itself: the prompt goes into the SAME chat as a new message and the turn runs unattended there
+   * (what needs approval waits in Gazeta for a while, then is refused). It is single-use, so the schedule is removed when it
+   * has run; a failure is reported to Gazeta like any scheduled run's. The answer stays in the chat.
+   */
+  async function runWakeup(s: Schedule, attach: (convId: string) => void): Promise<RunOutcome> {
+    const convId = s.conversationId!;
+    const conv = getConversation(db, convId);
+    const done = (outcome: RunOutcome): RunOutcome => { deleteSchedule(db, s.id); return outcome; };
+    const failed = (error: string): RunOutcome => {
+      postScheduleReport(s, conv ? convId : null, `Wake-up failed: ${s.prompt.replace(/\s+/g, ' ').slice(0, 80)}`, error);
+      return done({ status: 'error', error, conversationId: conv ? convId : null });
+    };
+    if (!conv) return done({ status: 'error', error: 'The chat this wake-up belonged to no longer exists.' });
+    attach(convId);
+    // The user may be talking to the chat right now: let that turn finish first.
+    for (let i = 0; i < 20 && isBusy(convId); i++) await (turnPromises.get(convId) ?? new Promise(r => setTimeout(r, 3000))).catch(() => undefined);
+    if (isBusy(convId)) return failed('The chat stayed busy, so the wake-up could not run. Say so in the chat if you want it done.');
+
+    const content = `⏰ Wake-up you set earlier: ${s.prompt}`;
+    const historyBeforeTurn = llmHistory(db, convId);
+    const userMessageId = appendMessage(db, convId, 'user', content);
+    kickoffLiveTurn(convId, conv, historyBeforeTurn, content, userMessageId, { unattended: true, maxSteps: SCHEDULE_MAX_STEPS, schedule: s, wakeChain: s.chain });
+    await turnPromises.get(convId);
+    const state = getTurnState(convId);
+    if (state.status !== 'done') return failed(state.error ?? 'The wake-up did not finish.');
+    return done({ status: 'done', conversationId: convId, summary: (lastAssistantText(convId) || '').replace(/\s+/g, ' ').slice(0, 200) || null });
   }
 
   /**

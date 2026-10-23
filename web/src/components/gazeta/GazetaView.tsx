@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Newspaper, RefreshCw, Volume2, VolumeX } from 'lucide-react';
+import { Link as LinkIcon, Newspaper, RefreshCw, Volume2, VolumeX } from 'lucide-react';
 import { getGazetaItems } from '../../api';
 import { compareGazeta, useGazeta } from '../../hooks/useGazeta';
-import type { GazetaItem, ProjectListItem } from '../../types';
+import { parseStoredTime } from '../../lib/answerPlacement';
+import { formatStoredTime } from '../../lib/time';
+import type { ApprovalScope, GazetaItem, PendingApproval, ProjectListItem } from '../../types';
+import { ApprovalCard } from '../approval/InlineApprovals';
 import { Button } from '../shared/Button';
 import { EmptyState } from '../shared/EmptyState';
 import { Modal } from '../shared/Modal';
@@ -10,7 +13,7 @@ import { GazetaCard } from './GazetaCard';
 import { TYPE_LABEL } from './gazetaFormat';
 
 const PAGE = 30;
-const TYPES = ['agent_question', 'report', 'daily_summary'] as const;
+const TYPES = ['agent_question', 'approval', 'report', 'daily_summary'] as const;
 
 interface Filters {
   projectId: string;
@@ -25,6 +28,24 @@ const SELECT_CLASS =
 /** Client-side mirror of the server filter, for items that arrive over SSE after the pages loaded. */
 function matches(item: GazetaItem, f: Filters): boolean {
   return (!f.projectId || item.projectId === f.projectId) && (!f.agent || item.agent === f.agent) && (!f.type || item.type === f.type);
+}
+
+/** What an approval waiting in the gate looks like to the filters (it has no agent label of its own). */
+function approvalMatches(a: PendingApproval, f: Filters): boolean {
+  return !f.agent && (!f.projectId || a.projectId === f.projectId) && (!f.type || f.type === 'approval');
+}
+
+/** One row of the list: a Gazeta item, or a call waiting in the approval gate (the very card the chat shows). */
+type Entry = { kind: 'item'; item: GazetaItem } | { kind: 'approval'; approval: PendingApproval };
+
+const entryId = (e: Entry) => (e.kind === 'item' ? e.item.id : e.approval.id);
+const entryTime = (e: Entry) => parseStoredTime(e.kind === 'item' ? e.item.createdAt : e.approval.createdAt) ?? 0;
+// A call waiting for a click holds a run up, so it sits with the urgent ones; then newest first, like the server orders items.
+const entryUrgent = (e: Entry) => ((e.kind === 'approval' && !e.approval.late) || (e.kind === 'item' && e.item.urgent && e.item.status === 'pending') ? 1 : 0);
+function compareEntries(a: Entry, b: Entry): number {
+  if (entryUrgent(a) !== entryUrgent(b)) return entryUrgent(b) - entryUrgent(a);
+  if (entryTime(a) !== entryTime(b)) return entryTime(b) - entryTime(a);
+  return entryId(a) < entryId(b) ? 1 : -1;
 }
 
 /**
@@ -43,10 +64,15 @@ export function GazetaView({
   onClose,
   onOpenConversation,
   projects,
+  approvals = [],
+  onApproval,
 }: {
   onClose: () => void;
   onOpenConversation?: (conversationId: string) => void;
   projects: ProjectListItem[];
+  /** Calls waiting in the approval gate (any chat, any scheduled run) — listed here as entries, answered with the chat's own card. */
+  approvals?: PendingApproval[];
+  onApproval?: (id: string, approved: boolean, scope?: ApprovalScope) => Promise<void>;
 }) {
   const store = useGazeta();
   const { byId, arrivals, upsert, bulkDismiss, muted, setMuted } = store;
@@ -133,6 +159,12 @@ export function GazetaView({
       .filter((i): i is GazetaItem => Boolean(i))
       .sort(compareGazeta);
   }, [pageIds, arrivals, arrivalsAtOpen, byId, filters]);
+
+  const entries = useMemo<Entry[]>(() => {
+    const rows: Entry[] = visible.map(item => ({ kind: 'item', item }));
+    for (const approval of approvals) if (onApproval && approvalMatches(approval, filters)) rows.push({ kind: 'approval', approval });
+    return rows.sort(compareEntries);
+  }, [visible, approvals, onApproval, filters]);
 
   const openVisible = visible.filter(i => i.status === 'pending');
   const selectedOpen = openVisible.filter(i => selected.has(i.id)).map(i => i.id);
@@ -265,27 +297,49 @@ export function GazetaView({
           {error}
         </p>
       )}
-      {visible.length === 0 && !loadingPage ? (
+      {entries.length === 0 && !loadingPage ? (
         <EmptyState icon={Newspaper} message={filters.status === 'open' ? 'Nothing waiting for you.' : 'No items match these filters.'} />
       ) : (
         <div className="space-y-3">
-          {visible.map(item => (
-            <GazetaCard
-              key={item.id}
-              item={item}
-              projectName={item.projectId ? projectNames.get(item.projectId) : undefined}
-              selected={selected.has(item.id)}
-              onToggleSelect={() => toggle(item.id)}
-              onOpenConversation={
-                onOpenConversation
-                  ? id => {
-                      onOpenConversation(id);
-                      onClose();
-                    }
-                  : undefined
-              }
-            />
-          ))}
+          {entries.map(entry =>
+            entry.kind === 'approval' ? (
+              <div key={entry.approval.id} className="space-y-1">
+                <ApprovalCard approval={entry.approval} respond={onApproval!} />
+                <div className="flex items-center gap-2 px-1 text-xs text-fg-tertiary">
+                  {entry.approval.projectId && projectNames.get(entry.approval.projectId) && <span className="truncate">{projectNames.get(entry.approval.projectId)}</span>}
+                  <span>{formatStoredTime(entry.approval.createdAt)}</span>
+                  {entry.approval.conversationId && onOpenConversation && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenConversation(entry.approval.conversationId);
+                        onClose();
+                      }}
+                      className="ml-auto flex items-center gap-1 hover:text-fg"
+                    >
+                      <LinkIcon size={12} /> Open originating chat
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <GazetaCard
+                key={entry.item.id}
+                item={entry.item}
+                projectName={entry.item.projectId ? projectNames.get(entry.item.projectId) : undefined}
+                selected={selected.has(entry.item.id)}
+                onToggleSelect={() => toggle(entry.item.id)}
+                onOpenConversation={
+                  onOpenConversation
+                    ? id => {
+                        onOpenConversation(id);
+                        onClose();
+                      }
+                    : undefined
+                }
+              />
+            ),
+          )}
         </div>
       )}
       <div ref={sentinelRef} aria-hidden="true" className="h-4" />

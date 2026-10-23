@@ -351,6 +351,30 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 3,
+    name: 'scheduled tasks: a limit on how many times one runs, and what an unattended run does about approvals',
+    up: db => {
+      const add: Array<[string, string]> = [
+        ['max_runs', 'INTEGER'],
+        ['run_count', 'INTEGER NOT NULL DEFAULT 0'],
+        ['approval_wait_min', 'INTEGER NOT NULL DEFAULT 0'],
+      ];
+      for (const [col, def] of add) if (!columnExists(db, 'schedules', col)) db.exec(`ALTER TABLE schedules ADD COLUMN ${col} ${def}`);
+    },
+  },
+  {
+    id: 4,
+    name: 'scheduled tasks: a wake-up is a one-time schedule that continues an existing chat (set by the agent itself)',
+    up: db => {
+      const add: Array<[string, string]> = [
+        ['conversation_id', 'TEXT'],
+        ['chain', 'INTEGER NOT NULL DEFAULT 0'],
+      ];
+      for (const [col, def] of add) if (!columnExists(db, 'schedules', col)) db.exec(`ALTER TABLE schedules ADD COLUMN ${col} ${def}`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_schedules_conversation ON schedules(conversation_id)`);
+    },
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.id;
@@ -518,7 +542,11 @@ export function updateConversation(
 
 export function deleteConversation(db: Database.Database, id: string): boolean {
   const result = db.prepare(`DELETE FROM conversations WHERE id = ?`).run(id);
-  if (result.changes > 0) db.prepare(`DELETE FROM workspace_pins WHERE owner = ?`).run(id);
+  if (result.changes > 0) {
+    db.prepare(`DELETE FROM workspace_pins WHERE owner = ?`).run(id);
+    // A wake-up the agent set for this chat has nothing left to wake.
+    db.prepare(`DELETE FROM schedules WHERE conversation_id = ?`).run(id);
+  }
   return result.changes > 0;
 }
 

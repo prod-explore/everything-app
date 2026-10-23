@@ -14,6 +14,34 @@ export const CRON_PRESETS: CronPreset[] = [
   { label: 'First of the month, 09:00', cron: '0 9 1 * *' },
 ];
 
+/** A one-time schedule is a local date and time ("2026-10-24T08:30:00"), read in the schedule's time zone. */
+export function isOnceCron(cron: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(cron.trim());
+}
+
+/** The value of a datetime-local input (no seconds) for a one-time schedule. */
+export function onceInputValue(cron: string): string {
+  return cron.trim().slice(0, 16);
+}
+
+/** Tomorrow 09:00 in the viewer's own clock, as a datetime-local value — a sensible starting point for "once". */
+export function defaultOnce(now: Date = new Date()): string {
+  const d = new Date(now.getTime() + 24 * 3600_000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T09:00`;
+}
+
+/** How long a run may wait for an answer in Gazeta, as the form offers it. */
+export const APPROVAL_WAITS: Array<{ minutes: number; label: string }> = [
+  { minutes: 0, label: 'Go on without it (the request waits in Gazeta for next time)' },
+  { minutes: 15, label: 'Wait for my answer in Gazeta, up to 15 minutes' },
+  { minutes: 30, label: 'Wait for my answer in Gazeta, up to 30 minutes' },
+  { minutes: 60, label: 'Wait for my answer in Gazeta, up to 1 hour' },
+  { minutes: 120, label: 'Wait for my answer in Gazeta, up to 2 hours' },
+  { minutes: 360, label: 'Wait for my answer in Gazeta, up to 6 hours' },
+  { minutes: 720, label: 'Wait for my answer in Gazeta, up to 12 hours' },
+];
+
 /** The preset a cron string equals, if any (ignoring extra spaces). */
 export function presetFor(cron: string): CronPreset | undefined {
   const norm = cron.trim().replace(/\s+/g, ' ');
@@ -22,6 +50,7 @@ export function presetFor(cron: string): CronPreset | undefined {
 
 /** A readable name for a timetable: the preset's label, else the expression itself. */
 export function describeCron(cron: string): string {
+  if (isOnceCron(cron)) return `Once, ${onceInputValue(cron).replace('T', ' ')}`;
   const alias: Record<string, string> = { '@hourly': 'Every hour', '@daily': 'Every day, 00:00', '@midnight': 'Every day, 00:00', '@weekly': 'Every Sunday, 00:00', '@monthly': 'First of the month, 00:00' };
   return alias[cron.trim()] ?? presetFor(cron)?.label ?? cron;
 }
@@ -67,7 +96,11 @@ export const TRIGGER_LABEL: Record<ScheduleRun['trigger'], string> = {
 };
 
 /** One short line for the list: when it runs next, or why it does not. */
-export function nextLine(s: Pick<Schedule, 'enabled' | 'nextRunAt' | 'timezone'>): string {
+export function nextLine(s: Pick<Schedule, 'enabled' | 'nextRunAt' | 'timezone'> & Partial<Pick<Schedule, 'finished' | 'maxRuns' | 'runCount' | 'cron'>>): string {
   if (!s.enabled) return 'Paused';
-  return s.nextRunAt ? `Next: ${formatWhen(s.nextRunAt, s.timezone)}` : 'No upcoming run';
+  if (s.finished) {
+    return s.cron && isOnceCron(s.cron) ? 'Finished — it ran once' : `Finished — ${s.runCount ?? 0} of ${s.maxRuns ?? 0} runs done`;
+  }
+  const next = s.nextRunAt ? `Next: ${formatWhen(s.nextRunAt, s.timezone)}` : 'No upcoming run';
+  return s.maxRuns ? `${next} · run ${Math.min((s.runCount ?? 0) + 1, s.maxRuns)} of ${s.maxRuns}` : next;
 }

@@ -125,7 +125,7 @@ export function getConversation(id: string): Promise<Conversation> {
 
 export function updateConversation(
   id: string,
-  patch: { title?: string; systemPrompt?: string; model?: string },
+  patch: { title?: string; systemPrompt?: string; model?: string; projectId?: string | null },
 ): Promise<{ ok: true }> {
   return request(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
 }
