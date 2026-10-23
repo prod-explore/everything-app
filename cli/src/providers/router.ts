@@ -4,7 +4,9 @@ import { getToolCallMeta, setToolCallMeta } from '../db.js';
 import { ModelCatalog, type CatalogModel, type DiscoveryResult } from './catalog.js';
 import { KeyVault } from './key-vault.js';
 import { OpenAiCompatClient, type RetryInfo } from './openai-compat.js';
-import { getModelInfo, parseModelId, supportsTools, type ModelInfo, type ProviderId, type ProviderRecord } from './registry.js';
+import { getModelInfo, isLocalModel, parseModelId, supportsTools, type ModelInfo, type ProviderId, type ProviderRecord } from './registry.js';
+import { getSlots, isFreeModel } from '../slots.js';
+import { DESCRIBE_SYSTEM, DescriptionCache, withImageDescriptions, type Describer } from '../vision.js';
 
 export class ProviderNotConfiguredError extends Error {
   constructor(
@@ -77,6 +79,8 @@ export class ProviderRouter {
   readonly catalog: ModelCatalog;
   private readonly env: NodeJS.ProcessEnv;
   private readonly keyCache = new Map<string, string>();
+  /** What the vision helper said about each image so far (see vision.ts). */
+  private readonly descriptions = new DescriptionCache();
 
   /** Settable after construction (the app shell only exists once the router does). */
   onProviderRetry?: (info: RetryInfo) => void;
@@ -207,7 +211,34 @@ export class ProviderRouter {
     if (!known.enabled) throw new UnknownModelError(modelId, `Model "${known.label}" is switched off in Settings → Models.`);
     const key = this.resolveKey(provider);
     if (key === null) throw this.notConfigured(provider);
-    return { provider: provider.slug, info: getModelInfo(id), client: this.makeClient(provider, key) };
+    const info = getModelInfo(id);
+    const client = this.makeClient(provider, key);
+    // A model that cannot read images gets them described by one that can (never by a less private one).
+    return { provider: provider.slug, info, client: info.supportsImages ? client : withImageDescriptions(client, info.id, () => this.describerFor(info), this.descriptions) };
+  }
+
+  /**
+   * The model that looks at images on behalf of `target`: the helper slot if it can see, else a free model that can,
+   * else one tagged `vision`, else any. A model running on the user's own hardware is only ever helped by another local
+   * one — an image from a private chat must not leave for a cloud model because the chat model happens to be blind.
+   */
+  private describerFor(target: ModelInfo): Describer | null {
+    const helper = getSlots(this.opts.db).helper;
+    const eyes = this.models().filter(m => m.kind === 'chat' && m.supportsImages && m.available && m.id !== target.id && (!isLocalModel(target) || isLocalModel(m)));
+    const rank = (m: PickerModel) => (m.id === helper ? 0 : isFreeModel(m) ? 1 : m.tags.includes('vision') ? 2 : 3);
+    const best = [...eyes].sort((a, b) => rank(a) - rank(b))[0];
+    if (!best) return null;
+    return {
+      model: best.id,
+      describe: async (image, signal) => {
+        const { client } = this.clientFor(best.id);
+        const res = await client.messages.create(
+          { model: best.id, max_tokens: 900, system: DESCRIBE_SYSTEM, messages: [{ role: 'user', content: [image, { type: 'text', text: 'Describe this image.' }] }] },
+          signal ? { signal } : undefined,
+        );
+        return res.content.filter(b => b.type === 'text').map(b => (b as { text: string }).text).join('\n');
+      },
+    };
   }
 
   /** True when a turn on `modelId` could start right now (model known and enabled, provider has its key). */
