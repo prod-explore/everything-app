@@ -22,7 +22,7 @@ export function Composer({
   onRetry?: () => void;
   /** Offered when the conversation no longer fits the model's window. */
   onCompactAndRetry?: () => void;
-  /** Controls between the attach button and the message box (reasoning effort). */
+  /** First control of the row, before the attach button (reasoning effort). */
   leading?: ReactNode;
   /** Controls between the message box and the send button (context meter). */
   trailing?: ReactNode;
@@ -84,24 +84,27 @@ export function Composer({
         )}
       </ComposerPrimitive.Attachments>
 
-      <ComposerPrimitive.Root className="mx-auto flex w-full max-w-3xl items-end gap-2 p-3">
-        <ComposerPrimitive.AddAttachment aria-label="Attach image" title="Attach image" className="shrink-0 rounded-button border border-border p-2.5 text-fg-tertiary transition-colors hover:text-fg-secondary disabled:opacity-30">
+      {/* One row on a wide screen. On a phone the message box gets its own full-width row and the controls sit under it. */}
+      <ComposerPrimitive.Root className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 p-3 sm:flex-nowrap sm:items-end">
+        {leading}
+
+        <ComposerPrimitive.AddAttachment aria-label="Attach image" title="Attach image" className="flex size-[42px] shrink-0 items-center justify-center rounded-button border border-border text-fg-tertiary transition-colors hover:text-fg-secondary disabled:opacity-30">
           <Paperclip size={16} />
         </ComposerPrimitive.AddAttachment>
 
-        {leading}
+        <span className="flex-1 sm:hidden" aria-hidden />
 
         <ComposerPrimitive.Input
           id="composer-input"
           rows={1}
           placeholder="Message…"
-          className="max-h-32 flex-1 resize-none rounded-button border border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-border-hover"
+          className="max-h-32 min-w-0 flex-1 resize-none rounded-button border border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-border-hover max-sm:order-first max-sm:max-h-52 max-sm:min-h-[84px] max-sm:basis-full"
         />
 
         {trailing}
 
         <ThreadPrimitive.If running={false}>
-          <ComposerPrimitive.Send aria-label="Send message" className="shrink-0 rounded-button bg-fg p-2.5 text-bg transition-opacity disabled:opacity-30">
+          <ComposerPrimitive.Send aria-label="Send message" className="flex size-[42px] shrink-0 items-center justify-center rounded-button bg-fg text-bg transition-opacity disabled:opacity-30">
             <Send size={16} />
           </ComposerPrimitive.Send>
         </ThreadPrimitive.If>

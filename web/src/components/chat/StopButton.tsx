@@ -4,7 +4,7 @@ import { Square } from 'lucide-react';
 export function StopButton() {
   return (
     <ComposerPrimitive.Cancel
-      className="shrink-0 rounded-button border border-danger/40 p-2.5 text-danger hover:bg-danger/10"
+      className="flex size-[42px] shrink-0 items-center justify-center rounded-button border border-danger/40 text-danger hover:bg-danger/10"
       title="Stop (kill switch)"
     >
       <Square size={16} />

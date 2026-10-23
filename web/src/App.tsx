@@ -363,6 +363,7 @@ function MainApp() {
         model={fullConv ? fullConv.model || fullConv.effectiveModel || null : null}
         models={models}
         onModelChange={handleModelChange}
+        onNewChat={() => void handleCreate()}
         onToggleSidebar={() => (window.matchMedia('(min-width: 768px)').matches ? toggleSidebarCollapsed() : setSidebarOpen(o => !o))}
         onOpenBrowser={() => setBrowserPanelOpen(o => !o)}
         browserPanelOpen={browserPanelOpen}

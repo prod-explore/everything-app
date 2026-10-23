@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Download, FolderTree, GitBranch, Ghost, Globe, LogOut, Menu, MoreHorizontal } from 'lucide-react';
+import { Bot, Download, FolderTree, GitBranch, Ghost, Globe, LogOut, Menu, MoreHorizontal, SquarePen } from 'lucide-react';
 import { logout as apiLogout } from '../../api';
 import type { DockTool } from '../../App';
 import { ModelOptions } from '../shared/ModelOptions';
@@ -22,6 +22,7 @@ export function Header({
   models,
   onModelChange,
   onToggleSidebar,
+  onNewChat,
   onOpenBrowser,
   browserPanelOpen,
   dockTools,
@@ -30,6 +31,8 @@ export function Header({
   conversationId,
   ghost = false,
 }: {
+  /** Starts an empty chat right away — the one-tap version of the sidebar's "New conversation". */
+  onNewChat: () => void;
   title: string;
   /** Ghost chat: local models only, no internet; fixed at creation. */
   ghost?: boolean;
@@ -104,6 +107,10 @@ export function Header({
           <ModelOptions models={models} current={model} onlyLocal={ghost} />
         </select>
       )}
+
+      <button onClick={onNewChat} title="New chat" aria-label="New chat" className="shrink-0 rounded p-1 text-fg-secondary hover:bg-bg-tertiary hover:text-fg">
+        <SquarePen size={18} />
+      </button>
 
       <span className="hidden shrink-0 text-xs text-fg-tertiary md:inline">{usage}</span>
 

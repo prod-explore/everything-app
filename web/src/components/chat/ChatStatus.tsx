@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Circle, Loader2, Minimize2, X } from 'lucide-react';
 import type { ReasoningEffort } from '../../types';
 import type { ConversationStateApi } from '../../hooks/useConversationState';
@@ -69,7 +69,7 @@ export function ChatStatus({ api, running }: { api: ConversationStateApi; runnin
   );
 }
 
-/** Reasoning effort — sits left of the message box, next to the attach button. Renders nothing for models without effort levels. */
+/** Reasoning effort — first control of the composer row, left of the attach button. Renders nothing for models without effort levels. */
 export function EffortSelect({ api, running }: { api: ConversationStateApi; running: boolean }) {
   const s = api.state;
   if (!s?.effortSupported) return null;
@@ -80,7 +80,7 @@ export function EffortSelect({ api, running }: { api: ConversationStateApi; runn
         value={s.effort}
         onChange={e => void api.setEffort(e.target.value as ReasoningEffort)}
         disabled={running}
-        className="rounded-button border border-border bg-bg-secondary px-1.5 py-1.5 text-xs text-fg outline-none focus:border-border-hover disabled:opacity-40"
+        className="rounded-button border border-border bg-bg-secondary px-1.5 py-1.5 text-xs text-fg outline-none focus:border-border-hover disabled:opacity-40 max-sm:w-[4.75rem] max-sm:pl-1.5 max-sm:pr-0"
         aria-label="Reasoning effort"
       >
         <option value="low">low</option>
@@ -91,7 +91,81 @@ export function EffortSelect({ api, running }: { api: ConversationStateApi; runn
   );
 }
 
-/** How full the model's context window is, plus Compact — sits right of the message box, next to the send button. */
+/**
+ * Phone version of the meter: the numbers do not fit next to the message box, so a small ring shows how full the window is and
+ * a tap opens the figures with Compact.
+ */
+function ContextRing({ api, running, used, limit, pct, hot, title }: { api: ConversationStateApi; running: boolean; used: number; limit: number | null; pct: number | null; hot: boolean; title: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const r = 9;
+  const c = 2 * Math.PI * r;
+  return (
+    <div ref={ref} className="relative shrink-0 sm:hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-label={`Context used: ${title}`}
+        aria-expanded={open}
+        className={`flex size-[42px] items-center justify-center rounded-button border border-border ${hot ? 'text-danger' : 'text-fg-tertiary'}`}
+      >
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden>
+          <circle cx="11" cy="11" r={r} fill="none" strokeWidth="2.5" className="stroke-bg-tertiary" />
+          {pct !== null && (
+            <circle
+              cx="11"
+              cy="11"
+              r={r}
+              fill="none"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeDasharray={c}
+              strokeDashoffset={c * (1 - pct / 100)}
+              transform="rotate(-90 11 11)"
+              className={hot ? 'stroke-danger' : 'stroke-fg-tertiary'}
+            />
+          )}
+        </svg>
+      </button>
+      {open && (
+        <div role="dialog" aria-label="Context" className="absolute bottom-full right-0 z-50 mb-2 w-60 rounded-container border border-border bg-bg-secondary p-3 text-xs shadow-lg">
+          <div className={hot ? 'text-danger' : 'text-fg'}>
+            {fmt(used)}{limit ? ` / ${fmt(limit)}` : ''} tokens{pct !== null ? ` (${pct}%)` : ''}
+          </div>
+          <div className="mt-0.5 text-fg-tertiary">in the last request</div>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              void api.compact();
+            }}
+            disabled={running || api.busy}
+            className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-button border border-border px-2 py-2 text-fg-secondary hover:text-fg disabled:opacity-40"
+          >
+            {api.busy ? <Loader2 size={13} className="animate-spin" /> : <Minimize2 size={13} />} Compact the conversation
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** How full the model's context window is, plus Compact — right of the message box next to send (a ring with a panel on a phone). */
 export function ContextMeter({ api, running }: { api: ConversationStateApi; running: boolean }) {
   const s = api.state;
   if (!s || s.context.used === null) return null;
@@ -103,27 +177,30 @@ export function ContextMeter({ api, running }: { api: ConversationStateApi; runn
     : `${used.toLocaleString('en-US')} tokens in the last request`;
 
   return (
-    <div className="flex h-[42px] shrink-0 items-center gap-2 text-xs text-fg-tertiary">
-      <span className="flex items-center gap-2" title={title}>
-        {pct !== null && (
-          <span className="h-1.5 w-12 overflow-hidden rounded-full bg-bg-tertiary max-sm:hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Context used">
-            <span className={`block h-full ${hot ? 'bg-danger' : 'bg-fg-tertiary'}`} style={{ width: `${pct}%` }} />
-          </span>
+    <>
+      <div className="flex h-[42px] shrink-0 items-center gap-2 text-xs text-fg-tertiary max-sm:hidden">
+        <span className="flex items-center gap-2" title={title}>
+          {pct !== null && (
+            <span className="h-1.5 w-12 overflow-hidden rounded-full bg-bg-tertiary" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Context used">
+              <span className={`block h-full ${hot ? 'bg-danger' : 'bg-fg-tertiary'}`} style={{ width: `${pct}%` }} />
+            </span>
+          )}
+          <span className={`whitespace-nowrap ${hot ? 'text-danger' : ''}`}>{fmt(used)}{limit ? ` / ${fmt(limit)}` : ' tokens'}</span>
+        </span>
+        {(pct === null || pct >= 40) && (
+          <button
+            type="button"
+            onClick={() => void api.compact()}
+            disabled={running || api.busy}
+            title="Compact: summarise the older part of this chat to free context. The messages stay visible."
+            aria-label="Compact the conversation"
+            className="rounded-button border border-border p-1.5 hover:text-fg-secondary disabled:opacity-40"
+          >
+            {api.busy ? <Loader2 size={13} className="animate-spin" /> : <Minimize2 size={13} />}
+          </button>
         )}
-        <span className={`whitespace-nowrap ${hot ? 'text-danger' : ''}`}>{fmt(used)}{limit ? ` / ${fmt(limit)}` : ' tokens'}</span>
-      </span>
-      {(pct === null || pct >= 40) && (
-        <button
-          type="button"
-          onClick={() => void api.compact()}
-          disabled={running || api.busy}
-          title="Compact: summarise the older part of this chat to free context. The messages stay visible."
-          aria-label="Compact the conversation"
-          className="rounded-button border border-border p-1.5 hover:text-fg-secondary disabled:opacity-40"
-        >
-          {api.busy ? <Loader2 size={13} className="animate-spin" /> : <Minimize2 size={13} />}
-        </button>
-      )}
-    </div>
+      </div>
+      <ContextRing api={api} running={running} used={used} limit={limit} pct={pct} hot={hot} title={title} />
+    </>
   );
 }
