@@ -1,12 +1,25 @@
 import type { ThreadAssistantMessagePart, ThreadMessageLike } from '@assistant-ui/react';
 import type { LivePart } from '../hooks/useSSE';
-import type { ContentBlock, RawMessage } from '../types';
+import type { ContentBlock, RawMessage, ToolResultPart } from '../types';
 import { parseStoredTime } from './answerPlacement';
 
 /** `{ createdAt }` for a stored row, or nothing when the API sent no (valid) time — so existing shapes stay unchanged. */
 function storedAt(msg: RawMessage): { createdAt?: Date } {
   const t = parseStoredTime(msg.createdAt);
   return t === null ? {} : { createdAt: new Date(t) };
+}
+
+/** A stored tool result as the text the card shows and the pictures it carries (as `data:` URLs / URLs). */
+export function splitToolResult(content: string | ToolResultPart[] | undefined): { text: string; images: string[] } {
+  if (typeof content === 'string') return { text: content, images: [] };
+  if (!Array.isArray(content)) return { text: '', images: [] };
+  const texts: string[] = [];
+  const images: string[] = [];
+  for (const part of content) {
+    if (part.type === 'text') texts.push(part.text);
+    else if (part.type === 'image') images.push(part.source.type === 'base64' ? `data:${part.source.media_type};base64,${part.source.data}` : part.source.url);
+  }
+  return { text: texts.join('\n'), images };
 }
 
 /**
@@ -62,13 +75,14 @@ export function foldRawMessages(raw: RawMessage[]): ThreadMessageLike[] {
     // always where db.ts/llm-loop.ts put it — one user message per
     // round of tool results, right after the assistant message that
     // requested them).
-    const resultsByCallId = new Map<string, { content: string; isError: boolean }>();
+    const resultsByCallId = new Map<string, { content: string; images: string[]; isError: boolean }>();
     const next = raw[i + 1];
     if (next && next.role === 'user') {
       const nextBlocks: ContentBlock[] = typeof next.content === 'string' || !Array.isArray(next.content) ? [] : next.content;
       for (const b of nextBlocks) {
         if (b.type === 'tool_result') {
-          resultsByCallId.set(b.tool_use_id, { content: b.content, isError: Boolean(b.is_error) });
+          const { text, images } = splitToolResult(b.content);
+          resultsByCallId.set(b.tool_use_id, { content: text, images, isError: Boolean(b.is_error) });
         }
       }
     }
@@ -93,6 +107,8 @@ export function foldRawMessages(raw: RawMessage[]): ThreadMessageLike[] {
           argsText: JSON.stringify(block.input),
           result: res?.content,
           isError: res?.isError,
+          // Pictures the tool returned (a screenshot); the card shows them as thumbnails.
+          ...(res && res.images.length > 0 ? { artifact: { images: res.images } } : {}),
         });
       }
     }

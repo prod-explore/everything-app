@@ -20,13 +20,21 @@ const VIEWER_THRESHOLD = 500; // characters — past this, the inline preview cl
  * preview), not the portion the backend itself removed. There's currently
  * no endpoint that returns the original, pre-truncation text.
  */
-export function ToolCallCard({ toolCallId, toolName, args, result, isError }: ToolCallMessagePartProps) {
+/** The pictures a tool returned, as lib/messages.ts attaches them to the call. */
+function imagesOf(artifact: unknown): string[] {
+  const images = (artifact as { images?: unknown } | undefined)?.images;
+  return Array.isArray(images) ? images.filter((i): i is string => typeof i === 'string') : [];
+}
+
+export function ToolCallCard({ toolCallId, toolName, args, result, isError, artifact }: ToolCallMessagePartProps) {
   // null = the user never touched this step, so it follows the default: open only while it is the newest running step.
   const [override, setOverride] = useState<boolean | null>(null);
   const latestId = useLatestStepId();
   const open = override ?? latestId === toolCallId;
   const setOpen = (fn: (o: boolean) => boolean) => setOverride(fn(open));
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [zoomed, setZoomed] = useState<string | null>(null);
+  const images = imagesOf(artifact);
   const running = result === undefined;
   const resultText = typeof result === 'string' ? result : result !== undefined ? JSON.stringify(result, null, 2) : undefined;
   const isLong = (resultText?.length ?? 0) > VIEWER_THRESHOLD;
@@ -71,7 +79,32 @@ export function ToolCallCard({ toolCallId, toolName, args, result, isError }: To
                 {isLong ? `${resultText.slice(0, VIEWER_THRESHOLD)}…` : resultText}
               </pre>
             )}
+            {images.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {images.map((src, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setZoomed(src)}
+                    aria-label={`Open image ${i + 1} of ${images.length}`}
+                    className="overflow-hidden rounded-md border border-border hover:border-fg-tertiary"
+                  >
+                    <img src={src} alt={`Image ${i + 1} returned by ${toolName}`} className="max-h-40 max-w-full object-contain" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+        </div>
+      )}
+      {zoomed && (
+        <div
+          role="dialog"
+          aria-label="Image"
+          onClick={() => setZoomed(null)}
+          onKeyDown={e => e.key === 'Escape' && setZoomed(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+        >
+          <img src={zoomed} alt="" className="max-h-full max-w-full rounded-md object-contain" />
         </div>
       )}
       {viewerOpen && resultText !== undefined && (

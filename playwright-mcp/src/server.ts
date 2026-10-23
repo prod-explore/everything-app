@@ -51,7 +51,7 @@ function createMcpServer(config: PlaywrightConfig, pool: BrowserSessionPool): Mc
         'typing, logging in through the live view, JavaScript-rendered sites. The session persists across calls ' +
         'until you close it or it idles out, but its profile is ephemeral (no saved logins). It can hold several tabs: ' +
         'browser_open with new_tab: true opens a page in a new tab, browser_tabs lists, switches and closes them, ' +
-        'and every observation and action works on the ACTIVE tab (refs belong to the tab they were read from). The user approves ' +
+        'and every observation and action works on the ACTIVE tab (refs belong to the tab they were read from). browser_screenshot returns a picture of the active tab when the look of a page matters. The user approves ' +
         'each website (domain) the first time you open it; navigation to any other domain is blocked until you ' +
         'browser_open it. Downloads and uploads are blocked unless the user allows them.',
     },

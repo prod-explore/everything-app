@@ -29,8 +29,11 @@ export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; thinking: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+  | { type: 'tool_result'; tool_use_id: string; content: string | ToolResultPart[]; is_error?: boolean }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
+/** A tool result is plain text, or text followed by pictures the tool returned (a screenshot). */
+export type ToolResultPart = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string } };
 
 export interface RawMessage {
   id: number;

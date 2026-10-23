@@ -16,7 +16,7 @@ EverythingApp speaks exactly one wire format: OpenAI-compatible chat completions
 | Field | Source | Effect |
 |---|---|---|
 | `kind` | gateway | `chat` \| `image` \| `tts` \| `stt` \| `embedding`; guessed from the id when absent. Pickers show `chat` only |
-| `tags` | gateway | Free-form labels. `free` marks a model as costing nothing (cost guard); `coder`, `reasoning`, `vision` guide the orchestrator |
+| `tags` | gateway | Free-form labels. `free` marks a model as costing nothing (cost guard); `coder`, `reasoning`, `vision` guide the orchestrator; `vision` also marks the model that describes images for models that cannot see them ([ADR 0015](adr/0015-images-and-vision.md)) |
 | `description` | gateway | One line shown to the orchestrator and as a tooltip |
 | `supports` | gateway | Array, e.g. `["tools","vision","reasoning_effort"]`. No `"tools"` → the model is never offered tools; `"reasoning_effort"` shows the Effort control in chats |
 | `tool_schema` | gateway | `full` \| `flat` \| `none` — how tool schemas are sent (`flat` for small models that cannot emit nested JSON) |

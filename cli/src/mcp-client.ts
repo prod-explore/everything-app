@@ -3,6 +3,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServerConfig } from './config.js';
+import { pickImages, type ToolImage } from './tool-images.js';
 
 const envTimeout = parseInt(process.env['MCP_TOOL_TIMEOUT_MS'] ?? '', 10);
 const TOOL_CALL_TIMEOUT_MS = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 330_000;
@@ -16,6 +17,8 @@ export interface McpToolInfo {
 export interface McpToolCallResult {
   text: string;
   isError: boolean;
+  /** Pictures the tool returned (a screenshot…); they reach the model inside the tool result. */
+  images?: ToolImage[];
 }
 
 /** What ToolRegistry actually depends on — lets tests pass a fake without a real transport. */
@@ -139,12 +142,13 @@ export class McpConnection implements McpConnectionLike {
     // The SDK's default request timeout is 60s, which would cut off a long `npm install` that the sandbox
     // itself is still happily running. Sandbox commands cap at 280s; leave headroom above that.
     const result = await this.client!.callTool({ name, arguments: args }, undefined, { timeout: TOOL_CALL_TIMEOUT_MS });
-    const content = (result.content ?? []) as Array<{ type: string; text?: string }>;
-    const text = content
-      .filter(block => block.type === 'text' && typeof block.text === 'string')
-      .map(block => block.text)
-      .join('\n');
-    return { text: text || '(empty result)', isError: Boolean(result.isError) };
+    const content = (result.content ?? []) as Array<{ type: string; text?: string; data?: unknown; mimeType?: unknown }>;
+    const { images, notes } = pickImages(content);
+    const text = [
+      ...content.filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text as string),
+      ...notes,
+    ].join('\n');
+    return { text: text || (images.length > 0 ? `(${images.length === 1 ? 'an image' : `${images.length} images`})` : '(empty result)'), isError: Boolean(result.isError), ...(images.length > 0 ? { images } : {}) };
   }
 
   async close(): Promise<void> {

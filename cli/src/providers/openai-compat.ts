@@ -266,17 +266,28 @@ function systemText(system: Llm.MessageCreateParams['system']): string {
   return system.map(b => b.text).join('\n\n');
 }
 
-function toolResultText(block: Llm.ToolResultBlockParam): string {
+function toolResultText(block: Llm.ToolResultBlockParam, sees: boolean): string {
   let text: string;
   if (typeof block.content === 'string') text = block.content;
   else if (Array.isArray(block.content)) {
+    // A tool message can only hold text on chat-completions: pictures from the tool follow in a user message (see toolImageParts).
     text = block.content
-      .map(c => (c.type === 'text' ? c.text : `[${c.type} omitted]`))
+      .map(c => (c.type === 'text' ? c.text : sees ? '[image — attached in the next message]' : "[image omitted — this model can't read images]"))
       .join('\n');
   } else text = '';
   if (block.is_error) text = `Error: ${text || 'tool call failed'}`;
   // Several providers reject an empty tool message outright.
   return text || '(no output)';
+}
+
+/** The pictures a tool returned, as parts of the user message that follows the tool messages (empty for a model that cannot see). */
+function toolImageParts(block: Llm.ToolResultBlockParam): ContentPart[] {
+  if (!Array.isArray(block.content)) return [];
+  return block.content.flatMap((c): ContentPart[] => {
+    if (c.type !== 'image') return [];
+    const url = c.source.type === 'base64' ? `data:${c.source.media_type};base64,${c.source.data}` : c.source.url;
+    return [{ type: 'image_url', image_url: { url } }];
+  });
 }
 
 /** Index of the last user message that carries real user input (not just tool results) — where the current tool loop began. */
@@ -320,9 +331,11 @@ export function toChatMessages(params: Llm.MessageCreateParamsNonStreaming, ctx:
     if (m.role === 'user') {
       const toolMessages: OaiMessage[] = [];
       const parts: ContentPart[] = [];
+      const fromTools: ContentPart[] = [];
       for (const block of m.content) {
         if (block.type === 'tool_result') {
-          toolMessages.push({ role: 'tool', tool_call_id: block.tool_use_id, content: toolResultText(block) });
+          toolMessages.push({ role: 'tool', tool_call_id: block.tool_use_id, content: toolResultText(block, ctx.modelInfo.supportsImages) });
+          if (ctx.modelInfo.supportsImages) fromTools.push(...toolImageParts(block));
         } else if (block.type === 'text') {
           if (block.text) parts.push({ type: 'text', text: block.text });
         } else if (block.type === 'image') {
@@ -339,6 +352,7 @@ export function toChatMessages(params: Llm.MessageCreateParamsNonStreaming, ctx:
       }
       // Tool messages must directly follow the assistant message that made the calls.
       out.push(...toolMessages);
+      if (fromTools.length > 0) parts.unshift({ type: 'text', text: 'Image(s) returned by the tool call(s) above:' }, ...fromTools);
       if (parts.length > 0) {
         const onlyText = parts.every(p => p.type === 'text');
         out.push({

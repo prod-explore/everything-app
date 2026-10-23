@@ -56,7 +56,7 @@ function loadAutoApproveTools(): string[] {
   // browser_open needs no second prompt (also with new_tab); browser_tabs only switches between pages already open; browser_act runs unprompted inside the approved domain, except actions that
   // look irreversible (payment, deletion…), which always ask; after a page looked like a prompt injection every
   // effectful call asks again.
-  return ['read_log', 'get_path', 'search_notes', 'browser_open', 'browser_observe', 'browser_act', 'browser_tabs', 'browser_close'];
+  return ['read_log', 'get_path', 'search_notes', 'browser_open', 'browser_observe', 'browser_screenshot', 'browser_act', 'browser_tabs', 'browser_close'];
 }
 
 export function loadConfig(): Config {

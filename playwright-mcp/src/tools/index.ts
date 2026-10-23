@@ -6,6 +6,7 @@ import { registerBrowserObserve } from './browserObserve.js';
 import { registerBrowserAct } from './browserAct.js';
 import { registerBrowserClose } from './browserClose.js';
 import { registerBrowserTabs } from './browserTabs.js';
+import { registerBrowserScreenshot } from './browserScreenshot.js';
 
 export function registerAllTools(server: McpServer, config: PlaywrightConfig, pool: BrowserSessionPool): void {
   // Multi-step, session-based — for tasks that need to click/type/navigate (§6b).
@@ -13,5 +14,6 @@ export function registerAllTools(server: McpServer, config: PlaywrightConfig, po
   registerBrowserObserve(server, config, pool);
   registerBrowserAct(server, config, pool);
   registerBrowserTabs(server, config, pool);
+  registerBrowserScreenshot(server, config, pool);
   registerBrowserClose(server, pool);
 }

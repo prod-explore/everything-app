@@ -89,6 +89,40 @@ export function trimForContext(
   return trimmed > 0 ? { messages: out, trimmed } : { messages, trimmed: 0 };
 }
 
+const IMAGE_DROPPED = '[An image from an earlier tool call was dropped to save context. Run the tool again if you need to see it.]';
+
+/**
+ * A copy of `messages` in which only the newest `keep` images that came back from tools (screenshots) are still
+ * images; older ones become a short note. Pictures the user attached are never touched. Like the trimming below it is
+ * a per-request view — the stored history keeps every image, so the chat can still show them. Returns the input
+ * array itself when there is nothing to drop.
+ */
+export function dropOldToolImages(messages: Llm.MessageParam[], keep = 2): Llm.MessageParam[] {
+  let seen = 0;
+  let out: Llm.MessageParam[] | null = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (!Array.isArray(m.content) || !m.content.some(b => b.type === 'tool_result' && Array.isArray(b.content) && b.content.some(c => c.type === 'image'))) continue;
+    let changed = false;
+    // Within one message the later blocks count as newer, matching reading order.
+    const blocks = m.content.slice().reverse().map((b): Llm.ContentBlockParam => {
+      if (b.type !== 'tool_result' || !Array.isArray(b.content)) return b;
+      const parts = b.content.slice().reverse().map((c): Llm.TextBlockParam | Llm.ImageBlockParam => {
+        if (c.type !== 'image') return c;
+        if (seen++ < keep) return c;
+        changed = true;
+        return { type: 'text', text: IMAGE_DROPPED };
+      }).reverse();
+      return { ...b, content: parts };
+    }).reverse();
+    if (changed) {
+      out ??= messages.slice();
+      out[i] = { role: m.role, content: blocks };
+    }
+  }
+  return out ?? messages;
+}
+
 // ─── 2. compaction ───────────────────────────────────────────────────────────
 
 /**

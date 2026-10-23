@@ -1,7 +1,8 @@
 import type * as Llm from './llm-types.js';
 import type { ToolRegistry } from './tool-registry.js';
 import { truncateToolOutput } from './output-truncator.js';
-import { estimateTokens, trimForContext, TRIM_AT } from './context.js';
+import { dropOldToolImages, estimateTokens, trimForContext, TRIM_AT } from './context.js';
+import { toolResultContent, type ToolImage } from './tool-images.js';
 import { looksDangerous } from './web-approval.js';
 import { collectContextUrls, urlIsInContext } from './web/provenance.js';
 import { assertPublicUrl, hostOfUrl, UrlBlockedError } from './web/url-safety.js';
@@ -50,7 +51,7 @@ export interface VirtualTool {
   requiresApproval?: boolean;
   /** Always ask a human, never covered by a grant; the text is shown with the request. */
   alwaysAsk?: string;
-  handler(input: Record<string, unknown>, ctx: VirtualToolContext): Promise<{ text: string; isError?: boolean }>;
+  handler(input: Record<string, unknown>, ctx: VirtualToolContext): Promise<{ text: string; isError?: boolean; images?: ToolImage[] }>;
 }
 
 export interface ConversationDeps {
@@ -165,12 +166,12 @@ const DENIED_MESSAGE = 'Rejected by user (approval gate) — not executed.';
  * namespacing).
  */
 /** Browser tools: per chat; they get the orchestrator's `_policy`, model-supplied hidden args are stripped. */
-const BROWSER_TOOL_NAMES = new Set(['browser_open', 'browser_observe', 'browser_act', 'browser_tabs', 'browser_close']);
+const BROWSER_TOOL_NAMES = new Set(['browser_open', 'browser_observe', 'browser_screenshot', 'browser_act', 'browser_tabs', 'browser_close']);
 /** The subset that lives in the project-scoped sandbox. */
 const SANDBOX_TOOL_NAMES = new Set(['run_bash', 'git_op', 'read_log', 'terminal_list', 'terminal_close']);
 const STATEFUL_TOOL_NAMES = new Set([...SANDBOX_TOOL_NAMES, ...BROWSER_TOOL_NAMES]);
 /** Read-only tools that stay unprompted even after a page looked like a prompt injection. */
-const READ_ONLY_AFTER_INJECTION = new Set(['browser_observe', 'browser_tabs', 'browser_close', 'read_log', 'terminal_list', 'read_file']);
+const READ_ONLY_AFTER_INJECTION = new Set(['browser_observe', 'browser_screenshot', 'browser_tabs', 'browser_close', 'read_log', 'terminal_list', 'read_file']);
 /** Results of these virtual tools carry the same `[browser-meta]` first line as browser observations. */
 const WEB_VIRTUAL_TOOLS = new Set(['web_fetch', 'web_search']);
 const IRREVERSIBLE_WARNING = 'This browser action looks irreversible (payment, deletion, subscription…). Check that it is what you asked for.';
@@ -334,9 +335,10 @@ async function runLoop(
     flushNew(deps, trace); // the previous step (reply + tool results, inbox text included) is complete
 
     // What is sent may be a trimmed copy (old tool outputs stubbed); `messages` itself is never trimmed. Tool outputs in it are already truncated per result.
+    const recent = dropOldToolImages(messages);
     const view = deps.contextWindow
-      ? trimForContext(messages, Math.floor(deps.contextWindow * TRIM_AT), estimateTokens([], deps.systemPrompt, toolDefs)).messages
-      : messages;
+      ? trimForContext(recent, Math.floor(deps.contextWindow * TRIM_AT), estimateTokens([], deps.systemPrompt, toolDefs)).messages
+      : recent;
     const params: Llm.MessageCreateParamsNonStreaming = {
       model: deps.model,
       max_tokens: deps.maxTokens ?? 4096,
@@ -476,7 +478,7 @@ async function runLoop(
 
       deps.onToolStart?.(label);
 
-      let result: { text: string; isError?: boolean };
+      let result: { text: string; isError?: boolean; images?: ToolImage[] };
       if (virtual) {
         try {
           result = await virtual.handler(args, { toolUseId: use.id, conversationId: deps.conversationId, signal: deps.signal });
@@ -525,7 +527,8 @@ async function runLoop(
       toolResults.push({
         type: 'tool_result',
         tool_use_id: use.id,
-        content: truncated,
+        // Pictures from the tool (a screenshot) ride along with the text; a failed call has none worth sending.
+        content: toolResultContent(truncated, isError ? undefined : result.images),
         is_error: isError,
       });
     }

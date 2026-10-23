@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ThreadAssistantMessagePart } from '@assistant-ui/react';
-import { foldRawMessages, liveTurnToMessage } from './messages';
+import { foldRawMessages, liveTurnToMessage, splitToolResult } from './messages';
 import type { RawMessage } from '../types';
 
 const parts = (m: { content: unknown } | undefined) => (m?.content ?? []) as ThreadAssistantMessagePart[];
@@ -88,6 +88,31 @@ describe('foldRawMessages', () => {
   it('uses the database id, not the array position, as the message id', () => {
     const out = foldRawMessages([{ id: 41, role: 'user', content: 'hi' }, { id: 42, role: 'assistant', content: 'hello' }]);
     expect(out.map(m => m.id)).toEqual(['41', '42']);
+  });
+});
+
+describe('tool results that carry pictures', () => {
+  const shot = { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/jpeg', data: 'QUJD' } };
+
+  it('splitToolResult gives the text and the pictures (as data URLs) of an array result, and just the text of a string', () => {
+    expect(splitToolResult('plain')).toEqual({ text: 'plain', images: [] });
+    expect(splitToolResult([{ type: 'text', text: 'Screenshot of x' }, shot, { type: 'image', source: { type: 'url', url: 'https://x.test/a.png' } }])).toEqual({
+      text: 'Screenshot of x',
+      images: ['data:image/jpeg;base64,QUJD', 'https://x.test/a.png'],
+    });
+    expect(splitToolResult(undefined)).toEqual({ text: '', images: [] });
+  });
+
+  it('the call part gets the text as its result and the pictures as its artifact', () => {
+    const raw: RawMessage[] = [
+      { id: 1, role: 'user', content: 'look at it' },
+      { id: 2, role: 'assistant', content: [{ type: 'tool_use', id: 's1', name: 'browser_screenshot', input: {} }, { type: 'tool_use', id: 's2', name: 'browser_observe', input: {} }] },
+      { id: 3, role: 'user', content: [{ type: 'tool_result', tool_use_id: 's1', content: [{ type: 'text', text: 'Screenshot of x' }, shot] }, { type: 'tool_result', tool_use_id: 's2', content: 'text only' }] },
+    ];
+    const calls = parts(foldRawMessages(raw)[1]).filter(p => p.type === 'tool-call');
+    expect(calls[0]).toMatchObject({ toolCallId: 's1', result: 'Screenshot of x', artifact: { images: ['data:image/jpeg;base64,QUJD'] } });
+    expect(calls[1]).toMatchObject({ toolCallId: 's2', result: 'text only' });
+    expect(calls[1]).not.toHaveProperty('artifact');
   });
 });
 

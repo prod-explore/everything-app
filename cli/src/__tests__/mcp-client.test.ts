@@ -13,6 +13,14 @@ const KEY = 'secret-key-123';
 function makeServer(): McpServer {
   const server = new McpServer({ name: 'test', version: '1' });
   server.tool('echo', 'Echo text', { text: z.string() }, async ({ text }) => ({ content: [{ type: 'text' as const, text: `echo:${text}` }] }));
+  server.tool('shot', 'Picture and text', {}, async () => ({
+    content: [
+      { type: 'text' as const, text: 'a page' },
+      { type: 'image' as const, data: 'QUJD', mimeType: 'image/jpeg' },
+      { type: 'image' as const, data: 'QUJD', mimeType: 'image/svg+xml' },
+    ],
+  }));
+  server.tool('only_shot', 'Just a picture', {}, async () => ({ content: [{ type: 'image' as const, data: 'QUJD', mimeType: 'image/png' }] }));
   return server;
 }
 
@@ -69,7 +77,7 @@ describe('McpConnection transports', () => {
   it('falls back to the legacy HTTP+SSE transport (any older MCP server), with the bearer key on the stream and the POSTs', async () => {
     const conn = new McpConnection({ name: 'notes', url: `${base}/mcp/sse`, apiKey: KEY });
     await conn.connect();
-    assert.deepEqual((await conn.listTools()).map(t => t.name), ['echo']);
+    assert.deepEqual((await conn.listTools()).map(t => t.name), ['echo', 'shot', 'only_shot']);
     assert.deepEqual(await conn.callTool('echo', { text: 'hi' }), { text: 'echo:hi', isError: false });
     await conn.close();
   });
@@ -96,5 +104,19 @@ describe('McpConnection transports', () => {
     const conn = new McpConnection({ name: 'bad', url: `${base}/mcp/sse`, apiKey: 'wrong' });
     await assert.rejects(conn.connect());
     await assert.rejects(conn.listTools(), /not connected/);
+  });
+
+  it('hands back the images of a result next to its text, and names the ones it had to leave out', async () => {
+    const conn = new McpConnection({ name: 'sandbox', url: `${base}/mcp`, apiKey: KEY });
+    await conn.connect();
+    const res = await conn.callTool('shot', {});
+    assert.deepEqual(res.images, [{ mediaType: 'image/jpeg', data: 'QUJD' }]);
+    assert.match(res.text, /^a page/);
+    assert.match(res.text, /image of type image\/svg\+xml was left out/);
+    const bare = await conn.callTool('only_shot', {});
+    assert.equal(bare.text, '(an image)');
+    assert.equal(bare.images?.length, 1);
+    assert.equal((await conn.callTool('echo', { text: 'z' })).images, undefined);
+    await conn.close();
   });
 });
