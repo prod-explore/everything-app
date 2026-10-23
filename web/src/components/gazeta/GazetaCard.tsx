@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import { Bot, CheckCircle2, ExternalLink, FileText, Link as LinkIcon, Pin } from 'lucide-react';
 import { artifactFileUrl } from '../../api';
 import { useGazeta } from '../../hooks/useGazeta';
+import { formatStoredTime } from '../../lib/time';
 import type { GazetaField, GazetaInputSchema, GazetaItem } from '../../types';
 import { MarkdownBody } from '../chat/MarkdownText';
 import { Badge } from '../shared/Badge';
@@ -146,7 +147,7 @@ export function GazetaAnswer({ item }: { item: GazetaItem }) {
       <div className="text-xs text-fg-secondary">
         {item.status === 'responded' && (
           <p>
-            <span className="text-fg-tertiary">Answered{item.respondedAt ? ` ${new Date(item.respondedAt).toLocaleString()}` : ''}: </span>
+            <span className="text-fg-tertiary">Answered{item.respondedAt ? ` ${formatStoredTime(item.respondedAt)}` : ''}: </span>
             <span className="whitespace-pre-wrap text-fg">{answer || '—'}</span>
           </p>
         )}
@@ -329,7 +330,7 @@ export function GazetaCard({
         <AgentBadge agent={item.agent} />
         {!open && <Badge tone={item.status === 'responded' ? 'success' : 'neutral'}>{STATUS_LABEL[item.status] ?? item.status}</Badge>}
         {projectName && <span className="truncate text-xs text-fg-tertiary">{projectName}</span>}
-        <span className="ml-auto text-xs text-fg-tertiary">{new Date(item.createdAt).toLocaleString()}</span>
+        <span className="ml-auto text-xs text-fg-tertiary">{formatStoredTime(item.createdAt)}</span>
       </div>
 
       <h2 className="mb-1 text-sm font-medium leading-snug text-fg">{item.title}</h2>

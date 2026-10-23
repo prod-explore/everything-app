@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, File, FileText, Folder, FolderTree, History, Image, Link2, Pencil, Pin, PinOff, RotateCcw } from 'lucide-react';
 import { fetchWorkspaceFile, listCheckpoints, listWorkspaceFiles, rollbackWorkspace, saveWorkspaceFile, workspacePins, type WorkspacePin } from '../../api-workspace';
 import type { Checkpoint, WorkspaceEntry, WorkspaceListing } from '../../types-workspace';
+import { formatStoredTime } from '../../lib/time';
 import { DockPanel, PanelMessage } from '../shared/DockPanel';
 
 const ROOT = '/workspace';
@@ -263,7 +264,7 @@ function CheckpointList({ owner, onRolledBack }: { owner: string; onRolledBack: 
           <div className="flex items-center gap-2">
             <History size={13} className="shrink-0 text-fg-tertiary" />
             <span className="min-w-0 flex-1 truncate text-fg">{cp.label || cp.id}</span>
-            <span className="shrink-0 text-fg-tertiary">{new Date(cp.createdAt).toLocaleString()}</span>
+            <span className="shrink-0 text-fg-tertiary">{formatStoredTime(cp.createdAt)}</span>
             <button onClick={() => setConfirming(cp.id)} className="rounded p-1 text-fg-tertiary hover:text-fg" aria-label={`Roll back to ${cp.label}`} title="Roll back to here">
               <RotateCcw size={13} />
             </button>
