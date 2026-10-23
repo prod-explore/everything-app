@@ -14,6 +14,15 @@ export function sendFailureMessage(e: unknown): string {
   return `Your message wasn't sent: ${e instanceof Error ? e.message : 'unknown error'}.`;
 }
 
+/**
+ * The images the person attached, as data URLs. The composer hands them over on `message.attachments` (its `content`
+ * carries only the text), so both places are read — an image in neither is how a picture used to vanish silently.
+ */
+export function imagesOf(message: Pick<AppendMessage, 'content' | 'attachments'>): string[] {
+  const pick = (parts: readonly { type: string; image?: string }[]) => parts.flatMap(c => (c.type === 'image' && c.image ? [c.image] : []));
+  return [...pick(message.content), ...(message.attachments ?? []).flatMap(a => pick(a.content))];
+}
+
 /** data:image/png;base64,AAAA... → { mediaType: 'image/png', data: 'AAAA...' } */
 function splitDataUrl(dataUrl: string): OutgoingAttachment | null {
   const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
@@ -89,8 +98,8 @@ export function useEverythingAppRuntime(conversationId: string | null) {
             .map(line => `> ${line}`)
             .join('\n')}\n\n${typed}`
         : typed;
-      const images = message.content.filter((c): c is Extract<typeof c, { type: 'image' }> => c.type === 'image');
-      const attachments = images.map(img => splitDataUrl(img.image)).filter((a): a is OutgoingAttachment => a !== null);
+      const images = imagesOf(message);
+      const attachments = images.map(splitDataUrl).filter((a): a is OutgoingAttachment => a !== null);
       if (!text.trim() && attachments.length === 0) return;
       setSendError(null);
 
@@ -98,7 +107,7 @@ export function useEverythingAppRuntime(conversationId: string | null) {
       // waiting on the round trip to the backend and the turn:start SSE
       // event — on a slow connection that gap is visible and looks broken.
       const optimisticContent: ThreadMessageLike['content'] = [
-        ...images.map(img => ({ type: 'image' as const, image: img.image })),
+        ...images.map(image => ({ type: 'image' as const, image })),
         ...(text.trim() ? [{ type: 'text' as const, text }] : []),
       ];
       setPersisted(prev => [...prev, { id: `opt-${Date.now()}`, role: 'user', content: optimisticContent }]);
