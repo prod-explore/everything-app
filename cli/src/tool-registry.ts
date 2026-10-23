@@ -22,6 +22,25 @@ interface RegisteredTool {
  * owns that tool. Also the single place that decides whether a call needs a
  * human's yes/no before it runs.
  */
+/**
+ * Parameters the orchestrator sets itself on a call (the chat the call belongs to, the project, the browser policy…).
+ * The loop overwrites or strips whatever a model puts there, so offering them only costs tokens on every request —
+ * about 2k for the browser and sandbox tools — and tells the model about knobs it must not touch.
+ */
+const ORCHESTRATOR_PARAMS: ReadonlySet<string> = new Set(['_conversation_id', '_project_id', '_policy', '_allow_downloads', '_approved_host']);
+
+/** The schema a model is shown: without the orchestrator's own parameters. The registered schema itself is left as it is. */
+export function withoutOrchestratorParams(schema: Record<string, unknown>): Record<string, unknown> {
+  const props = schema['properties'];
+  if (!props || typeof props !== 'object') return schema;
+  const names = Object.keys(props as Record<string, unknown>);
+  if (!names.some(n => ORCHESTRATOR_PARAMS.has(n))) return schema;
+  const kept = Object.fromEntries(Object.entries(props as Record<string, unknown>).filter(([n]) => !ORCHESTRATOR_PARAMS.has(n)));
+  const required = Array.isArray(schema['required']) ? (schema['required'] as unknown[]).filter(r => typeof r !== 'string' || !ORCHESTRATOR_PARAMS.has(r)) : undefined;
+  const { required: _drop, ...rest } = schema;
+  return { ...rest, properties: kept, ...(required && required.length > 0 ? { required } : {}) };
+}
+
 export class ToolRegistry {
   private tools = new Map<string, RegisteredTool>();
 
@@ -105,7 +124,7 @@ export class ToolRegistry {
     return [...this.tools.values()].map(t => ({
       name: t.exposedName,
       description: t.description,
-      input_schema: t.inputSchema,
+      input_schema: withoutOrchestratorParams(t.inputSchema),
     }));
   }
 

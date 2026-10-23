@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { ToolRegistry } from '../tool-registry.js';
+import { ToolRegistry, withoutOrchestratorParams } from '../tool-registry.js';
 import type { McpConnectionLike, McpToolInfo, McpToolCallResult } from '../mcp-client.js';
 
 function fakeConnection(
@@ -36,6 +36,31 @@ describe('ToolRegistry', () => {
 
     const names = registry.toLlmTools().map(t => t.name).sort();
     assert.deepEqual(names, ['obsidian__get_path', 'obsidian__write_note', 'sandbox__read_log', 'sandbox__run_bash']);
+  });
+
+  it('does not show the model the parameters the orchestrator sets itself, and leaves the registered schema alone', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        _conversation_id: { type: 'string', description: 'Internal' },
+        _policy: { type: 'object', properties: { js: { type: 'string' } } },
+        _custom: { type: 'string' }, // not ours: stays
+      },
+      required: ['url', '_conversation_id'],
+    };
+    const registry = new ToolRegistry([]);
+    await registry.loadFrom([fakeConnection('pw', [{ name: 'browser_open', description: 'open', inputSchema: schema }])]);
+    const shown = registry.toLlmTools()[0]!.input_schema as { properties: Record<string, unknown>; required: string[] };
+    assert.deepEqual(Object.keys(shown.properties), ['url', '_custom']);
+    assert.deepEqual(shown.required, ['url']);
+    assert.ok('_conversation_id' in schema.properties, 'the original schema is not mutated');
+    // No orchestrator params at all: the very same object comes back.
+    const plain = { type: 'object', properties: { a: { type: 'string' } } };
+    assert.equal(withoutOrchestratorParams(plain), plain);
+    // Only orchestrator params: an empty property list, and no `required` left behind.
+    const only = withoutOrchestratorParams({ type: 'object', properties: { _conversation_id: {} }, required: ['_conversation_id'] });
+    assert.deepEqual(only, { type: 'object', properties: {} });
   });
 
   it('default-denies approval for anything not explicitly whitelisted', async () => {
