@@ -92,6 +92,8 @@ type ConfirmCtx = {
   projectId?: string; modelId?: string; skillId?: string; timeoutSeconds?: number;
   /** Always prompt (once only), with this warning — e.g. after a suspected prompt injection. */
   forcePrompt?: string;
+  /** Nobody can answer (a scheduled run): what is not already allowed is refused at once instead of waiting for a click. */
+  unattended?: boolean;
 };
 
 export class WebApprovalGate {
@@ -164,6 +166,14 @@ export class WebApprovalGate {
         audit('auto_approved');
         return { approved: true };
       }
+    }
+
+    if (ctx?.unattended) {
+      audit('unattended_denied');
+      return {
+        approved: false,
+        reason: 'nobody is watching this scheduled run, so it cannot ask for approval. The user can allow this for good ("Always allow") in a normal chat; otherwise do without it',
+      };
     }
 
     const id = randomUUID();

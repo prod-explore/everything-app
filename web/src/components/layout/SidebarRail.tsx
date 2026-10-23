@@ -1,4 +1,4 @@
-import { FolderOpen, MessageSquarePlus, Newspaper, PanelLeftOpen, Settings } from 'lucide-react';
+import { AlarmClock, FolderOpen, MessageSquarePlus, Newspaper, PanelLeftOpen, Settings } from 'lucide-react';
 
 /** Desktop-only icon strip shown instead of the full sidebar while it is collapsed (Ctrl+B expands). */
 export function SidebarRail({
@@ -8,6 +8,7 @@ export function SidebarRail({
   onCreate,
   onOpenProjects,
   onOpenGazeta,
+  onOpenSchedules,
   onOpenSettings,
 }: {
   gazetaCount: number;
@@ -16,6 +17,7 @@ export function SidebarRail({
   onCreate: () => void;
   onOpenProjects: () => void;
   onOpenGazeta: () => void;
+  onOpenSchedules: () => void;
   onOpenSettings: () => void;
 }) {
   return (
@@ -41,6 +43,9 @@ export function SidebarRail({
             </span>
           )}
         </span>
+      </RailButton>
+      <RailButton label="Scheduled tasks" onClick={onOpenSchedules}>
+        <AlarmClock size={18} />
       </RailButton>
       <RailButton label="Settings" onClick={onOpenSettings}>
         <Settings size={18} />

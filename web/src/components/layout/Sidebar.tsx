@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FolderOpen, Ghost, MessageSquarePlus, Newspaper, Pencil, Plus, Settings, Trash2 } from 'lucide-react';
+import { AlarmClock, FolderOpen, Ghost, MessageSquarePlus, Newspaper, Pencil, Plus, Settings, Trash2 } from 'lucide-react';
 import type { ConversationSummary, ProjectListItem } from '../../types';
 import { Button } from '../shared/Button';
 import { GazetaCounter } from '../gazeta/GazetaCounter';
@@ -18,6 +18,7 @@ export function Sidebar({
   onRename,
   onDelete,
   onOpenGazeta,
+  onOpenSchedules,
   onOpenSettings,
   onCreateProject,
   onSelectProject,
@@ -36,6 +37,7 @@ export function Sidebar({
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
   onOpenGazeta: () => void;
+  onOpenSchedules: () => void;
   onOpenSettings: () => void;
   onCreateProject: () => void;
   onSelectProject: (id: string) => void;
@@ -245,6 +247,13 @@ export function Sidebar({
           <Newspaper size={16} />
           Gazeta
           {gazetaCount > 0 && <GazetaCounter count={gazetaCount} urgent={gazetaUrgent} />}
+        </button>
+        <button
+          onClick={onOpenSchedules}
+          className="flex w-full items-center gap-2 rounded-button px-2 py-2 text-sm text-fg-secondary hover:bg-bg-secondary hover:text-fg"
+        >
+          <AlarmClock size={16} />
+          Scheduled tasks
         </button>
         <button
           onClick={onOpenSettings}

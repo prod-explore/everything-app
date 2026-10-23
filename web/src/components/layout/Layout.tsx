@@ -20,6 +20,7 @@ export function Layout({
   onRename,
   onDelete,
   onOpenGazeta,
+  onOpenSchedules,
   onOpenSettings,
   onCreateProject,
   onSelectProject,
@@ -45,6 +46,7 @@ export function Layout({
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
   onOpenGazeta: () => void;
+  onOpenSchedules: () => void;
   onOpenSettings: () => void;
   onCreateProject: () => void;
   onSelectProject: (id: string) => void;
@@ -68,6 +70,7 @@ export function Layout({
           onRename={onRename}
           onDelete={onDelete}
           onOpenGazeta={onOpenGazeta}
+          onOpenSchedules={onOpenSchedules}
           onOpenSettings={onOpenSettings}
           onCreateProject={onCreateProject}
           onSelectProject={onSelectProject}
@@ -85,6 +88,7 @@ export function Layout({
             onCreate={() => onCreate()}
             onOpenProjects={onOpenProjects}
             onOpenGazeta={onOpenGazeta}
+            onOpenSchedules={onOpenSchedules}
             onOpenSettings={onOpenSettings}
           />
         </div>

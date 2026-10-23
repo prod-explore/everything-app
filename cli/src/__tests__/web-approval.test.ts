@@ -23,6 +23,25 @@ describe('WebApprovalGate', () => {
     assert.equal(gate.listPending().length, 0);
   });
 
+  it('an unattended call is refused at once instead of waiting, but a standing "always" grant still lets it through', async () => {
+    const gate = new WebApprovalGate(freshDb());
+    const refused = await gate.confirmDetailed('conv-1', 'obsidian/write_note', { path: 'a.md' }, undefined, { unattended: true });
+    assert.equal(refused.approved, false);
+    assert.match(refused.reason!, /nobody is watching/);
+    assert.equal(gate.listPending().length, 0, 'nothing is left waiting for a click');
+
+    // A grant the user made earlier in a normal chat applies to an unattended run too.
+    const first = gate.confirm('conv-2', 'obsidian/write_note', { path: 'b.md' });
+    gate.resolve(gate.listPending()[0].id, true, 'always');
+    await first;
+    const allowed = await gate.confirmDetailed('conv-3', 'obsidian/write_note', { path: 'c.md' }, undefined, { unattended: true });
+    assert.equal(allowed.approved, true);
+
+    // …but a dangerous-looking call always needs a human, so unattended it is refused even with the grant.
+    const dangerous = await gate.confirmDetailed('conv-3', 'obsidian/write_note', { path: 'c.md', note: 'delete account' }, undefined, { unattended: true, forcePrompt: 'check this' });
+    assert.equal(dangerous.approved, false);
+  });
+
   it('resolve() on an unknown id returns false and does not throw', () => {
     const gate = new WebApprovalGate(freshDb());
     assert.equal(gate.resolve('nope', true, 'once'), false);

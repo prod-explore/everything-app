@@ -142,6 +142,7 @@ const SIDE_EVENTS = [
   'agent:finished',
   'agent:budget_warning',
   'turn:done',
+  'schedule:changed',
 ] as const;
 
 export type SideEvent = (typeof SIDE_EVENTS)[number];

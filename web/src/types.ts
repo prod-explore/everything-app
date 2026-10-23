@@ -414,3 +414,54 @@ export interface SubagentRunSummary {
   finishedAt: string | null;
 }
 
+
+// ─── Scheduled tasks ──────────────────────────────────────────────────────
+
+export type ScheduleRunStatus = 'running' | 'done' | 'error' | 'skipped';
+export type ScheduleRunTrigger = 'schedule' | 'catchup' | 'manual';
+
+/** Mirrors cli/src/schedules.ts. Times are ISO strings (UTC). */
+export interface ScheduleRun {
+  id: string;
+  scheduleId: string;
+  conversationId: string | null;
+  trigger: ScheduleRunTrigger;
+  status: ScheduleRunStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  summary: string | null;
+  error: string | null;
+}
+
+export interface Schedule {
+  id: string;
+  name: string;
+  prompt: string;
+  /** 5-field cron or @hourly/@daily/@weekly/@monthly. */
+  cron: string;
+  timezone: string;
+  /** null = the "agents" slot (or a free model). */
+  model: string | null;
+  projectId: string | null;
+  /** Without this a run only uses models tagged `free`. */
+  allowPaid: boolean;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  createdAt: string;
+  lastRun?: ScheduleRun | null;
+}
+
+/** What the form sends; the server fills in the rest. */
+export interface ScheduleInput {
+  name: string;
+  prompt: string;
+  cron: string;
+  timezone: string;
+  model: string | null;
+  projectId: string | null;
+  allowPaid: boolean;
+  enabled: boolean;
+}
+
+export type SchedulePreview = { ok: true; next: string[] } | { ok: false; error: string };

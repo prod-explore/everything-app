@@ -27,6 +27,10 @@ import type {
   SlotKey,
   SlotsResponse,
   RunRow,
+  Schedule,
+  ScheduleInput,
+  SchedulePreview,
+  ScheduleRun,
   Skill,
   TurnState,
   UsageRange,
@@ -526,4 +530,35 @@ export function revokeApprovalGrant(id: string): Promise<{ ok: boolean }> {
 export interface SearchHit { conversationId: string; title: string; messageId: number; snippet: string }
 export async function searchMessages(q: string): Promise<SearchHit[]> {
   return (await request<{ hits: SearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}`)).hits;
+}
+
+// ─── Scheduled tasks ──────────────────────────────────────────────────────────
+
+export function listSchedules(): Promise<{ schedules: Schedule[] }> {
+  return request('/api/schedules');
+}
+
+/** The next few times a cron expression fires, or why it is not valid. A bad expression is a normal answer, not an error. */
+export function previewSchedule(cron: string, timezone: string): Promise<SchedulePreview> {
+  return request(`/api/schedules/preview?${new URLSearchParams({ cron, timezone })}`);
+}
+
+export function createSchedule(input: ScheduleInput): Promise<Schedule> {
+  return request('/api/schedules', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function updateSchedule(id: string, patch: Partial<ScheduleInput>): Promise<Schedule> {
+  return request(`/api/schedules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+export function deleteSchedule(id: string): Promise<{ ok: true }> {
+  return request(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function runScheduleNow(id: string): Promise<{ ok: true }> {
+  return request(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' });
+}
+
+export function listScheduleRuns(id: string): Promise<{ runs: ScheduleRun[] }> {
+  return request(`/api/schedules/${encodeURIComponent(id)}/runs?limit=20`);
 }

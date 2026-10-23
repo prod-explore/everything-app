@@ -16,6 +16,7 @@ const SettingsModal = lazy(() => import('./components/settings/SettingsModal').t
 const BrowserPanel = lazy(() => import('./components/browser/BrowserPanel').then(m => ({ default: m.BrowserPanel })));
 import { useConversations } from './hooks/useConversations';
 import { GazetaContext, useGazetaStore } from './hooks/useGazeta';
+const SchedulesView = lazy(() => import('./components/schedules/SchedulesView').then(m => ({ default: m.SchedulesView })));
 const AgentsPanel = lazy(() => import('./components/agents/AgentsPanel').then(m => ({ default: m.AgentsPanel })));
 const ExplorerPanel = lazy(() => import('./components/workspace/ExplorerPanel').then(m => ({ default: m.ExplorerPanel })));
 const GitPanel = lazy(() => import('./components/git/GitPanel').then(m => ({ default: m.GitPanel })));
@@ -84,6 +85,9 @@ function MainApp() {
   const [budgetWarning, setBudgetWarning] = useState<BudgetWarning | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [gazetaOpen, setGazetaOpen] = useState(false);
+  const [schedulesOpen, setSchedulesOpen] = useState(false);
+  // Bumped on the server's 'schedule:changed' so an open Scheduled tasks window re-reads at once.
+  const [schedulesRefresh, setSchedulesRefresh] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('models');
   const openSettings = useCallback((tab: SettingsTab = 'models') => { setSettingsTab(tab); setSettingsOpen(true); }, []);
@@ -240,6 +244,7 @@ function MainApp() {
     if (event === 'provider:retry') setProviderRetry(data as ProviderRetry);
     if (event === 'turn:done') setProviderRetry(null);
     if (event === 'pins:changed') setPinsRefresh(r => r + 1);
+    if (event === 'schedule:changed') setSchedulesRefresh(r => r + 1);
   });
 
   useEffect(() => {
@@ -288,20 +293,21 @@ function MainApp() {
         if (searchOpen) setSearchOpen(false);
         else if (settingsOpen) setSettingsOpen(false);
         else if (gazetaOpen) setGazetaOpen(false);
+        else if (schedulesOpen) setSchedulesOpen(false);
         else if (browserPanelOpen) setBrowserPanelOpen(false);
         else if (sidebarOpen) setSidebarOpen(false);
         return;
       }
       if (e.key === '/' && !mod) {
         const tag = document.activeElement?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || searchOpen || settingsOpen || gazetaOpen) return;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || searchOpen || settingsOpen || gazetaOpen || schedulesOpen) return;
         e.preventDefault();
         document.getElementById('composer-input')?.focus();
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [createConversation, searchOpen, settingsOpen, gazetaOpen, sidebarOpen, browserPanelOpen]);
+  }, [createConversation, searchOpen, settingsOpen, gazetaOpen, schedulesOpen, sidebarOpen, browserPanelOpen]);
 
   function openProjectsView() {
     setSidebarView('projects');
@@ -351,6 +357,7 @@ function MainApp() {
       onSelectProject={handleSelectProject}
       onEditProject={setEditProjectId}
       onOpenGazeta={() => setGazetaOpen(true)}
+      onOpenSchedules={() => setSchedulesOpen(true)}
       onOpenSettings={() => setSettingsOpen(true)}
       gazetaCount={gazeta.pending.length}
       gazetaUrgent={gazeta.urgentCount}
@@ -466,7 +473,10 @@ function MainApp() {
       {gazetaOpen && (
         <GazetaView onClose={() => setGazetaOpen(false)} onOpenConversation={id => setSelectedId(id)} projects={projects} />
       )}
-      <ApprovalBanner pending={approvals.pending} respond={approvals.respond} active={gazetaOpen || settingsOpen} />
+      {schedulesOpen && (
+        <SchedulesView onClose={() => setSchedulesOpen(false)} onOpenConversation={id => setSelectedId(id)} projects={projects} refreshKey={schedulesRefresh} />
+      )}
+      <ApprovalBanner pending={approvals.pending} respond={approvals.respond} active={gazetaOpen || settingsOpen || schedulesOpen} />
       {settingsOpen && <SettingsModal key={settingsTab} initialTab={settingsTab} onClose={() => setSettingsOpen(false)} conversationId={selectedId ?? undefined} />}
       </Suspense>
       {searchOpen && (

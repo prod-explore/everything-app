@@ -316,6 +316,41 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 2,
+    name: 'scheduled agent tasks: schedules and their runs',
+    up: db => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS schedules (
+          id          TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+          name        TEXT NOT NULL,
+          prompt      TEXT NOT NULL,
+          cron        TEXT NOT NULL,
+          timezone    TEXT NOT NULL DEFAULT 'UTC',
+          model       TEXT,
+          project_id  TEXT REFERENCES projects(id) ON DELETE SET NULL,
+          allow_paid  INTEGER NOT NULL DEFAULT 0,
+          enabled     INTEGER NOT NULL DEFAULT 1,
+          next_run_at TEXT,
+          last_run_at TEXT,
+          created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
+        CREATE TABLE IF NOT EXISTS schedule_runs (
+          id              TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+          schedule_id     TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+          conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+          trigger         TEXT NOT NULL,
+          status          TEXT NOT NULL,
+          started_at      TEXT NOT NULL,
+          finished_at     TEXT,
+          summary         TEXT,
+          error           TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_schedule_runs_sched ON schedule_runs(schedule_id, started_at);
+      `);
+    },
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.id;
