@@ -6,6 +6,7 @@ import { drainEvents } from '../browserContext.js';
 import { observePage } from '../observe.js';
 import { observationResult, UNTRUSTED_CONTENT_NOTICE } from './formatObservation.js';
 import { applyCallPolicy, checkTargetUrl, hiddenPolicyArgs, withDownloadPermission } from './policyArgs.js';
+import { tabNote } from './tabNote.js';
 import { fail } from './types.js';
 
 const ACTIONS = ['click', 'type', 'select', 'press', 'navigate'] as const;
@@ -61,7 +62,9 @@ export function registerBrowserAct(server: McpServer, config: PlaywrightConfig, 
       if (invalid) return fail(invalid);
 
       pool.touch(convId);
-      const { page, state } = session;
+      const { state } = session;
+      let page = session.page;
+      const tabsBefore = new Set(session.tabs.all().map(t => t.id));
       applyCallPolicy(config, state, _policy);
 
       try {
@@ -102,12 +105,22 @@ export function registerBrowserAct(server: McpServer, config: PlaywrightConfig, 
           // Best-effort settle — SPAs that never go network-idle shouldn't fail the action.
           await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
 
+          // A click that opened a new window (target=_blank, window.open) leaves the person looking at the new page in a
+          // normal browser; do the same, and say so, instead of observing the page that merely stayed behind.
+          const notes = [`(performed: ${action} on ${JSON.stringify(label)}${value ? ` = ${JSON.stringify(value)}` : ''})`];
+          const opened = session.tabs.all().filter(t => !tabsBefore.has(t.id));
+          const newest = opened[opened.length - 1];
+          if (newest) {
+            session.tabs.activate(newest.id);
+            page = newest.page;
+            await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+            await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+            pool.setCurrentUrl(convId, page.url());
+            notes.push(`(this action opened a new tab [${newest.id}] and it is now the active tab; the page you acted on is still open — browser_tabs switches back)`);
+          }
+
           const obs = await observePage(page, config, state.policy.js);
-          return observationResult(
-            obs,
-            [`(performed: ${action} on ${JSON.stringify(label)}${value ? ` = ${JSON.stringify(value)}` : ''})`],
-            drainEvents(state),
-          );
+          return observationResult(obs, [...notes, tabNote(session)], drainEvents(state));
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

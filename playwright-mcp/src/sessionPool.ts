@@ -1,6 +1,7 @@
 import type { BrowserContext, Page } from 'playwright';
 import type { UrlGuard } from './urlSafety.js';
-import { launchHardenedContext, newSessionState, type SessionState } from './browserContext.js';
+import { launchHardenedContext, newSessionState, pushEvent, type SessionState } from './browserContext.js';
+import { TabLimitError, TabSet, type Tab } from './tabs.js';
 import type { EffectivePolicy, PolicyOverride } from './policy.js';
 
 /**
@@ -18,7 +19,12 @@ import type { EffectivePolicy, PolicyOverride } from './policy.js';
 export interface SessionHandle {
   readonly id: string; // = conversationId — one session per conversation, sticky
   readonly context: BrowserContext;
+  /** The page the agent and the person are looking at: the active tab. */
   readonly page: Page;
+  /** Every open page of this session; the active one is `page`. */
+  readonly tabs: TabSet;
+  /** The live-view panel's size, applied to every page (also those opened later). */
+  viewport: { width: number; height: number } | null;
   readonly createdAt: Date;
   lastActivityAt: Date;
   currentUrl: string | null;
@@ -64,6 +70,8 @@ export interface SessionPoolOptions {
   maxSessions: number;
   idleTimeoutMs: number;
   watchdogIntervalMs: number;
+  /** Most tabs one session may hold (default 6). */
+  maxTabs?: number;
   /** Overridable in tests so no real browser is ever launched there. */
   makeLauncher: (sessionId: string) => ContextLauncher;
 }
@@ -99,15 +107,29 @@ export class BrowserSessionPool {
     const launcher = this.opts.makeLauncher(conversationId);
     const state = newSessionState(opts.policy, opts.override);
     const { context, page } = await launcher.launch(state);
+    const tabs = new TabSet({
+      max: this.opts.maxTabs ?? 6,
+      notify: message => pushEvent(state, message),
+      openBlank: () => context.newPage(),
+    });
     const handle: SessionHandle = {
       state,
       id: conversationId,
       context,
-      page,
+      get page() {
+        return tabs.active().page;
+      },
+      tabs,
+      viewport: null,
       createdAt: new Date(),
       lastActivityAt: new Date(),
       currentUrl: null,
     };
+    tabs.add(page);
+    // Pages the session opens later (window.open, target=_blank, a tab the person or the agent opens) join the set.
+    context.on('page', p => {
+      if (tabs.add(p) && handle.viewport) void p.setViewportSize(handle.viewport).catch(() => {});
+    });
     this.sessions.set(conversationId, handle);
     this.ensureWatchdog();
     console.log(`[sessionPool] opened session ${conversationId.slice(0, 8)} (${this.sessions.size}/${this.opts.maxSessions})`);
@@ -132,6 +154,7 @@ export class BrowserSessionPool {
     const s = this.sessions.get(conversationId);
     if (!s) return false;
     this.sessions.delete(conversationId);
+    s.tabs.markClosing();
     console.log(`[sessionPool] closing session ${conversationId.slice(0, 8)} — ${reason}`);
     try {
       await s.context.close();
@@ -144,7 +167,7 @@ export class BrowserSessionPool {
   status(): {
     total: number;
     max: number;
-    sessions: Array<{ id: string; url: string | null; idleSinceMs: number }>;
+    sessions: Array<{ id: string; url: string | null; tabs: number; idleSinceMs: number }>;
   } {
     const now = Date.now();
     return {
@@ -153,6 +176,7 @@ export class BrowserSessionPool {
       sessions: [...this.sessions.values()].map(s => ({
         id: s.id,
         url: s.currentUrl,
+        tabs: s.tabs.size,
         idleSinceMs: now - s.lastActivityAt.getTime(),
       })),
     };
@@ -185,4 +209,19 @@ export class BrowserSessionPool {
     if (this.watchdogHandle) clearInterval(this.watchdogHandle);
     this.watchdogHandle = null;
   }
+}
+
+/**
+ * Opens a blank page in the session, makes it the active tab and returns it. Refuses beyond the tab limit with a
+ * message the agent (or the person) can act on, instead of letting the browser pile up pages on a small machine.
+ */
+export async function openTab(session: SessionHandle): Promise<Tab> {
+  if (!session.tabs.hasRoom()) throw new TabLimitError(session.tabs.max);
+  const page = await session.context.newPage();
+  // The context announces the page too; add() is idempotent, so whichever comes first registers it.
+  const tab = session.tabs.add(page);
+  if (!tab) throw new TabLimitError(session.tabs.max);
+  if (session.viewport) await page.setViewportSize(session.viewport).catch(() => {});
+  session.tabs.activate(tab.id);
+  return tab;
 }

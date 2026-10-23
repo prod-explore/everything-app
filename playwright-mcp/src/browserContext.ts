@@ -32,7 +32,7 @@ export function drainEvents(state: SessionState): string[] {
 }
 
 const MAX_EVENTS = 50;
-function pushEvent(state: SessionState, ev: string): void {
+export function pushEvent(state: SessionState, ev: string): void {
   if (state.events.includes(ev)) return;
   state.events.push(ev);
   if (state.events.length > MAX_EVENTS) state.events.shift();

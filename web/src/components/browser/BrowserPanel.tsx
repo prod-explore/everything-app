@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Monitor, Hand, X, Loader, Globe, Power } from 'lucide-react';
+import { Monitor, Hand, X, Loader, Globe, Power, Plus } from 'lucide-react';
+import { tabLabel, type TabInfo } from '../../lib/browserTabs';
 
 /**
  * §6b Chunk B: Live-view panel for an active browser session.
@@ -17,6 +18,10 @@ import { Monitor, Hand, X, Loader, Globe, Power } from 'lucide-react';
  * With no session the panel offers "Open browser" (optionally with a start URL), so a human can
  * start one without asking the agent to call browser_open.
  *
+ * Tabs: the session can hold several tabs (the agent opens them with browser_open + new_tab, or a link opens a window).
+ * A strip under the toolbar lists them; the active one is what the frames show and what the agent works on. Picking a tab,
+ * closing one or opening a new one is a view action, so it works without taking control.
+ *
  * Layout: the panel reports its size to the browser (`viewport` message), so the page is rendered at exactly the panel's
  * shape and the frame has no black bars; object-contain is only the fallback while a resize is in flight. When the browser
  * is the only panel in the dock it takes the full height; otherwise it has a drag-resizable height.
@@ -31,6 +36,7 @@ interface Status {
   session: boolean;
   url?: string;
   takeover?: boolean;
+  tabs?: TabInfo[];
 }
 
 const HEIGHT_KEY = 'browserPanelHeight';
@@ -90,6 +96,9 @@ export function BrowserPanel({
   const [startUrl, setStartUrl] = useState('');
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
+  const [tabError, setTabError] = useState<string | null>(null);
+  const [newTabOpen, setNewTabOpen] = useState(false);
+  const [newTabUrl, setNewTabUrl] = useState('');
   const prevBlobUrl = useRef<string | null>(null);
   // Keyboard + mouse events when takeover is active
   const sendEvent = useCallback((msg: object) => {
@@ -139,6 +148,7 @@ export function BrowserPanel({
           if (data.type === 'error') {
             setOpening(false);
             setOpenError(data.message ?? 'Could not open the browser.');
+            setTabError(data.message ?? 'Could not open the tab.');
             return;
           }
           setStatus(data);
@@ -168,6 +178,20 @@ export function BrowserPanel({
   useEffect(() => {
     sendEvent({ type: 'takeover', active: takeover });
   }, [takeover, sendEvent]);
+
+  // An error from the tab strip (the tab limit, a blocked address) is shown briefly, then goes away.
+  useEffect(() => {
+    if (!tabError) return;
+    const timer = setTimeout(() => setTabError(null), 6000);
+    return () => clearTimeout(timer);
+  }, [tabError]);
+
+  function openNewTab() {
+    setTabError(null);
+    sendEvent({ type: 'tab', action: 'new', url: newTabUrl.trim() || undefined });
+    setNewTabUrl('');
+    setNewTabOpen(false);
+  }
 
   function openBrowser() {
     if (opening) return;
@@ -289,6 +313,67 @@ export function BrowserPanel({
           <X size={14} />
         </button>
       </div>
+
+      {/* Tabs */}
+      {connected && status.session && status.tabs && status.tabs.length > 0 && (
+        <div className="shrink-0 border-b border-border bg-bg-secondary">
+          <div role="tablist" aria-label="Browser tabs" className="flex items-center gap-1 overflow-x-auto px-2 py-1">
+            {status.tabs.map(tab => {
+              const label = tabLabel(tab);
+              return (
+                <div
+                  key={tab.id}
+                  className={`flex min-w-0 max-w-[11rem] shrink-0 items-center rounded-button border text-xs ${
+                    tab.active ? 'border-border-hover bg-bg text-fg' : 'border-transparent text-fg-tertiary hover:text-fg-secondary'
+                  }`}
+                >
+                  <button
+                    role="tab"
+                    aria-selected={tab.active}
+                    title={tab.url || label}
+                    onClick={() => { if (!tab.active) sendEvent({ type: 'tab', action: 'switch', id: tab.id }); }}
+                    className="min-w-0 flex-1 truncate px-2 py-0.5 text-left"
+                  >
+                    {label}
+                  </button>
+                  {status.tabs!.length > 1 && (
+                    <button
+                      aria-label={`Close tab ${label}`}
+                      title="Close tab"
+                      onClick={() => sendEvent({ type: 'tab', action: 'close', id: tab.id })}
+                      className="shrink-0 px-1 py-0.5 text-fg-tertiary hover:text-danger"
+                    >
+                      <X size={10} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            <button
+              aria-label="New tab"
+              title="Open a new tab"
+              onClick={() => setNewTabOpen(o => !o)}
+              className="shrink-0 rounded-button border border-transparent px-1.5 py-0.5 text-fg-tertiary hover:text-fg-secondary"
+            >
+              <Plus size={12} />
+            </button>
+          </div>
+          {newTabOpen && (
+            <form className="flex items-center gap-2 px-2 pb-1.5" onSubmit={e => { e.preventDefault(); openNewTab(); }}>
+              <input
+                autoFocus
+                value={newTabUrl}
+                onChange={e => setNewTabUrl(e.target.value)}
+                placeholder="Address (optional), e.g. example.com"
+                aria-label="New tab address"
+                className="min-w-0 flex-1 rounded border border-border bg-bg px-2 py-1 text-xs text-fg outline-none focus:border-border-hover"
+              />
+              <button type="submit" className="shrink-0 rounded-button bg-fg px-2 py-1 text-xs font-medium text-bg">Open</button>
+            </form>
+          )}
+          {tabError && <p role="alert" className="px-2 pb-1.5 text-xs text-danger">{tabError}</p>}
+        </div>
+      )}
 
       {/* Live view */}
       <div ref={frameBoxRef} className="relative min-h-0 flex-1 bg-black">

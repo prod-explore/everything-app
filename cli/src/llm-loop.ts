@@ -165,12 +165,12 @@ const DENIED_MESSAGE = 'Rejected by user (approval gate) — not executed.';
  * namespacing).
  */
 /** Browser tools: per chat; they get the orchestrator's `_policy`, model-supplied hidden args are stripped. */
-const BROWSER_TOOL_NAMES = new Set(['browser_open', 'browser_observe', 'browser_act', 'browser_close']);
+const BROWSER_TOOL_NAMES = new Set(['browser_open', 'browser_observe', 'browser_act', 'browser_tabs', 'browser_close']);
 /** The subset that lives in the project-scoped sandbox. */
 const SANDBOX_TOOL_NAMES = new Set(['run_bash', 'git_op', 'read_log', 'terminal_list', 'terminal_close']);
 const STATEFUL_TOOL_NAMES = new Set([...SANDBOX_TOOL_NAMES, ...BROWSER_TOOL_NAMES]);
 /** Read-only tools that stay unprompted even after a page looked like a prompt injection. */
-const READ_ONLY_AFTER_INJECTION = new Set(['browser_observe', 'browser_close', 'read_log', 'terminal_list', 'read_file']);
+const READ_ONLY_AFTER_INJECTION = new Set(['browser_observe', 'browser_tabs', 'browser_close', 'read_log', 'terminal_list', 'read_file']);
 /** Results of these virtual tools carry the same `[browser-meta]` first line as browser observations. */
 const WEB_VIRTUAL_TOOLS = new Set(['web_fetch', 'web_search']);
 const IRREVERSIBLE_WARNING = 'This browser action looks irreversible (payment, deletion, subscription…). Check that it is what you asked for.';

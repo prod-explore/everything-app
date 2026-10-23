@@ -28,7 +28,7 @@ async function browserRegistry(calls: Call[], autoApprove: string[], replies: Re
   const conn: McpConnectionLike = {
     name: 'playwright',
     async listTools() {
-      return ['browser_open', 'browser_observe', 'browser_act', 'browser_close'].map(n => ({ name: n, description: n, inputSchema: { type: 'object' } }));
+      return ['browser_open', 'browser_observe', 'browser_act', 'browser_tabs', 'browser_close'].map(n => ({ name: n, description: n, inputSchema: { type: 'object' } }));
     },
     async callTool(tool, args) {
       calls.push({ tool, args: args ?? {} });

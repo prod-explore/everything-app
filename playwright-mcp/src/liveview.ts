@@ -1,9 +1,10 @@
 import * as http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { BrowserSessionPool } from './sessionPool.js';
+import type { BrowserSessionPool, SessionHandle } from './sessionPool.js';
 import type { PlaywrightConfig } from './config.js';
 import { checkTargetUrl, effectivePolicy } from './tools/policyArgs.js';
+import { openTab } from './sessionPool.js';
 
 /**
  * §6b Live-view + human takeover.
@@ -49,6 +50,8 @@ type ClientMsg =
   | { type: 'open'; url?: string }
   | { type: 'takeover'; active: boolean }
   | { type: 'close' }
+  | { type: 'tab'; action: 'switch' | 'close'; id: number }
+  | { type: 'tab'; action: 'new'; url?: string }
   | { type: 'viewport'; width: number; height: number }
   | { type: 'mouse'; action: 'move' | 'down' | 'up'; x: number; y: number; button?: 'left' | 'right' | 'middle' }
   | { type: 'keyboard'; action: 'down' | 'up' | 'press'; key: string }
@@ -161,6 +164,7 @@ function startFraming(client: SessionClient, pool: BrowserSessionPool, _config: 
           session: true,
           url: session.currentUrl,
           takeover: client.takeover,
+          tabs: tabsOf(session),
         }),
       );
     } catch {
@@ -168,6 +172,12 @@ function startFraming(client: SessionClient, pool: BrowserSessionPool, _config: 
     }
   }, FRAME_INTERVAL_MS);
   client.frameTimer.unref?.();
+}
+
+/** The session's tabs for the panel's tab strip; the active one is what the frames show. */
+export function tabsOf(session: Pick<SessionHandle, 'tabs'>): Array<{ id: number; url: string; title: string; active: boolean }> {
+  const activeId = session.tabs.active().id;
+  return session.tabs.all().map(t => ({ id: t.id, url: t.page.url(), title: t.title, active: t.id === activeId }));
 }
 
 function stopFraming(client: SessionClient): void {
@@ -196,7 +206,7 @@ export function normalizeUrl(raw: string): string | null {
  * call browser_open first. Uses the same domain/SSRF checks as the tool (env policy; an existing
  * session keeps its own override). An empty URL just opens a blank tab the human can take over.
  */
-async function openSession(client: SessionClient, rawUrl: unknown, pool: BrowserSessionPool, config: PlaywrightConfig): Promise<void> {
+async function openSession(client: SessionClient, rawUrl: unknown, pool: BrowserSessionPool, config: PlaywrightConfig, newTab = false): Promise<void> {
   let target: string | null = null;
   if (typeof rawUrl === 'string' && rawUrl.trim()) {
     target = normalizeUrl(rawUrl.trim());
@@ -215,7 +225,8 @@ async function openSession(client: SessionClient, rawUrl: unknown, pool: Browser
         return;
       }
     }
-    const { session } = await pool.claim(client.convId, { policy });
+    const { session, isNew } = await pool.claim(client.convId, { policy });
+    if (newTab && !isNew) await openTab(session);
     if (target) {
       session.page.setDefaultTimeout(config.navTimeoutMs);
       await session.page.goto(target, { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
@@ -247,6 +258,13 @@ async function handleClientMessage(
     return;
   }
 
+  // Tabs: the person picks, closes or opens one from the panel's tab strip. Like 'viewport' this is about what is shown,
+  // not about driving the page, so it does not need takeover.
+  if (msg.type === 'tab') {
+    await handleTabMessage(client, msg, pool, config);
+    return;
+  }
+
   // The person ends the session (the agent's browser_close does the same): the tab, its pages and its profile go away.
   if (msg.type === 'close') {
     client.takeover = false;
@@ -261,10 +279,13 @@ async function handleClientMessage(
     const width = Math.round(Number(msg.width));
     const height = Math.round(Number(msg.height));
     if (!Number.isFinite(width) || !Number.isFinite(height)) return;
-    await session.page.setViewportSize({
+    const viewport = {
       width: Math.min(Math.max(width, MIN_VIEWPORT.width), MAX_VIEWPORT.width),
       height: Math.min(Math.max(height, MIN_VIEWPORT.height), MAX_VIEWPORT.height),
-    });
+    };
+    // Every tab gets the panel's shape (and later tabs too), so switching never shows a letterboxed page.
+    session.viewport = viewport;
+    await Promise.all(session.tabs.all().map(t => t.page.setViewportSize(viewport).catch(() => {})));
     return;
   }
 
@@ -300,6 +321,41 @@ async function handleClientMessage(
       pool.touch(client.convId);
       break;
     }
+  }
+}
+
+async function handleTabMessage(
+  client: SessionClient,
+  msg: Extract<ClientMsg, { type: 'tab' }>,
+  pool: BrowserSessionPool,
+  config: PlaywrightConfig,
+): Promise<void> {
+  if (msg.action === 'new') {
+    let p = opening.get(client.convId);
+    if (!p) {
+      p = openSession(client, msg.url, pool, config, true).finally(() => opening.delete(client.convId));
+      opening.set(client.convId, p);
+    }
+    await p;
+    return;
+  }
+  const session = pool.get(client.convId);
+  if (!session) return;
+  const id = Math.trunc(Number(msg.id));
+  const tab = Number.isFinite(id) ? session.tabs.get(id) : undefined;
+  if (!tab) return;
+  if (msg.action === 'switch') {
+    session.tabs.activate(tab.id);
+    await tab.page.bringToFront().catch(() => {});
+    pool.setCurrentUrl(client.convId, tab.page.url());
+    pool.touch(client.convId);
+    return;
+  }
+  // close: the last tab stays (ending the whole session is the "Close browser" button).
+  if (session.tabs.size > 1) {
+    await tab.page.close().catch(() => {});
+    pool.setCurrentUrl(client.convId, session.page.url());
+    pool.touch(client.convId);
   }
 }
 

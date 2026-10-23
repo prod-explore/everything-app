@@ -71,6 +71,8 @@ export function toolLabel(toolName: string, args: Args, running: boolean): ToolL
     case 'browser_screenshot':
     case 'browser_recording':
       return { icon: Camera, label: r('Took a screenshot', 'Taking a screenshot') };
+    case 'browser_tabs':
+      return { icon: Globe, label: r('Managed browser tabs', 'Managing browser tabs'), detail: clip(str(args, 'action')) };
     case 'browser_close':
       return { icon: Globe, label: r('Closed the browser', 'Closing the browser') };
     case 'web_fetch':

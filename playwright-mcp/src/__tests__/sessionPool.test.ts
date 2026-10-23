@@ -8,11 +8,12 @@ function fakeLauncher(closes: string[], id: string): ContextLauncher {
   return {
     async launch() {
       const context = {
+        on: () => {},
         close: async () => {
           closes.push(id);
         },
       } as unknown as BrowserContext;
-      const page = {} as unknown as Page;
+      const page = { on: () => {} } as unknown as Page;
       return { context, page };
     },
   };

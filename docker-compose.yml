@@ -123,8 +123,9 @@ services:
       MCP_PORT: 3003
       MCP_API_KEY: ${PLAYWRIGHT_MCP_API_KEY:?PLAYWRIGHT_MCP_API_KEY is required}
       NAV_TIMEOUT_MS: ${NAV_TIMEOUT_MS:-30000}
-      # §6b: browser-agent sessions (browser_open/observe/act/close).
+      # §6b: browser-agent sessions (browser_open/observe/act/tabs/close).
       PLAYWRIGHT_MAX_SESSIONS: ${PLAYWRIGHT_MAX_SESSIONS:-4}
+      PLAYWRIGHT_MAX_TABS: ${PLAYWRIGHT_MAX_TABS:-6}
       PLAYWRIGHT_SESSION_IDLE_TIMEOUT_MS: ${PLAYWRIGHT_SESSION_IDLE_TIMEOUT_MS:-1800000}
       PLAYWRIGHT_WATCHDOG_INTERVAL_MS: ${PLAYWRIGHT_WATCHDOG_INTERVAL_MS:-120000}
       # SSRF guard: the browser may only reach the PUBLIC internet. Comma-separated private

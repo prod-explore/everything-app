@@ -6,6 +6,7 @@ export function testConfig(overrides: Partial<PlaywrightConfig> = {}): Playwrigh
     apiKey: 'test-key',
     navTimeoutMs: 30000,
     maxSessions: 4,
+    maxTabs: 6,
     sessionIdleTimeoutMs: 1800000,
     watchdogIntervalMs: 120000,
     allowPrivateHosts: [],

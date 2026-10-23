@@ -7,6 +7,9 @@ import { normalizeHost } from '../policy.js';
 import { observePage } from '../observe.js';
 import { observationResult, UNTRUSTED_CONTENT_NOTICE } from './formatObservation.js';
 import { applyCallPolicy, checkTargetUrl, effectivePolicy, hiddenPolicyArgs, withDownloadPermission } from './policyArgs.js';
+import { openTab } from '../sessionPool.js';
+import type { Tab } from '../tabs.js';
+import { tabNote } from './tabNote.js';
 import { fail } from './types.js';
 
 /** The normalized host of `url` when it is exactly the host the orchestrator says the user approved. */
@@ -26,6 +29,8 @@ export function registerBrowserOpen(server: McpServer, config: PlaywrightConfig,
     'Open (or reuse) this conversation\'s browser session and navigate to a URL. ' +
       'The session STAYS OPEN across calls — use browser_act to click/type/' +
       'select on the page afterward, and browser_close when you\'re done with it. ' +
+      'The page opens in the current tab; with new_tab: true it opens in a new tab and the other tabs stay as they ' +
+      'were (switch between them with browser_tabs). ' +
       'The browser profile is ephemeral: no saved logins or cookies from earlier sessions; if a site ' +
       'needs a login, ask the user to log in via the live view. The user approves each website ' +
       '(domain) the first time you open it; a link or redirect to a DIFFERENT domain is blocked until you browser_open that URL, ' +
@@ -35,6 +40,10 @@ export function registerBrowserOpen(server: McpServer, config: PlaywrightConfig,
       UNTRUSTED_CONTENT_NOTICE,
     {
       url: z.string().url().describe('The URL to navigate to. Must be http or https.'),
+      new_tab: z
+        .boolean()
+        .optional()
+        .describe('Open the URL in a NEW tab (which becomes the active one) instead of replacing the current page, so the page you were on stays open. Default false.'),
       _conversation_id: z
         .string()
         .optional()
@@ -45,7 +54,7 @@ export function registerBrowserOpen(server: McpServer, config: PlaywrightConfig,
         .optional()
         .describe('Internal: the host the user just approved for this browser session. Set by the orchestrator, never by the model.'),
     },
-    async ({ url, _conversation_id, _policy, _allow_downloads, _approved_host }) => {
+    async ({ url, new_tab, _conversation_id, _policy, _allow_downloads, _approved_host }) => {
       const convId = _conversation_id ?? 'default';
       const existing = pool.get(convId);
       const override = _policy ?? existing?.state.override;
@@ -73,17 +82,28 @@ export function registerBrowserOpen(server: McpServer, config: PlaywrightConfig,
         );
 
         return await withDownloadPermission(session.state, _allow_downloads, async () => {
+          let createdTab: Tab | null = null;
+          if (new_tab && !isNew) {
+            try {
+              createdTab = await openTab(session);
+              notes.push(`(opened in a new tab [${createdTab.id}])`);
+            } catch (err) {
+              return fail(`browser_open error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
           session.page.setDefaultTimeout(config.navTimeoutMs);
           try {
             await session.page.goto(url, { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
           } catch (err) {
+            // A tab that never got its page would only sit there empty.
+            if (createdTab && session.tabs.size > 1) await createdTab.page.close().catch(() => {});
             const events = drainEvents(session.state);
             const message = err instanceof Error ? err.message : String(err);
             return fail(`browser_open error: ${message}${events.length ? `\n${events.map(e => `- ${e}`).join('\n')}` : ''}`);
           }
           pool.setCurrentUrl(convId, session.page.url());
           const obs = await observePage(session.page, config, session.state.policy.js);
-          return observationResult(obs, notes, drainEvents(session.state));
+          return observationResult(obs, [...notes, tabNote(session)], drainEvents(session.state));
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

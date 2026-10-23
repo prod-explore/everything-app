@@ -7,9 +7,11 @@ export interface PlaywrightConfig {
   apiKey: string;
   /** Request timeout for Playwright navigation in ms. Default 30000. */
   navTimeoutMs: number;
-  /** Max concurrent browser sessions (tabs). Sessions beyond this are refused until an
+  /** Max concurrent browser sessions (one per conversation). Sessions beyond this are refused until an
    * idle one is reclaimed. Default 4 — a Pi-sized budget, override for beefier hardware. */
   maxSessions: number;
+  /** Max tabs open in one session (PLAYWRIGHT_MAX_TABS, default 6): pages a site opens beyond it are closed again. */
+  maxTabs: number;
   /** Milliseconds a session may sit idle before the watchdog closes it. Default 30 min,
    * matching the sandbox's SANDBOX_IDLE_TIMEOUT_MS. */
   sessionIdleTimeoutMs: number;
@@ -52,6 +54,7 @@ export function loadConfig(): PlaywrightConfig {
     apiKey,
     navTimeoutMs: parseInt(process.env['NAV_TIMEOUT_MS'] ?? '30000', 10),
     maxSessions: parseInt(process.env['PLAYWRIGHT_MAX_SESSIONS'] ?? '4', 10),
+    maxTabs: Math.max(1, parseInt(process.env['PLAYWRIGHT_MAX_TABS'] ?? '6', 10) || 6),
     sessionIdleTimeoutMs: parseInt(process.env['PLAYWRIGHT_SESSION_IDLE_TIMEOUT_MS'] ?? '1800000', 10),
     watchdogIntervalMs: parseInt(process.env['PLAYWRIGHT_WATCHDOG_INTERVAL_MS'] ?? '120000', 10),
     allowPrivateHosts: (process.env['BROWSER_ALLOW_PRIVATE_HOSTS'] ?? '').split(',').map(h => h.trim()).filter(Boolean),

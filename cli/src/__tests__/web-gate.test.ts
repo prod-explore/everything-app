@@ -28,7 +28,7 @@ async function browserRegistry(calls: Call[], autoApprove: string[], replies: Re
   const conn: McpConnectionLike = {
     name: 'playwright',
     async listTools() {
-      return ['browser_open', 'browser_observe', 'browser_act', 'browser_close'].map(n => ({ name: n, description: n, inputSchema: { type: 'object' } }));
+      return ['browser_open', 'browser_observe', 'browser_act', 'browser_tabs', 'browser_close'].map(n => ({ name: n, description: n, inputSchema: { type: 'object' } }));
     },
     async callTool(tool, args) {
       calls.push({ tool, args: args ?? {} });
@@ -168,6 +168,37 @@ describe('browser — approval per domain', () => {
     assert.deepEqual(calls.map(c => c.tool), ['browser_act', 'browser_close']);
   });
 
+  it('a new tab is still a page open: browser_open with new_tab asks for an unapproved domain like any other', async () => {
+    const calls: Call[] = [];
+    const confirms: ConfirmCall[] = [];
+    await runTurn(deps({
+      llm: scripted([msg([use('1', 'playwright__browser_open', { url: 'https://new.example/', new_tab: true })], 'tool_use'), msg([text('ok')], 'end_turn')]),
+      tools: await browserRegistry(calls, DEFAULT_AUTO),
+      webAccess: { grantedHosts: () => [] },
+    }, confirms), [], 'go');
+    assert.deepEqual(confirms.map(c => c.label), ['web:new.example']);
+    assert.equal(calls[0]!.args['new_tab'], true);
+    assert.equal(calls[0]!.args['_approved_host'], 'new.example');
+  });
+
+  it('browser_tabs runs without prompting, is pinned to this chat and cannot carry hidden arguments', async () => {
+    const calls: Call[] = [];
+    const confirms: ConfirmCall[] = [];
+    await runTurn(deps({
+      llm: scripted([
+        msg([use('1', 'playwright__browser_tabs', { action: 'switch', tab: 2, _conversation_id: 'someone-else', _allow_downloads: true, _policy: { domainAllow: ['*'] } })], 'tool_use'),
+        msg([text('ok')], 'end_turn'),
+      ]),
+      tools: await browserRegistry(calls, DEFAULT_AUTO),
+      browserPolicy: { domainDeny: ['bad.example'] },
+      webAccess: { grantedHosts: () => ['ok.example'] },
+    }, confirms), [], 'go');
+    assert.equal(confirms.length, 0);
+    assert.equal(calls[0]!.args['_conversation_id'], 'conv-1');
+    assert.equal('_allow_downloads' in calls[0]!.args, false);
+    assert.deepEqual(calls[0]!.args['_policy'], { domainDeny: ['bad.example'], domainGrant: ['ok.example'] });
+  });
+
   it('without webAccess the browser keeps the old behaviour (project policy only, generic approval)', async () => {
     const calls: Call[] = [];
     const confirms: ConfirmCall[] = [];
@@ -183,7 +214,7 @@ describe('browser — approval per domain', () => {
   });
 
   it('the default auto-approve list covers the browser tools, and no longer names browse_url', () => {
-    for (const t of ['browser_open', 'browser_observe', 'browser_act', 'browser_close']) assert.ok(DEFAULT_AUTO.includes(t), t);
+    for (const t of ['browser_open', 'browser_observe', 'browser_act', 'browser_tabs', 'browser_close']) assert.ok(DEFAULT_AUTO.includes(t), t);
     assert.equal(DEFAULT_AUTO.includes('browse_url'), false);
   });
 });
@@ -228,6 +259,22 @@ describe('prompt injection from the web', () => {
     }, confirms), [], 'go');
     assert.deepEqual(confirms.map(c => c.label.includes('browser_act')), [true]);
     assert.match(confirms[0]!.forcePrompt ?? '', /prompt injection/);
+  });
+
+  it('after a flagged page, looking at the tabs is still quiet (switching shows a page already open)', async () => {
+    const calls: Call[] = [];
+    const confirms: ConfirmCall[] = [];
+    await runTurn(deps({
+      llm: scripted([
+        msg([use('1', 'playwright__browser_observe', {})], 'tool_use'),
+        msg([use('2', 'playwright__browser_tabs', { action: 'list' })], 'tool_use'),
+        msg([text('ok')], 'end_turn'),
+      ]),
+      tools: await browserRegistry(calls, DEFAULT_AUTO, { browser_observe: FLAGGED }),
+      webAccess: { grantedHosts: () => [] },
+    }, confirms), [], 'go');
+    assert.equal(confirms.length, 0);
+    assert.deepEqual(calls.map(c => c.tool), ['browser_observe', 'browser_tabs']);
   });
 });
 

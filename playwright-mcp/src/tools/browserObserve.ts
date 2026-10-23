@@ -6,6 +6,7 @@ import { drainEvents } from '../browserContext.js';
 import { observePage } from '../observe.js';
 import { observationResult, UNTRUSTED_CONTENT_NOTICE } from './formatObservation.js';
 import { applyCallPolicy, hiddenPolicyArgs } from './policyArgs.js';
+import { tabNote } from './tabNote.js';
 import { fail } from './types.js';
 
 export function registerBrowserObserve(server: McpServer, config: PlaywrightConfig, pool: BrowserSessionPool): void {
@@ -34,7 +35,7 @@ export function registerBrowserObserve(server: McpServer, config: PlaywrightConf
         pool.touch(convId);
         applyCallPolicy(config, session.state, _policy);
         const obs = await observePage(session.page, config, session.state.policy.js);
-        return observationResult(obs, [], drainEvents(session.state));
+        return observationResult(obs, [tabNote(session)], drainEvents(session.state));
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return fail(`browser_observe error: ${message}`);
