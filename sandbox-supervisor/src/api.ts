@@ -40,7 +40,7 @@ export function createSupervisorApp(sandboxes: SandboxManager, defaultTimeoutMs 
   app.use(express.json());
 
   const ownerOf = (body: { ownerId?: unknown; conversationId?: unknown }): string | undefined => {
-    // `conversationId` is the pre-N3 name; a chat without a project is its own owner.
+    // `conversationId` is the earlier name; a chat without a project is its own owner.
     const v = body.ownerId ?? body.conversationId;
     return typeof v === 'string' && SandboxManager.validOwner(v) ? v : undefined;
   };

@@ -34,7 +34,7 @@ function label(r: RepoEntry): string {
 }
 
 /**
- * Unified Git panel (Plan v3 §7.2 + §7.3): Source Control and GitHub in one dock panel. A single repository
+ * Unified Git panel: Source Control and GitHub in one dock panel. A single repository
  * selector (sandbox checkouts first, then the connected account's recent repos) drives all six tabs:
  * Changes | History | Branches (git in the sandbox) and PRs | Issues | Actions (GitHub REST via the server).
  */

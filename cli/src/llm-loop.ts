@@ -160,8 +160,8 @@ const DENIED_MESSAGE = 'Rejected by user (approval gate) — not executed.';
 /**
  * Tools that are pinned to one conversation and need `_conversation_id`
  * injected so their MCP server can maintain a sticky per-conversation
- * lease — the sandbox's container pool (§Phase 4) and, since §6b, the
- * playwright-mcp browser session pool work the same way. Matches by the
+ * lease — the sandbox's container pool and the playwright-mcp browser
+ * session pool work the same way. Matches by the
  * real tool name portion (after the `__` separator ToolRegistry uses for
  * namespacing).
  */
@@ -315,7 +315,7 @@ async function runLoop(
 
   let steps = 0;
   // Set once a browser observation looked like a prompt injection: from then on every tool call with an
-  // effect needs a fresh human approval (grants and auto-approve don't apply) — Plan v3 §6 step 3.
+  // effect needs a fresh human approval (grants and auto-approve don't apply).
   let injectionWarning: string | null = null;
   for (;;) {
     // Kill switch check before each API call
@@ -488,7 +488,7 @@ async function runLoop(
         }
       } else {
         // Inject _conversation_id for tools that need a sticky per-conversation
-        // lease (sandbox container, or — since §6b — a browser session). The
+        // lease (a sandbox container or a browser session). The
         // model never provides this — the orchestrator owns it.
         let enrichedArgs: Record<string, unknown> =
           deps.conversationId && needsConversationId(use.name)

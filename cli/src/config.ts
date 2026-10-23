@@ -50,7 +50,7 @@ function loadAutoApproveTools(): string[] {
   if (fromEnv) {
     return fromEnv.split(',').map(t => t.trim()).filter(Boolean);
   }
-  // Default-deny on purpose, see Master Brief §7 point 5 ("whitelist, never a bare shell"): a tool that is not in this
+  // Default-deny on purpose ("whitelist, never a bare shell"): a tool that is not in this
   // list asks for a manual approval. Override via AUTO_APPROVE_TOOLS (the variable REPLACES this list).
   // Browser: opening a page is approved per DOMAIN in the orchestrator (llm-loop: Allow once / this chat / always), so
   // browser_open needs no second prompt (also with new_tab); browser_tabs only switches between pages already open; browser_act runs unprompted inside the approved domain, except actions that

@@ -7,7 +7,7 @@ import { checkTargetUrl, effectivePolicy } from './tools/policyArgs.js';
 import { openTab } from './sessionPool.js';
 
 /**
- * §6b Live-view + human takeover.
+ * Live-view + human takeover.
  *
  * Attaches a WebSocket server to the same HTTP server as the MCP Express app.
  * Each WS connection is scoped to ONE conversationId (passed as a query param).

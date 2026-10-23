@@ -30,7 +30,7 @@ function StateIcon({ status, conclusion }: { status: string; conclusion: string 
 export type GitHubTab = 'pulls' | 'issues' | 'actions';
 
 /**
- * GitHub body (Plan v3 §7.2): PRs, issues, checks and Actions for one repository, through the server.
+ * GitHub body: PRs, issues, checks and Actions for one repository, through the server.
  * Rendered as the PRs / Issues / Actions tabs of the unified Git panel (git/GitPanel.tsx), which owns the
  * repository selector, the tab bar and the "not connected" state. Remount (key) on repo or tab change.
  */

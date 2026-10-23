@@ -24,7 +24,7 @@ function EntryIcon({ e }: { e: WorkspaceEntry }) {
 }
 
 /**
- * Workspace Explorer (Plan v3 §4): the project's sandbox files, read byte-wise by the supervisor even
+ * Workspace Explorer: the project's sandbox files, read byte-wise by the supervisor even
  * while the sandbox is stopped. Preview: text/markdown/images only, everything else downloads. A text file opens read-only;
  * the pencil switches to the editor (saving needs no approval — a checkpoint is taken first).
  * Checkpoints: one per agent turn; rollback restores the workspace to that point.

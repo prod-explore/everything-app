@@ -3,7 +3,7 @@ import type { Duplex } from 'node:stream';
 import { timingSafeEqual } from 'node:crypto';
 
 /**
- * Same-origin proxy for the browser live view (audit bug #6).
+ * Same-origin proxy for the browser live view.
  *
  * The UI used to open a WebSocket straight to playwright-mcp's port, composed from a build-time
  * VITE_ env var: a second origin (blocked by the page's CSP once it is served by this app, mixed

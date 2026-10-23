@@ -7,7 +7,7 @@ import { shq, type SandboxExec } from './supervisor-client.js';
 import { getConversation, getProject, listProjectConversations, logApprovalAudit } from './db.js';
 
 /**
- * N4 — GitHub without functional limits (Plan v3 §7), orchestrator side:
+ * GitHub integration, orchestrator side:
  *   - credentials: GitHub App device flow / fine-grained PAT (github.ts), never sent to the sandbox
  *   - project ↔ repo bindings (project_repos) that git-proxy enforces
  *   - /internal/* for git-proxy: credential injection, push approval cards, audit
@@ -51,7 +51,7 @@ export interface GithubRoutesDeps {
   fetchImpl?: typeof fetch;
 }
 
-/** Push approval cards for pushes a human just clicked in Source Control are skipped (Plan v3 §7.3). */
+/** Push approval cards for pushes a human just clicked in Source Control are skipped. */
 interface ExpectedPush { projectId: string; owner: string; repo: string; until: number }
 
 export function createGithubRoutes(deps: GithubRoutesDeps) {
@@ -339,7 +339,7 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
     if (!sha) throw new Error('invalid sha');
     return { output: ok(await git(id, dir, `show --stat --patch --format=fuller ${sha}`)).slice(0, 2_000_000) };
   }));
-  // Network operations go through git-proxy; a human-initiated push skips the approval card (§7.3).
+  // Network operations go through git-proxy; a human-initiated push skips the approval card.
   scm.post('/sync', run(async (id, dir, req) => {
     const action = req.body?.action;
     if (action !== 'fetch' && action !== 'pull' && action !== 'push' && action !== 'clone') throw new Error('action must be fetch | pull | push | clone');
@@ -377,7 +377,7 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
   /**
    * Mints a short-lived proxy token for the project's bound repos and configures git INSIDE the sandbox
    * to use git-proxy for github.com (HTTPS and SSH forms). The token is opaque and useless outside the
-   * proxy; the real GitHub credential never enters the sandbox (Plan v3 invariant 2).
+   * proxy; the real GitHub credential never enters the sandbox (see ADR 0003).
    */
   async function ensureSandboxGit(projectId: string): Promise<{ wired: boolean; reason?: string }> {
     if (!adminToken) return { wired: false, reason: 'GIT_PROXY_ADMIN_TOKEN is not configured' };

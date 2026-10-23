@@ -1,5 +1,5 @@
 /**
- * §6b Chunk B — Tests: report snapshots, subagent run tracking, browser-session endpoint.
+ * Tests: report snapshots, subagent run tracking, browser-session endpoint.
  *
  * Tests use the same `buildApp()` + in-memory DB pattern as the other integration tests.
  * No real filesystem writes — EVERYTHINGAPP_ARTIFACTS_DIR is set to a temp dir that's
@@ -25,7 +25,7 @@ const fakeAnthropicClient = {
   },
 } as unknown as LlmClient;
 
-const AUTH = 'test-token-chunk-b';
+const AUTH = 'test-token-reports';
 
 function request(
   server: http.Server,
@@ -88,7 +88,7 @@ let tmpDir: string;
 let convId: string;
 
 before(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ea-chunk-b-test-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ea-reports-test-'));
   process.env['EVERYTHINGAPP_ARTIFACTS_DIR'] = tmpDir;
 
   const db = openDb(':memory:');

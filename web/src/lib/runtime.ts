@@ -196,9 +196,8 @@ export function useEverythingAppRuntime(conversationId: string | null) {
     onCancel,
     onDelete,
     adapters: {
-      // Images only in Phase 1 (see the Full Build Roadmap in the vault for
-      // generic file attachments) — this gives the composer its paperclip
-      // button, drag-and-drop, and paste-to-attach for free.
+      // Images only for now (other file types are not supported yet) — this gives
+      // the composer its paperclip button, drag-and-drop, and paste-to-attach for free.
       attachments: new SimpleImageAttachmentAdapter(),
     },
   });

@@ -160,7 +160,7 @@ export function killTurn(conversationId: string): Promise<{ ok: true }> {
 }
 
 /**
- * Edit/regenerate/retry — Phase 1's message branching. `parentId` is the id
+ * Edit/regenerate/retry — message branching. `parentId` is the id
  * of the message immediately before the one being replaced (null for the
  * very first message); server.ts figures out the rest. See lib/runtime.ts
  * for how assistant-ui's onEdit/onReload map onto these.
@@ -349,7 +349,7 @@ export function bulkDismissGazetaItems(ids: string[]): Promise<{ ok: true; dismi
   return request('/api/gazeta/bulk-dismiss', { method: 'POST', body: JSON.stringify({ ids }) });
 }
 
-// ─── Runs / Agents (N6/N7) ────────────────────────────────────────────────
+// ─── Runs / Agents ────────────────────────────────────────────────
 
 export function listConversationRuns(conversationId: string): Promise<{ runs: RunRow[] }> {
   return request(`/api/conversations/${conversationId}/runs`);
@@ -485,7 +485,7 @@ export function setSlots(patch: Partial<Record<SlotKey, string>> & { allowPaidAg
   return request('/api/slots', { method: 'PUT', body: JSON.stringify(patch) });
 }
 
-// ─── N1: Projects ─────────────────────────────────────────────────────────────
+// ─── Projects ─────────────────────────────────────────────────────────────
 
 export function listProjects(): Promise<{ projects: ProjectListItem[] }> {
   return request('/api/projects');
@@ -512,7 +512,7 @@ export function listProjectConversations(id: string): Promise<{ conversations: C
   return request(`/api/projects/${id}/conversations`);
 }
 
-// ─── N1: Approval Grants ──────────────────────────────────────────────────────
+// ─── Approval Grants ──────────────────────────────────────────────────────
 
 export function listApprovalGrants(filter?: { conversationId?: string; projectId?: string; scope?: string }): Promise<{ grants: ApprovalGrantRow[] }> {
   const params = new URLSearchParams();

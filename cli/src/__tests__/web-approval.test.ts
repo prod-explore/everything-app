@@ -177,7 +177,7 @@ describe('WebApprovalGate', () => {
   });
 });
 
-describe('looksDangerous — browser-action patterns (§6b)', () => {
+describe('looksDangerous — browser-action patterns', () => {
   const dangerousLabels = [
     'Delete Account',
     'delete my account',
@@ -226,7 +226,7 @@ describe('looksDangerous — browser-action patterns (§6b)', () => {
   });
 });
 
-describe('WebApprovalGate persistent grants (N1)', () => {
+describe('WebApprovalGate persistent grants', () => {
   it('revoking an always-grant takes effect immediately, not after a restart', async () => {
     const gate = new WebApprovalGate(freshDb());
     const first = gate.confirm('c1', 'obsidian/write_note', { path: 'a.md' });

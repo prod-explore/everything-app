@@ -4,7 +4,7 @@ import type { GithubStatus } from '../../../types-workspace';
 import { Button } from '../../shared/Button';
 
 /**
- * Connect GitHub like an IDE (Plan v3 §7): GitHub App device flow (enter a code on github.com) or a
+ * Connect GitHub like an IDE: GitHub App device flow (enter a code on github.com) or a
  * fine-grained token. The credential stays on the server — sandboxes only get short-lived proxy tokens.
  */
 export function GitHubTab() {

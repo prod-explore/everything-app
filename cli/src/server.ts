@@ -168,8 +168,8 @@ const MAX_ATTACHMENT_BASE64_LENGTH = 8_000_000;
 /**
  * Builds the content to send to the model (and to persist) from a composer
  * submission: plain text, or text + inline image attachments. Returns null
- * when there's nothing usable to send (Phase 1 — images only; other file
- * types are a follow-up, see the Full Build Roadmap in the vault).
+ * when there's nothing usable to send (images only for now; other file
+ * types are not supported yet).
  */
 function buildMessageContent(rawContent: unknown, rawAttachments: unknown): Llm.MessageParam['content'] | null {
   const text = typeof rawContent === 'string' ? rawContent : '';
@@ -410,7 +410,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
 
   const isString = (v: unknown): v is string => typeof v === 'string';
 
-  // ─── Agents-lite (N7) + durable runs (N6) ────────────────────────────────
+  // ─── Agents-lite + durable runs ────────────────────────────────
   interruptOrphanedRuns(db);
   const agents = new AgentManager({
     db, router, registry, approval: approvalGate, sse,
@@ -431,7 +431,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   /** Active root run per conversation — async Gazeta answers are delivered into it while a turn runs. */
   const activeRootRun = new Map<string, string>();
 
-  /** Project browser policy (Plan v3 §6) → playwright-mcp `_policy`; it can only tighten the operator's env policy. */
+  /** Project browser policy → playwright-mcp `_policy`; it can only tighten the operator's env policy. */
   function browserPolicyOf(projectId: string | null | undefined): { domainAllow?: string[]; domainDeny?: string[]; js?: 'disabled' | 'review' | 'allowed' } | undefined {
     const file = policyStore.get().browser;
     const raw = projectId ? getProject(db, projectId)?.policy?.['browser'] : undefined;
@@ -730,7 +730,7 @@ ${formatHumanResponse(response)}` };
     }
   });
 
-  // ─── Workspace Explorer + checkpoints (N3) ────────────────────────────────
+  // ─── Workspace Explorer + checkpoints ────────────────────────────────
   // `owner` = a project id, or a chat id for chats without a project (same rule as the sandbox tools).
   const workspaceOwner = (id: string) => (getProject(db, id) || getConversation(db, id) ? id : null);
 
@@ -1184,7 +1184,7 @@ ${formatHumanResponse(response)}` };
           if (block) effectiveSystem += '\n\n' + block;
         }
 
-        // Inject prompts from Skills attached to this conversation (Phase 2).
+        // Inject prompts from Skills attached to this conversation.
         // Each non-empty skill prompt is appended after a separator so the model
         // can distinguish skill instructions from the base system prompt.
         const attachedSkills = getConversationSkills(db, convId);
@@ -1522,11 +1522,10 @@ ${m.body}`),
   });
 
   // ─── Edit / regenerate / retry ─────────────────────────────────────────────
-  // Together these are Phase 1's message-branching feature: editing a user
+  // Together these are the message-branching feature: editing a user
   // message or regenerating/retrying an assistant reply never destroys the
   // old branch (see db.ts's is_active) — it retires it and starts a new one.
-  // There's no UI to browse retired branches yet (see the Full Build
-  // Roadmap in the vault, Phase 1 follow-up), but the data is there for it.
+  // There's no UI to browse retired branches yet, but the data is there for it.
   app.post('/api/conversations/:id/edit', (req, res) => {
     const convId = req.params.id;
     const conv = getConversation(db, convId);
@@ -1615,7 +1614,7 @@ ${m.body}`),
 
   // Full message history including retired branches — not used by the chat
   // UI yet (which only ever renders the active branch via GET .../messages),
-  // but exposed now for the branch-history UI planned as a Phase 1 follow-up.
+  // but exposed now for the branch-history UI planned as a follow-up.
   app.get('/api/conversations/:id/messages/full', (req, res) => {
     const conv = getConversation(db, req.params.id);
     if (!conv) { res.status(404).json({ error: 'conversation not found' }); return; }
@@ -1693,7 +1692,7 @@ ${m.body}`),
     res.json({ ok: true });
   });
 
-  // ─── Gazeta (N6: one inbox) ───────────────────────────────────────────────
+  // ─── Gazeta (one inbox) ───────────────────────────────────────────────
   app.get('/api/gazeta', (req, res) => {
     const q = (k: string) => (typeof req.query[k] === 'string' && req.query[k] ? (req.query[k] as string) : undefined);
     const limit = Number(q('limit') ?? 0) || undefined;
@@ -1756,7 +1755,7 @@ ${formatHumanResponse(response)}`;
     res.json({ ok: true, dismissed: n });
   });
 
-  // ─── Runs / Agents (N6/N7) ────────────────────────────────────────────────
+  // ─── Runs / Agents ────────────────────────────────────────────────
   app.get('/api/conversations/:id/runs', (req, res) => {
     res.json({ runs: listRuns(db, { conversationId: req.params.id, limit: 300 }) });
   });
@@ -1847,7 +1846,7 @@ ${formatHumanResponse(response)}`;
     res.json({ ok: removePin(db, owner, req.query['path']) });
   });
 
-  // ─── §6b Chunk B: Subagent runs ──────────────────────────────────────────
+  // ─── Subagent runs ──────────────────────────────────────────
   app.get('/api/conversations/:id/subagent-runs', (req, res) => {
     res.json({ runs: listSubagentRuns(db, req.params.id) });
   });

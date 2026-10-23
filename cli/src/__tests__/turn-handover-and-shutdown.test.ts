@@ -52,7 +52,7 @@ async function registry(calls: string[]): Promise<ToolRegistry> {
 const resultsOf = (m: Llm.MessageParam): Llm.ToolResultBlockParam[] =>
   (m.content as Llm.ContentBlockParam[]).filter((b): b is Llm.ToolResultBlockParam => b.type === 'tool_result');
 
-// ─── runTurn hands the turn over as it happens (audit W1) ────────────────────
+// ─── runTurn hands the turn over as it happens ────────────────────
 
 describe('runTurn: onMessages', () => {
   it('hands over each step before the next request, and everything adds up to the returned history', async () => {
@@ -240,7 +240,7 @@ describe('a turn that fails after running a tool', () => {
   });
 });
 
-// ─── shutdown (audit S1) ─────────────────────────────────────────────────────
+// ─── shutdown ─────────────────────────────────────────────────────
 
 describe('shutdown', () => {
   const TOKEN = 's1-token';

@@ -28,7 +28,7 @@ import {
 } from './runs.js';
 
 /**
- * Agents-lite (Plan v3 §7c / N7): multi-agent without a framework. Generic async tools on the
+ * Agents-lite: multi-agent without a framework. Generic async tools on the
  * existing loop — an orchestrator is just an agent that has these tools.
  *
  *   spawn_agent → run_id immediately     wait_agents (all | any)     send_message (run_id | "parent")
@@ -219,7 +219,7 @@ export class AgentManager {
       this.deps.router.clientFor(input.model);
     } catch (err) { return { error: `model unavailable: ${(err as Error).message}` }; }
 
-    // Narrowing only: a worker can never get a tool its parent doesn't have (Plan v3 §7c).
+    // Narrowing only: a worker can never get a tool its parent doesn't have.
     const parentTools = new Set(this.toolsOf(parent));
     // post_report and request_human_input are handed to every worker by the app (workerExtraTools). A model sees them in its
     // own tool list and naturally names them here — that's not a delegation, so it must not make the spawn fail.

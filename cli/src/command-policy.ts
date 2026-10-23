@@ -1,5 +1,5 @@
 /**
- * Command policy engine (Plan v3 §5) — replaces "approve per tool" for shell commands.
+ * Command policy engine — replaces "approve per tool" for shell commands.
  *
  * Before: the approval key was the tool name, so "always" on run_bash let every command through.
  * Now: a command is split into its sub-commands (`a && b | c; $(d)`), each one is classified
@@ -267,7 +267,7 @@ export function evaluateCommand(command: string, policy: CommandPolicy, granted:
     if (sub.includes('__SUBST__') && prefix === '__SUBST__') {
       return { command: sub, prefix, decision: 'ask', reason: 'command name comes from a substitution' };
     }
-    // A boundary crossing always asks — even with a grant, in every mode (Plan v3 §5).
+    // A boundary crossing always asks — even with a grant, in every mode.
     const boundary = crossesBoundary(sub, policy);
     if (boundary) return { command: sub, prefix, decision: 'ask', reason: boundary };
     if (granted(prefix)) return { command: sub, prefix, decision: 'allow', reason: 'granted' };

@@ -17,7 +17,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const post = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body) });
 
-// ─── N3: Workspace Explorer + checkpoints ─────────────────────────────────────
+// ─── Workspace Explorer + checkpoints ─────────────────────────────────────
 
 export function listWorkspaceFiles(owner: string, path: string): Promise<WorkspaceListing> {
   return request(`/api/workspace/${owner}/files?path=${encodeURIComponent(path)}`);
@@ -56,7 +56,7 @@ export function rollbackWorkspace(owner: string, checkpointId: string): Promise<
   return request(`/api/workspace/${owner}/rollback`, post({ checkpointId }));
 }
 
-// ─── N4: GitHub connection (once, app-wide) ────────────────────────────────────
+// ─── GitHub connection (once, app-wide) ────────────────────────────────────
 
 export const githubConnect = {
   status: () => request<GithubStatus>('/api/github/status'),
@@ -92,7 +92,7 @@ export async function githubText(projectId: string, path: string, accept?: strin
   return res.text();
 }
 
-// ─── N4: Source Control (git runs in the project sandbox) ─────────────────────
+// ─── Source Control (git runs in the project sandbox) ─────────────────────
 
 const qs = (dir: string, extra: Record<string, string> = {}) => new URLSearchParams({ dir, ...extra }).toString();
 

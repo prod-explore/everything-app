@@ -47,7 +47,7 @@ export function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
   `);
 
-  // Message branching (edit/regenerate — Phase 1 of the Full Build Roadmap):
+  // Message branching (edit/regenerate):
   // `parent_id` links a message to whichever message it branches off of;
   // `is_active` marks which branch is currently the visible one.
   // ALTER TABLE ADD COLUMN has no "IF NOT EXISTS" in SQLite, so this is
@@ -87,7 +87,7 @@ export function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_gazeta_status ON gazeta_items(status);
 
 
-    -- Phase 2: Custom Skills system
+    -- Custom Skills system
     -- allowed_tools is a JSON array of tool name strings (informational; not
     -- a hard filter on the tool registry — just surfaced in the UI so the user
     -- knows what a skill was designed to use).
@@ -109,7 +109,7 @@ export function runMigrations(db: Database.Database): void {
       PRIMARY KEY (conversation_id, skill_id)
     );
 
-    -- Phase 3: BYOK key vault. Only ciphertext ever lands here — see
+    -- BYOK key vault. Only ciphertext ever lands here — see
     -- providers/key-vault.ts (AES-256-GCM, key derived from KEY_VAULT_SECRET
     -- which lives in the environment, never in this database).
     CREATE TABLE IF NOT EXISTS provider_keys (
@@ -123,7 +123,7 @@ export function runMigrations(db: Database.Database): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    -- Phase 3: one row per billed API response. Not FK'd to conversations on
+    -- One row per billed API response. Not FK'd to conversations on
     -- purpose: deleting a chat must not rewrite usage history.
     CREATE TABLE IF NOT EXISTS usage_log (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,7 +139,7 @@ export function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_log(ts);
     CREATE INDEX IF NOT EXISTS idx_usage_conv ON usage_log(conversation_id);
 
-    -- Phase 3: provider-specific state that has no home in the
+    -- Provider-specific state that has no home in the
     -- message format (Gemini 3 thought signatures, DeepSeek reasoning_content),
     -- keyed by tool call id. Lets history stay in one canonical format while
     -- each adapter can still replay what its provider insists on getting back.
@@ -177,7 +177,7 @@ export function runMigrations(db: Database.Database): void {
       PRIMARY KEY (owner, path)
     );
 
-    -- §6b Chunk B: Subagent-with-a-goal tracking.
+    -- Subagent-with-a-goal tracking.
     -- One row per subagent invocation. The parent agent spawns a subagent
     -- with a goal + tool allowlist + model; the subagent runs an isolated loop
     -- and writes its result here. The parent polls this row to get the result.
@@ -257,7 +257,7 @@ export function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_audit_tool ON approval_audit(tool_label, created_at);
   `);
 
-  // N6: Gazeta as the one inbox — who asked, from which run/project, and whether it's urgent.
+  // Gazeta as the one inbox — who asked, from which run/project, and whether it's urgent.
   for (const [col, def] of [['project_id', 'TEXT'], ['run_id', 'TEXT'], ['agent', 'TEXT'], ['urgent', 'INTEGER NOT NULL DEFAULT 0'], ['attachments', 'TEXT']] as const) {
     if (!columnExists(db, 'gazeta_items', col)) db.exec(`ALTER TABLE gazeta_items ADD COLUMN ${col} ${def}`);
   }
@@ -1277,7 +1277,7 @@ export function logApprovalAudit(
   });
 }
 
-// ─── Phase 3: provider keys / usage / tool-call meta ────────────────
+// ─── Provider keys / usage / tool-call meta ────────────────
 
 export interface ProviderKeyRow {
   provider: string;
@@ -1393,7 +1393,7 @@ export function removePin(db: Database.Database, owner: string, path: string): b
   return db.prepare(`DELETE FROM workspace_pins WHERE owner = ? AND path = ?`).run(owner, path).changes > 0;
 }
 
-// ─── §6b Chunk B: Subagent runs ──────────────────────────────────────────────
+// ─── Subagent runs ──────────────────────────────────────────────
 
 export interface SubagentRunRow {
   id: string;

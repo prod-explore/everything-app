@@ -30,7 +30,7 @@ function raw(port: number, method: string, p: string, body?: Buffer | string, he
   });
 }
 
-describe('HTTP surface (audit N3, N4, N5, N7, N10)', () => {
+describe('HTTP surface', () => {
   let built: BuiltApp; let server: http.Server; let port: number; let db: ReturnType<typeof openDb>;
   before(async () => {
     db = openDb(':memory:'); runMigrations(db);
@@ -39,7 +39,7 @@ describe('HTTP surface (audit N3, N4, N5, N7, N10)', () => {
   });
   after(() => { built.stop(); server.close(); db.close(); fs.rmSync(artifactsDir, { recursive: true, force: true }); });
 
-  it('N3: only the settings the UI edits can be written or read through /api/settings', async () => {
+  it('only the settings the UI edits can be written or read through /api/settings', async () => {
     setSetting(db, 'vault_marker', 'SHOULD-NOT-LEAK');
     assert.equal((await raw(port, 'PUT', '/api/settings', JSON.stringify({ key: 'custom_instructions', value: 'be brief' }), { 'content-type': 'application/json' })).status, 200);
     for (const key of ['web_search', 'vault_marker', 'last_digest_date', 'anything']) {
@@ -52,7 +52,7 @@ describe('HTTP surface (audit N3, N4, N5, N7, N10)', () => {
     assert.ok(!('vault_marker' in got));
   });
 
-  it('N5: login accepts the password and refuses others, including ones of the same or a different length', async () => {
+  it('login accepts the password and refuses others, including ones of the same or a different length', async () => {
     const login = (password: string) => raw(port, 'POST', '/api/login', JSON.stringify({ password }), { 'content-type': 'application/json', authorization: '' });
     assert.equal((await login('correct horse')).status, 200);
     assert.equal((await login('correct horsf')).status, 401);
@@ -60,13 +60,13 @@ describe('HTTP surface (audit N3, N4, N5, N7, N10)', () => {
     assert.equal((await login('correct horse and more')).status, 401);
   });
 
-  it('N7: /health says the process is up and nothing else', async () => {
+  it('/health says the process is up and nothing else', async () => {
     const r = await raw(port, 'GET', '/health', undefined, { authorization: '' });
     assert.equal(r.status, 200);
     assert.deepEqual(JSON.parse(r.body), { status: 'ok' });
   });
 
-  it('N10: an unknown API path is a JSON 404, a missing asset a plain 404', async () => {
+  it('an unknown API path is a JSON 404, a missing asset a plain 404', async () => {
     const api = await raw(port, 'GET', '/api/no-such-thing');
     assert.equal(api.status, 404);
     assert.deepEqual(JSON.parse(api.body), { error: 'not found' });
@@ -74,7 +74,7 @@ describe('HTTP surface (audit N3, N4, N5, N7, N10)', () => {
   });
 });
 
-describe('SSE backpressure (audit N8)', () => {
+describe('SSE backpressure', () => {
   it('drops a client whose buffer keeps growing, keeps a healthy one', () => {
     const sse = new SSEManager();
     const make = (backlog: number) => {
@@ -96,7 +96,7 @@ describe('SSE backpressure (audit N8)', () => {
   });
 });
 
-describe('summaries cut off by the output limit (audit N9)', () => {
+describe('summaries cut off by the output limit', () => {
   const reply = (t: string, stop: Llm.StopReason): Llm.Message => ({
     id: 'm', container: null, content: [{ type: 'text', text: t, citations: null }], model: 'x', role: 'assistant', stop_reason: stop, stop_sequence: null, type: 'message',
     usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: null, cache_read_input_tokens: null, server_tool_use: null, service_tier: null, cache_creation: null },

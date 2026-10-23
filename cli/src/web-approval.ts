@@ -19,10 +19,9 @@ import {
 import { mergeCommandPolicy, type PolicyStore } from './policy-file.js';
 
 /**
- * Patterns that look potentially irreversible/destructive — §12 pt.5 of the
- * Master Brief. This is a UI hint, not a security boundary (the real
- * boundary is that the call needs a human "y" at all, per §7 pt.3 —
- * enforcement lives outside the model, not in string matching that a
+ * Patterns that look potentially irreversible/destructive. This is a UI
+ * hint, not a security boundary (the real boundary is that the call needs
+ * a human "y" at all — enforcement lives outside the model, not in string matching that a
  * determined prompt injection could word around). Deliberately simple and
  * a bit over-eager: false positives just mean an extra warning banner on a
  * safe command, false negatives mean no warning on a genuinely risky one —
@@ -35,7 +34,7 @@ const DANGEROUS_PATTERNS: RegExp[] = [
   /\bDROP\s+(TABLE|DATABASE)\b/i,
   /\bTRUNCATE\s+TABLE\b/i,
   /:\(\)\s*\{\s*:\s*\|\s*:.*\}\s*;\s*:/, // classic shell fork-bomb shape
-  // Browser-agent actions (§6b) — matched against browser_act's required `label` field,
+  // Browser-agent actions — matched against browser_act's required `label` field,
   // which is copied from the page's own visible element text, not written by the model.
   // Same "over-eager on purpose" tradeoff as the patterns above: a false positive is an
   // extra approval prompt, a false negative is an unreviewed destructive click.
@@ -64,7 +63,7 @@ export function looksDangerous(args: Record<string, unknown>): boolean {
  *
  * Note: dangerous calls are always forced to 'once' regardless of what the
  * client sends — granting 'always' for a tool never covers destructive variants
- * of that tool (§12 pt.5 of the Master Brief).
+ * of that tool.
  */
 export type ApprovalScope = 'once' | 'chat' | 'project' | 'always';
 
@@ -149,7 +148,7 @@ export class WebApprovalGate {
     const grantCtx = { conversationId, projectId: ctx?.projectId, modelId: ctx?.modelId, skillId: ctx?.skillId };
     const audit = (action: string) => logApprovalAudit(this.db, { action, toolLabel, toolArgs: JSON.stringify(args), conversationId });
 
-    // Shell commands: classified per sub-command by the project's command policy (Plan v3 §5).
+    // Shell commands: classified per sub-command by the project's command policy.
     // A tool-level grant on run_bash deliberately does NOT apply here — that was the hole.
     const command = extractCommand(toolLabel, args);
     let commands: SubcommandVerdict[] | undefined;

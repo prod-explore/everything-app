@@ -220,7 +220,7 @@ export interface TurnState {
  */
 export type ApprovalScope = 'once' | 'chat' | 'project' | 'always';
 
-// ─── N1: Projects ─────────────────────────────────────────────────────────
+// ─── Projects ─────────────────────────────────────────────────────────
 
 export interface ProjectRow {
   id: string;
@@ -243,7 +243,7 @@ export interface ProjectListItem {
   updatedAt: string;
 }
 
-// ─── N1: Approval Grants ──────────────────────────────────────────────────
+// ─── Approval Grants ──────────────────────────────────────────────────
 
 export interface ApprovalGrantRow {
   id: string;
@@ -257,7 +257,7 @@ export interface ApprovalGrantRow {
   expiresAt: string | null;
 }
 
-/** A user-defined reusable prompt bundle — Phase 2. */
+/** A user-defined reusable prompt bundle (a skill). */
 export interface Skill {
   id: string;
   name: string;
@@ -268,7 +268,7 @@ export interface Skill {
   updatedAt: string;
 }
 
-// ─── Phase 3: providers, models, usage ───────────────────────────────────
+// ─── Providers, models, usage ───────────────────────────────────
 
 export type ProviderId = string;
 
@@ -369,7 +369,7 @@ export interface ProviderRetry {
 
 // ─── Subagent runs ───────────────────────────────────────────────────────────
 
-// ─── N6/N7: durable runs (Agents-lite) — mirrors cli/src/runs.ts ─────────────
+// ─── durable runs (Agents-lite) — mirrors cli/src/runs.ts ─────────────
 
 export type RunStatus = 'running' | 'waiting_input' | 'waiting_children' | 'done' | 'error' | 'aborted' | 'interrupted';
 

@@ -201,7 +201,7 @@ describe('runTurn', () => {
   });
 });
 
-describe('runTurn — _conversation_id injection (§6b: generalized beyond sandbox tools)', () => {
+describe('runTurn — _conversation_id injection (generalized beyond sandbox tools)', () => {
   function connectionCapturingArgs(name: string, toolNames: string[], calls: Array<{ tool: string; args: Record<string, unknown> }>): McpConnectionLike {
     return {
       name,
@@ -215,7 +215,7 @@ describe('runTurn — _conversation_id injection (§6b: generalized beyond sandb
     };
   }
 
-  it('injects _conversation_id into browser_act calls (a stateful §6b tool), like it already does for run_bash', async () => {
+  it('injects _conversation_id into browser_act calls (a stateful browser tool), like it already does for run_bash', async () => {
     const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
     const registry = new ToolRegistry(['browser_act']); // auto-approve to skip the confirm() prompt in this test
     await registry.loadFrom([connectionCapturingArgs('playwright', ['browser_act'], calls)]);
@@ -505,7 +505,7 @@ describe('runTurn — streaming text deltas (N2b)', () => {
   });
 });
 
-describe('runTurn — _project_id injection (N3: one sandbox per project)', () => {
+describe('runTurn — _project_id injection (one sandbox per project)', () => {
   async function runWith(toolName: string, modelArgs: Record<string, unknown>, deps: { projectId?: string }) {
     const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
     const registry = new ToolRegistry([toolName]);

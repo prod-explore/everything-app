@@ -2,7 +2,7 @@
 #
 # EverythingApp — network-layer egress guard (the backstop behind playwright-mcp/src/urlSafety.ts).
 #
-# Internet-facing containers (the browser agent today, code sandboxes in N3) may reach the PUBLIC
+# Internet-facing containers (the browser agent today, code sandboxes) may reach the PUBLIC
 # internet freely but must not reach the operator's own networks: LAN (router, NAS, other services),
 # the Docker host and its other bridges, link-local / cloud-metadata addresses. This installs the
 # standard Docker-recommended pattern: a dedicated chain hooked into DOCKER-USER (forwarded
@@ -16,7 +16,7 @@
 # Environment:
 #   EGRESS_BRIDGES  space-separated bridge names to guard   (default: "br-ea-browser br-ea-sandbox")
 #                   br-ea-browser = browser-egress network in docker-compose.yml
-#                   br-ea-sandbox = the code-sandbox network the supervisor creates (N3)
+#                   br-ea-sandbox = the code-sandbox network the supervisor creates
 #   EGRESS_ALLOW    space-separated "IP" or "IP:PORT" exceptions reachable from the guarded bridges,
 #                   e.g. a NAS the browser may read:  EGRESS_ALLOW="192.168.1.50:8080"
 #

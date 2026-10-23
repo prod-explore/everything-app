@@ -79,7 +79,7 @@ describe('parseStatus', () => {
   });
 });
 
-describe('N4 routes', () => {
+describe('GitHub routes', () => {
   it('internal endpoints require the git-proxy secret; github-token falls back to GITHUB_PAT', async () => {
     const t = await setup();
     try {

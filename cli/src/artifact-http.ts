@@ -1,5 +1,5 @@
 /**
- * HTTP-safety helpers for user/agent-supplied artifact files (audit P2: artifacts were served inline
+ * HTTP-safety helpers for user/agent-supplied artifact files (artifacts used to be served inline
  * with a client-chosen MIME type from the app's own origin, i.e. an uploaded text/html or SVG was
  * active content next to the page that holds the API token).
  *

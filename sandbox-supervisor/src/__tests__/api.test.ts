@@ -46,7 +46,7 @@ describe('supervisor HTTP API', () => {
     assert.equal(exec.status, 200);
   });
 
-  it('accepts the pre-N3 conversationId field as owner', async () => {
+  it('accepts the legacy conversationId field as owner', async () => {
     assert.equal((await post('/claim', { conversationId: 'legacy-conv' })).status, 200);
   });
 

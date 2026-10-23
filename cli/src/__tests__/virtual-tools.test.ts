@@ -74,7 +74,7 @@ describe('request_human_input as an in-loop virtual tool', () => {
       await req(port, 'POST', `/api/conversations/${conv}/message`, { text: 'ask me something' });
       await waitFor(() => listGazetaItems(db).length === 1);
 
-      // Blocking mode (N1): the turn parks on the human's answer, so the model has not been called again yet.
+      // Blocking mode: the turn parks on the human's answer, so the model has not been called again yet.
       assert.equal(call, 1);
       const answered = await req(port, 'POST', `/api/gazeta/${listGazetaItems(db)[0]!.id}/respond`, { response: 'yes' });
       assert.equal(answered.status, 200);
@@ -103,7 +103,7 @@ describe('request_human_input as an in-loop virtual tool', () => {
   });
 });
 
-describe('Gazeta as one inbox (N6)', () => {
+describe('Gazeta as one inbox', () => {
   async function boot(script: (call: number, p: Llm.MessageCreateParamsNonStreaming) => Llm.Message) {
     let call = 0;
     const seen: Llm.MessageCreateParamsNonStreaming[] = [];

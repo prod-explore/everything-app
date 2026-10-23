@@ -2,7 +2,7 @@
 @plugin "@tailwindcss/typography";
 
 /*
- * Strict black/white minimalist theme (implementation_plan.md §4.2).
+ * Strict black/white minimalist theme.
  * Tailwind v4 is CSS-first — there is no tailwind.config.ts; @theme below
  * is the single source of truth and generates the matching utility classes
  * (bg-bg, text-fg, border-border, rounded-container, etc.) automatically.

@@ -27,7 +27,7 @@ export type VaultReadResult =
  * environment (i.e. root on the Pi), or a compromised server process — the key
  * necessarily exists in memory while a request is in flight. It also isn't
  * reachable from the sandbox: the sandbox container never gets the secret, the
- * db path, or docker.sock (Master Brief §0).
+ * db path, or docker.sock (see ADR 0003).
  */
 export class KeyVault {
   private readonly secret: string | null;

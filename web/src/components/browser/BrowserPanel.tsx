@@ -3,7 +3,7 @@ import { Monitor, Hand, X, Loader, Globe, Power, Plus } from 'lucide-react';
 import { tabLabel, type TabInfo } from '../../lib/browserTabs';
 
 /**
- * §6b Chunk B: Live-view panel for an active browser session.
+ * Live-view panel for an active browser session.
  *
  * Connects to the SAME ORIGIN as the app:  wss://<this-host>/api/liveview?conversationId=<id>  (auth: the session cookie rides on the handshake)
  * The server authenticates the token and relays the WebSocket to playwright-mcp with its own

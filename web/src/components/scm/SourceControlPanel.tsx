@@ -5,7 +5,7 @@ import type { ScmBranch, ScmCommit, ScmFile, ScmStatus } from '../../types-works
 import { PanelMessage } from '../shared/DockPanel';
 
 /**
- * Source Control body (Plan v3 §7.3), like VS Code's: git runs inside the project sandbox; clicks here are
+ * Source Control body, like VS Code's: git runs inside the project sandbox; clicks here are
  * the human's own actions (no approval), network operations go through git-proxy.
  * Rendered as the Changes / History / Branches tabs of the unified Git panel (git/GitPanel.tsx), which owns
  * the repository selector and the tab bar.

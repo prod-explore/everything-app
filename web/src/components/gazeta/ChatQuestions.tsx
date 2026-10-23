@@ -2,7 +2,7 @@ import { useGazeta } from '../../hooks/useGazeta';
 import { GazetaCard } from './GazetaCard';
 
 /**
- * The same Gazeta question, second view (Plan v3 §7b): open questions from this chat's agents appear as
+ * The same Gazeta question, second view: open questions from this chat's agents appear as
  * form cards above the composer. Answering here or in the Gazeta inbox updates both (one shared store).
  */
 export function ChatQuestions({ conversationId }: { conversationId: string }) {

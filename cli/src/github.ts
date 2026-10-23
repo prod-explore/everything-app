@@ -1,7 +1,7 @@
 import type { KeyVault } from './providers/key-vault.js';
 
 /**
- * GitHub credential provider (Plan v3 §7 — "Connect GitHub" like an IDE).
+ * GitHub credential provider ("Connect GitHub" like an IDE).
  *
  * Preferred: a GitHub App with the OAuth device flow (user enters a code on github.com; user-to-server
  * tokens expire after ~8h and are refreshed with a ~6 month refresh token). Fallback: a fine-grained PAT
@@ -153,7 +153,7 @@ export class GitHubCredentials {
     const t = token.trim();
     if (!/^(github_pat_|ghp_|gho_|ghu_|ghs_)[A-Za-z0-9_]+$/.test(t)) throw new Error('that does not look like a GitHub token');
     if (t.startsWith('ghp_')) {
-      // Classic PATs grant `repo` on everything — Plan v3 §7 says no. Fine-grained only.
+      // Classic PATs grant `repo` on everything, so they are refused. Fine-grained only.
       throw new Error('classic tokens (ghp_…) are not accepted — create a fine-grained token limited to the repos you need');
     }
     const login = await this.fetchLogin(t);

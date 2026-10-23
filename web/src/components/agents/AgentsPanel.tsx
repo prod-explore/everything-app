@@ -22,7 +22,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 /**
- * Agents tab (Plan v3 §7c): the worker agents of the current chat, split into Active and Completed. Finished agents
+ * Agents tab: the worker agents of the current chat, split into Active and Completed. Finished agents
  * stay in the list — they keep their transcript and wake up when you send them a follow-up. Live via agent:* SSE
  * (refreshKey) + polling while anything is active.
  */

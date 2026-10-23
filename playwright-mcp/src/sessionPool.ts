@@ -8,7 +8,7 @@ import type { EffectivePolicy, PolicyOverride } from './policy.js';
  * Browser-agent equivalent of sandbox-supervisor/src/pool.ts's sticky lease +
  * idle watchdog — same shape, deliberately, since it's the same problem: a
  * conversation gets the same live resource back across multiple tool calls
- * (§6b's "works with app closed, reconnect" requirement), and idle resources
+ * (the "works with app closed, reconnect" requirement), and idle resources
  * get reclaimed so one forgotten tab doesn't sit open forever.
  *
  * Unlike the sandbox pool, sessions aren't pre-warmed — a Chromium process

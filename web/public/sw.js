@@ -1,5 +1,5 @@
 /*
- * EverythingApp service worker (Phase 6 — installable PWA).
+ * EverythingApp service worker (installable PWA).
  *
  * - App shell: navigations are network-first (fresh deploys win), falling back to the cached shell offline.
  * - Hashed build assets (/assets/*) are cache-first — their names change on every build.

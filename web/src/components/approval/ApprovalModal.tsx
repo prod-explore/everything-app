@@ -4,7 +4,7 @@ import type { ApprovalScope, PendingApproval } from '../../types';
 import { Button } from '../shared/Button';
 
 /**
- * Approval modal with 4-scope picker (N1):
+ * Approval modal with 4-scope picker:
  * - Deny → always just denies (Escape)
  * - Approve → expands a scope picker (Enter = 'once')
  *   - Once (1 / Enter)    — this call only, not remembered
@@ -13,7 +13,7 @@ import { Button } from '../shared/Button';
  *   - Always (4 / A)      — auto-approves globally (persisted to DB)
  *
  * For dangerous calls: scope picker is hidden — dangerous calls are always
- * forced to 'once' by the server regardless (§12 pt.5 of the Master Brief).
+ * forced to 'once' by the server regardless.
  */
 /** Worker approvals are labelled "[agent researcher] srv/tool" (or "[subagent] …") by the server. */
 function agentOf(label: string): string | null {

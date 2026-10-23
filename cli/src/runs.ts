@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 
 /**
- * Durable runs (Plan v3 N6/N7). A run is one agent working on one goal: every live chat turn is a
+ * Durable runs. A run is one agent working on one goal: every live chat turn is a
  * root run, and Agents-lite workers are child runs. Rows survive restarts; v1 does not resume them —
  * anything still active at startup is marked `interrupted` (heartbeat_at shows when it last lived).
  */

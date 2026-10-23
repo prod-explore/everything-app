@@ -21,7 +21,7 @@ function get(port: number, path: string): Promise<{ status: number; headers: htt
   });
 }
 
-describe('conversation export (audit S2)', () => {
+describe('conversation export', () => {
   let built: BuiltApp; let server: http.Server; let port: number; let db: ReturnType<typeof openDb>;
   before(async () => {
     db = openDb(':memory:'); runMigrations(db);
@@ -58,7 +58,7 @@ describe('conversation export (audit S2)', () => {
   });
 });
 
-describe('compaction never cuts between a tool_use and its tool_result (audit S3)', () => {
+describe('compaction never cuts between a tool_use and its tool_result', () => {
   const user = (t: string): Llm.MessageParam => ({ role: 'user', content: t });
   const asst = (t: string): Llm.MessageParam => ({ role: 'assistant', content: [{ type: 'text', text: t }] });
   const use = (id: string): Llm.MessageParam => ({ role: 'assistant', content: [{ type: 'tool_use', id, name: 'read_file', input: {} }] });
@@ -88,7 +88,7 @@ describe('compaction never cuts between a tool_use and its tool_result (audit S3
   });
 });
 
-describe('tool output truncation (audit S5)', () => {
+describe('tool output truncation', () => {
   it('says what happened without promising a full copy elsewhere', () => {
     const r = truncateToolOutput('a'.repeat(30_000), 1000);
     assert.equal(r.wasTruncated, true);

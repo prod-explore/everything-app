@@ -50,9 +50,9 @@ async function settled(call: ReturnType<typeof client>, convId: string, ms = 300
   return 'timeout';
 }
 
-// ─── S4 ──────────────────────────────────────────────────────────────────────
+// ─── skill grants ──────────────────────────────────────────────────────────────────────
 
-describe('skill grants end with the turn (audit S4)', () => {
+describe('skill grants end with the turn', () => {
   it('WebApprovalGate: clearChatScope takes the grants back', async () => {
     const db = openDb(':memory:'); runMigrations(db);
     const gate = new WebApprovalGate(db);
@@ -102,9 +102,9 @@ describe('skill grants end with the turn (audit S4)', () => {
   });
 });
 
-// ─── N1 ──────────────────────────────────────────────────────────────────────
+// ─── failure while preparing a turn ──────────────────────────────────────────────────────────────────────
 
-describe('a failure while preparing a turn ends the turn (audit N1)', () => {
+describe('a failure while preparing a turn ends the turn', () => {
   it('reports an error and leaves the conversation usable instead of "running" forever', async () => {
     const db = openDb(':memory:'); runMigrations(db);
     const llm = { messages: { async create() { return msg([text('hi')], 'end_turn'); }, batches: {} } };
@@ -129,9 +129,9 @@ describe('a failure while preparing a turn ends the turn (audit N1)', () => {
   });
 });
 
-// ─── N2 ──────────────────────────────────────────────────────────────────────
+// ─── /compact ──────────────────────────────────────────────────────────────────────
 
-describe('/compact holds the conversation while the model writes the summary (audit N2)', () => {
+describe('/compact holds the conversation while the model writes the summary', () => {
   it('refuses a message sent meanwhile', async () => {
     const db = openDb(':memory:'); runMigrations(db);
     let release: (() => void) | undefined;

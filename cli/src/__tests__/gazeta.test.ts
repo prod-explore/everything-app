@@ -9,7 +9,7 @@ import { handleRequestHumanInput, awaitHumanInput, resolveHumanInput } from '../
 
 /**
  * Covers handleRequestHumanInput's three input-schema shapes (text, choice,
- * fields) — the pieces Phase 5 touches. Full
+ * fields). Full
  * round-trip through respondToGazetaItem/dismissGazetaItem is already
  * covered by db.test.ts; this file is about gazeta.ts's own schema-shaping
  * logic, not the storage layer underneath it.

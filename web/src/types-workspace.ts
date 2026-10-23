@@ -1,4 +1,4 @@
-// ─── N3: workspace ───────────────────────────────────────────────────────────
+// ─── workspace ───────────────────────────────────────────────────────────
 export interface WorkspaceEntry {
   name: string;
   path: string;
@@ -20,7 +20,7 @@ export interface Checkpoint {
   createdAt: string;
 }
 
-// ─── N4: GitHub + Source Control ─────────────────────────────────────────────
+// ─── GitHub + Source Control ─────────────────────────────────────────────
 export interface GithubStatus {
   connected: boolean;
   method: 'app' | 'pat' | 'env' | null;

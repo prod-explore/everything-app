@@ -1,6 +1,6 @@
 # git-proxy
 
-Git smart-HTTP proxy between the agent sandboxes and `https://github.com` (phase N4). Sandboxes run plain
+Git smart-HTTP proxy between the agent sandboxes and `https://github.com`. Sandboxes run plain
 `git` (clone, fetch, push, LFS) without ever holding a GitHub credential:
 
 - **Credential injection**: the sandbox authenticates with a short-lived opaque *proxy token*. git-proxy drops
