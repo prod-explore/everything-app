@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ToolCallMessagePartProps } from '@assistant-ui/react';
 import { describe, expect, it } from 'vitest';
 import { ToolCallCard } from './ToolCallCard';
 
-const props = (over: Record<string, unknown> = {}) =>
-  ({ toolCallId: 'c1', toolName: 'crm__find_contact', args: { query: 'Kowalski', filters: { active: true } }, argsText: '', result: 'found 1', isError: false, status: { type: 'complete' }, ...over }) as never;
+const props = (over: Record<string, unknown> = {}): ToolCallMessagePartProps =>
+  ({ toolCallId: 'c1', toolName: 'crm__find_contact', args: { query: 'Kowalski', filters: { active: true } }, argsText: '', result: 'found 1', isError: false, status: { type: 'complete' }, ...over }) as unknown as ToolCallMessagePartProps;
 
 describe('ToolCallCard', () => {
   it('lists an unknown tool by its own name and keeps the payload behind the click, as plain JSON', async () => {
