@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { ok, fail, ownerIds, ownerOf, ToolContext } from './types.js';
 
 // Whitelist: only subcommands useful for coding agent work.
-// `push` is deliberately excluded — use the GitHub connector (github-mcp-server)
-// to push changes. This keeps git credentials out of the sandbox entirely.
+// `push` is deliberately excluded: pushing needs a credential and a human approval, and git
+// credentials never enter the sandbox (they stay in git-proxy).
 const ALLOWED_SUBCOMMANDS = [
   'clone',
   'status',
@@ -27,8 +27,7 @@ export function registerGitOp(server: McpServer, { config, supervisor }: ToolCon
     'git_op',
     'Run a whitelisted git command inside the sandboxed container. ' +
       `Allowed subcommands: ${ALLOWED_SUBCOMMANDS.join(', ')}. ` +
-      'To push changes to GitHub, use the GitHub connector (github__push_files or github__create_or_update_file) — ' +
-      'git push is not available in the sandbox to keep credentials out of the sandbox environment. ' +
+      'git push is not available here: the sandbox holds no git credentials, so the user pushes from the Source Control panel. ' +
       'Requires approval before execution.',
     {
       subcommand: z
