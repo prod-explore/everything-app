@@ -59,6 +59,15 @@ function loadAutoApproveTools(): string[] {
   return ['read_log', 'get_path', 'search_notes', 'browser_open', 'browser_observe', 'browser_screenshot', 'browser_act', 'browser_tabs', 'browser_close'];
 }
 
+/**
+ * Address the HTTP server binds to. Loopback unless LISTEN_HOST says otherwise, so a quickstart run on a laptop is not
+ * reachable from the network with its throw-away password. The Docker image sets LISTEN_HOST=0.0.0.0 (compose publishes
+ * the port on 127.0.0.1 only).
+ */
+export function listenHost(env: NodeJS.ProcessEnv = process.env): string {
+  return env['LISTEN_HOST']?.trim() || '127.0.0.1';
+}
+
 export function loadConfig(): Config {
   const mcpServers = loadMcpServers();
 

@@ -112,7 +112,7 @@ SERVER_AUTH_TOKEN=$(openssl rand -hex 32) SERVER_PASSWORD=dev \
 KEY_VAULT_SECRET=$(openssl rand -hex 32) PORT=3000 node dist/server.js
 ```
 
-Open <http://localhost:3000> and log in with the password `dev`. Then **Settings → Models → + Add provider**: slug `mock`, base URL `http://127.0.0.1:4010/v1`, any API key. The mock's models appear after the list loads; it reports them as local, so ghost chats work too. Try `ask: which database?`, `report`, `spawn`, `plan: refactor`, `todo`, `long`. Data goes to `~/.everythingapp/` (`EVERYTHINGAPP_DB_PATH` overrides the database path).
+Open <http://localhost:3000> and log in with the password `dev` (the server listens on `127.0.0.1` only; `LISTEN_HOST=0.0.0.0` opens it to the network). Then **Settings → Models → + Add provider**: slug `mock`, base URL `http://127.0.0.1:4010/v1`, any API key. The mock's models appear after the list loads; it reports them as local, so ghost chats work too. Try `ask: which database?`, `report`, `spawn`, `plan: refactor`, `todo`, `long`. Data goes to `~/.everythingapp/` (`EVERYTHINGAPP_DB_PATH` overrides the database path).
 
 ### Full stack (sandbox, browser, Git)
 

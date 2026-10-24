@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type * as Llm from './llm-types.js';
-import { loadConfig, type Config } from './config.js';
+import { listenHost, loadConfig, type Config } from './config.js';
 import { McpConnection } from './mcp-client.js';
 import { ToolRegistry } from './tool-registry.js';
 import { WebApprovalGate, type ApprovalScope } from './web-approval.js';
@@ -232,8 +232,9 @@ async function main(): Promise<void> {
 
   // ─── Start server ─────────────────────────────────────────────────────────
   const port = Number(process.env['PORT'] ?? 3000);
-  const server = app.listen(port, () => {
-    console.log(`[server] listening on port ${port}`);
+  const host = listenHost();
+  const server = app.listen(port, host, () => {
+    console.log(`[server] listening on ${host}:${port}`);
   });
 
   // Browser live view: same-origin WebSocket relayed to playwright-mcp (server-side key).
