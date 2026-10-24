@@ -26,6 +26,28 @@ function imagesOf(artifact: unknown): string[] {
   return Array.isArray(images) ? images.filter((i): i is string => typeof i === 'string') : [];
 }
 
+/**
+ * What the tool was called with, one argument at a time. Text is shown as text (a note body with its line breaks, not
+ * a JSON string full of \n), anything else as formatted JSON; long values scroll instead of pushing the chat down.
+ */
+export function ToolArgs({ toolName, args }: { toolName: string; args: Record<string, unknown> | undefined }) {
+  const entries = Object.entries(args ?? {});
+  if (entries.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <div className="text-fg-tertiary">{toolName} · arguments</div>
+      {entries.map(([key, value]) => (
+        <div key={key}>
+          <div className="mb-0.5 text-fg-tertiary">{key}</div>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-fg-secondary">
+            {typeof value === 'string' ? value : JSON.stringify(value, null, 2)}
+          </pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ToolCallCard({ toolCallId, toolName, args, result, isError, artifact }: ToolCallMessagePartProps) {
   // null = the user never touched this step, so it follows the default: open only while it is the newest running step.
   const [override, setOverride] = useState<boolean | null>(null);
@@ -54,14 +76,7 @@ export function ToolCallCard({ toolCallId, toolName, args, result, isError, arti
       </button>
       {open && (
         <div className="space-y-2 border-t border-border px-3 py-2 font-mono text-xs">
-          {Object.keys(args ?? {}).length > 0 && (
-            <div>
-              <div className="mb-1 text-fg-tertiary">{toolName} · args</div>
-              <pre className="overflow-x-auto whitespace-pre-wrap text-fg-secondary">
-                {JSON.stringify(args, null, 2)}
-              </pre>
-            </div>
-          )}
+          <ToolArgs toolName={toolName} args={args as Record<string, unknown> | undefined} />
           <div>
             <div className="mb-1 flex items-center justify-between text-fg-tertiary">
               <span>{running ? 'running…' : isError ? 'error' : 'result'}</span>
