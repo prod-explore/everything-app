@@ -1,9 +1,11 @@
 # EverythingApp — Docker Compose: the orchestrator (web), the sandbox supervisor and its MCP server, the browser agent
 # and the git proxy.
 #
-# Run: docker compose up
+# Run: docker compose up            (pulls the published images; `docker compose up --build` builds them from source)
+# Update: deploy/deploy.sh          (pulls, restarts, checks health, goes back on failure)
 # Prerequisites:
-#   1. docker build -t everything-sandbox:latest ./sandbox-supervisor/sandbox-image/
+#   1. The sandbox image: `deploy/deploy.sh` pulls it; or build it by hand:
+#        docker build -t everything-sandbox:latest ./sandbox-supervisor/sandbox-image/
 #   2. Copy .env.example → .env and fill in all required values
 #   3. For GitHub: set GITHUB_PAT in .env
 #   4. For Playwright: set PLAYWRIGHT_MCP_API_KEY in .env
@@ -18,14 +20,14 @@ x-logging: &default-logging
 services:
   sandbox-supervisor:
     container_name: everythingapp-sandbox-supervisor
+    image: ghcr.io/prod-explore/everythingapp-sandbox-supervisor:${EVERYTHINGAPP_IMAGE_TAG:-latest}
     build:
       context: ./sandbox-supervisor
       dockerfile: Dockerfile
-      args:
-        # Must match the host's docker.sock group, or `node` inside the
-        # container gets EACCES talking to Docker. Get it with:
-        #   stat -c '%g' /var/run/docker.sock
-        DOCKER_GID: ${DOCKER_GID:-999}
+    # Must be the group that owns the host's docker.sock, or `node` inside the container gets EACCES talking to
+    # Docker. Get it with:  stat -c '%g' /var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-999}"
     # Supervisor is the ONLY service that holds docker.sock.
     # sandbox-mcp and playwright-mcp talk to it over the internal network.
     volumes:
@@ -76,6 +78,7 @@ services:
 
   sandbox-mcp:
     container_name: everythingapp-sandbox-mcp
+    image: ghcr.io/prod-explore/everythingapp-sandbox-mcp:${EVERYTHINGAPP_IMAGE_TAG:-latest}
     build:
       context: ./sandbox-mcp
       dockerfile: Dockerfile
@@ -116,6 +119,7 @@ services:
   # to both sides so it can call the MCP endpoint.
   playwright-mcp:
     container_name: everythingapp-playwright-mcp
+    image: ghcr.io/prod-explore/everythingapp-playwright-mcp:${EVERYTHINGAPP_IMAGE_TAG:-latest}
     build:
       context: ./playwright-mcp
       dockerfile: Dockerfile
@@ -169,6 +173,7 @@ services:
   # (EGRESS_ALLOW="<gateway-ip>:8080"); the default only binds loopback.
   git-proxy:
     container_name: everythingapp-git-proxy
+    image: ghcr.io/prod-explore/everythingapp-git-proxy:${EVERYTHINGAPP_IMAGE_TAG:-latest}
     build:
       context: ./git-proxy
       dockerfile: Dockerfile
@@ -201,7 +206,7 @@ services:
 
   # Core EverythingApp web server
   everythingapp-web:
-    image: everythingapp-web:latest
+    image: ghcr.io/prod-explore/everythingapp-web:${EVERYTHINGAPP_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: cli/Dockerfile

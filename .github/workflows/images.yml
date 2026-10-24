@@ -1,0 +1,129 @@
+name: Images
+
+# Builds every service image for amd64 and arm64 (each on a runner of its own, so nothing is emulated) and publishes
+# them to the GitHub Container Registry. A deployment then pulls them instead of compiling on the target machine:
+#   deploy/deploy.sh
+# Pull requests only build the images, so a broken Dockerfile shows up before the merge.
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "cli/**"
+      - "web/**"
+      - "git-proxy/**"
+      - "sandbox-mcp/**"
+      - "sandbox-supervisor/**"
+      - "playwright-mcp/**"
+      - ".github/workflows/images.yml"
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/prod-explore
+
+jobs:
+  build:
+    name: ${{ matrix.image }} (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ web, sandbox-supervisor, sandbox-mcp, playwright-mcp, git-proxy, sandbox ]
+        arch: [ amd64, arm64 ]
+        include:
+          # The web image bundles web/, so it is built from the repository root; the others from their own folder.
+          - { image: web, context: ., file: cli/Dockerfile }
+          - { image: sandbox-supervisor, context: sandbox-supervisor, file: sandbox-supervisor/Dockerfile }
+          - { image: sandbox-mcp, context: sandbox-mcp, file: sandbox-mcp/Dockerfile }
+          - { image: playwright-mcp, context: playwright-mcp, file: playwright-mcp/Dockerfile }
+          - { image: git-proxy, context: git-proxy, file: git-proxy/Dockerfile }
+          # The image the code sandboxes run in.
+          - { image: sandbox, context: sandbox-supervisor/sandbox-image, file: sandbox-supervisor/sandbox-image/Dockerfile }
+          - { arch: amd64, runner: ubuntu-24.04, platform: linux/amd64 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, platform: linux/arm64 }
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to the registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build, and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }},mode=max
+          outputs: type=image,name=${{ env.REGISTRY }}/everythingapp-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+      - name: Keep the digest for the manifest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - name: Upload the digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v5
+        with:
+          name: digests-${{ matrix.image }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: ${{ matrix.image }} (one tag for both architectures)
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ web, sandbox-supervisor, sandbox-mcp, playwright-mcp, git-proxy, sandbox ]
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/prod-explore/everythingapp-${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short,prefix=sha-
+            type=semver,pattern={{version}}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create the manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+      - name: Show it
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}

@@ -118,9 +118,12 @@ The commands are at the top of this page; they run the whole UI against the mock
 cp .env.example .env     # set DOCKER_GID and every secret (openssl rand -hex 32):
                          # KEY_VAULT_SECRET, SERVER_AUTH_TOKEN, MCP_API_KEY,
                          # PLAYWRIGHT_MCP_API_KEY, SUPERVISOR_TOKEN, GIT_PROXY_ADMIN_TOKEN
-docker build -t everything-sandbox:latest ./sandbox-supervisor/sandbox-image/
-docker compose up --build
+deploy/deploy.sh         # pulls the published images (amd64 and arm64), starts them, checks they are healthy
 ```
+
+The images come from the [Images workflow](.github/workflows/images.yml) (GitHub Container Registry, `ghcr.io/prod-explore/everythingapp-*`), so nothing is compiled on the host. To build from source instead: `docker build -t everything-sandbox:latest ./sandbox-supervisor/sandbox-image/ && docker compose up --build`.
+
+**Updating.** `deploy/deploy.sh` is the whole procedure: it remembers the image each service runs, pulls the new ones, restarts the services and waits for their health checks; a service that does not become healthy is put back on its previous image and the script exits non-zero. `deploy/deploy.sh sha-1a2b3c4` deploys (or rolls back to) a given build, `deploy/deploy.sh latest everythingapp-web` only some services. Data lives in volumes and is not touched.
 
 The app listens on `127.0.0.1:3000`. To put it behind HTTPS, copy [`deploy/nginx-everythingapp.conf.example`](deploy/nginx-everythingapp.conf.example) (it also blocks `/internal/*`); if your reverse proxy is a container on its own Docker network, [`deploy/docker-compose.override.example.yml`](deploy/docker-compose.override.example.yml) joins the web container to it. On a Linux host, also install the egress guard that keeps the browser's and the sandboxes' networks away from your LAN (`deploy/egress-guard.sh`, `deploy/ea-egress-guard.service`).
 
