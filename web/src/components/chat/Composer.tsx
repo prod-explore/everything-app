@@ -1,9 +1,33 @@
-import { AttachmentPrimitive, ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react';
+import { AttachmentPrimitive, ComposerPrimitive, ThreadPrimitive, useAui, useAuiState } from '@assistant-ui/react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, Minimize2, Paperclip, RotateCw, Send, X } from 'lucide-react';
+import { AlertTriangle, ListPlus, Minimize2, Paperclip, RotateCw, Send, X } from 'lucide-react';
 import type { TurnErrorKind } from '../../types';
 import { StopButton } from './StopButton';
 import { SlashMenu } from './SlashMenu';
+import { QueuedMessages, type MessageQueueControls } from './QueuedMessages';
+
+/** While the assistant works, "send" puts the message in line instead (images wait: they only go out with a live send). */
+function QueueButton({ queue }: { queue: MessageQueueControls }) {
+  const aui = useAui();
+  const text = useAuiState(s => s.composer.text);
+  const hasImage = useAuiState(s => s.composer.attachments.length > 0);
+  const disabled = !text.trim() || hasImage;
+  return (
+    <button
+      type="button"
+      aria-label="Add to queue"
+      title={hasImage ? 'Images can be sent once the assistant is done' : 'Add to queue — sent when the assistant is done'}
+      disabled={disabled}
+      onClick={() => {
+        queue.add(text);
+        aui.composer().setText('');
+      }}
+      className="flex size-[42px] shrink-0 items-center justify-center rounded-button bg-fg text-bg transition-opacity disabled:opacity-30"
+    >
+      <ListPlus size={16} />
+    </button>
+  );
+}
 
 export function Composer({
   error,
@@ -13,6 +37,7 @@ export function Composer({
   onCompactAndRetry,
   leading,
   trailing,
+  queue,
 }: {
   /** Set when the last turn ended in an error or was aborted — see lib/runtime.ts. */
   error?: string;
@@ -26,7 +51,10 @@ export function Composer({
   leading?: ReactNode;
   /** Controls between the message box and the send button (context meter). */
   trailing?: ReactNode;
+  /** Messages waiting for their turn; without it the box is locked while the assistant works. */
+  queue?: MessageQueueControls;
 }) {
+  const aui = useAui();
   return (
     <div className="border-t border-border bg-bg">
       {error && (
@@ -55,6 +83,8 @@ export function Composer({
           )}
         </div>
       )}
+
+      {queue && <QueuedMessages queue={queue} />}
 
       <SlashMenu onCommand={name => window.dispatchEvent(new CustomEvent('app:command', { detail: { name } }))} />
 
@@ -98,6 +128,16 @@ export function Composer({
           id="composer-input"
           rows={1}
           placeholder="Message…"
+          onKeyDown={e => {
+            // ComposerPrimitive ignores Enter while the assistant works; here it joins the queue instead.
+            if (!queue || e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+            if (!aui.thread().getState().isRunning) return;
+            e.preventDefault();
+            const typed = aui.composer().getState().text;
+            if (!typed.trim() || aui.composer().getState().attachments.length > 0) return;
+            queue.add(typed);
+            aui.composer().setText('');
+          }}
           className="max-h-32 min-w-0 flex-1 resize-none rounded-button border border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-border-hover max-sm:order-first max-sm:max-h-52 max-sm:min-h-[84px] max-sm:basis-full"
         />
 
@@ -109,6 +149,7 @@ export function Composer({
           </ComposerPrimitive.Send>
         </ThreadPrimitive.If>
         <ThreadPrimitive.If running>
+          {queue && <QueueButton queue={queue} />}
           <StopButton />
         </ThreadPrimitive.If>
       </ComposerPrimitive.Root>
