@@ -25,6 +25,7 @@ export type SSEEventName =
   | 'pins:changed'
   | 'schedule:changed'
   | 'provider:retry'
+  | 'queue:changed'
   | 'keepalive';
 
 /** Bytes a single event-stream client may have waiting before it is dropped. */

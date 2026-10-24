@@ -26,6 +26,7 @@ import { getModelInfo, isCatalogModel, isLocalModel, supportsTools } from './pro
 import { SSEManager } from './sse.js';
 import { classifyError } from './providers/errors.js';
 import { compactConversation, llmHistory } from './compaction.js';
+import { editQueuedMessage, enqueueMessage, listQueue, promoteQueuedMessage, removeQueuedMessage, takeNextQueued, toPublic } from './message-queue.js';
 import { COMPACT_AT, estimateTokens } from './context.js';
 import { AGENTS_FILE, WORKING_STYLE_PROMPT, projectInstructionsPrompt, proposePlanTool, todoTool } from './chat-tools.js';
 import { REQUEST_HUMAN_INPUT_TOOL, POST_REPORT_TOOL, formatHumanResponse, handleRequestHumanInput, resolveHumanInput, awaitHumanInput, DISMISSED_RESPONSE, isDismissedResponse, type GazetaField } from './gazeta.js';
@@ -1372,9 +1373,99 @@ ${m.body}`),
     turnPromises.set(convId, turnDone);
     const forget = () => { turnsInFlight.delete(turnDone); if (turnPromises.get(convId) === turnDone) turnPromises.delete(convId); };
     turnDone.then(forget, forget);
+    // The conversation is free again: whatever was typed while it worked goes next.
+    const next = () => setImmediate(() => drainQueue(convId));
+    turnDone.then(next, next);
 
     return turnId;
   }
+
+  // ─── Queued messages ──────────────────────────────────────────────────────
+  /** Conversations where the person asked for a queued message to go out now, even though the stopped turn ended in an error. */
+  const queueForced = new Set<string>();
+
+  /** The line is stuck: the last turn failed or was stopped, so nothing is sent until the person decides. */
+  function queuePaused(convId: string): boolean {
+    const status = getTurnState(convId).status;
+    return (status === 'error' || status === 'aborted') && !queueForced.has(convId);
+  }
+
+  function publishQueue(convId: string): void {
+    const items = listQueue(db, convId).map(toPublic);
+    sse.emit(convId, 'queue:changed', { items, paused: items.length > 0 && !isBusy(convId) && queuePaused(convId) });
+  }
+
+  /** Starts the oldest queued message as a new turn, if the conversation is free and not waiting for the person. */
+  function drainQueue(convId: string): void {
+    if (isBusy(convId)) return;
+    const conv = getConversation(db, convId);
+    if (!conv) return;
+    if (queuePaused(convId) || (conv.ghost && ghostModelProblem(conv.model))) { publishQueue(convId); return; }
+    const next = takeNextQueued(db, convId);
+    queueForced.delete(convId);
+    if (!next) return;
+    const historyBeforeTurn = llmHistory(db, convId);
+    const userMessageId = appendMessage(db, convId, 'user', next.content);
+    kickoffLiveTurn(convId, conv, historyBeforeTurn, next.content, userMessageId);
+    publishQueue(convId);
+  }
+
+  app.get('/api/conversations/:id/queue', (req, res) => {
+    const convId = req.params.id;
+    if (!getConversation(db, convId)) { res.status(404).json({ error: 'conversation not found' }); return; }
+    const items = listQueue(db, convId).map(toPublic);
+    res.json({ items, paused: items.length > 0 && !isBusy(convId) && queuePaused(convId) });
+  });
+
+  // Add to the line; when the conversation is free it simply goes out at once.
+  app.post('/api/conversations/:id/queue', (req, res) => {
+    const convId = req.params.id;
+    const { content: rawContent, text, attachments } = req.body ?? {};
+    const content = buildMessageContent(rawContent ?? text, attachments);
+    if (content === null) {
+      res.status(400).json({ error: 'expected { content: string, attachments?: Array<{ mediaType, data }> }' });
+      return;
+    }
+    const conv = getConversation(db, convId);
+    if (!conv) { res.status(404).json({ error: 'conversation not found' }); return; }
+    if (refuseGhostTurn(conv, res)) return;
+    const queued = enqueueMessage(db, convId, content);
+    if (!queued) { res.status(409).json({ error: 'too many queued messages — wait for some to be sent' }); return; }
+    publishQueue(convId);
+    drainQueue(convId);
+    res.json({ ok: true, id: queued.id });
+  });
+
+  app.patch('/api/conversations/:id/queue/:queueId', (req, res) => {
+    const convId = req.params.id;
+    const id = Number(req.params.queueId);
+    const text = req.body?.text;
+    if (!Number.isInteger(id) || typeof text !== 'string') { res.status(400).json({ error: 'expected { text: string }' }); return; }
+    if (editQueuedMessage(db, convId, id, text) === 'missing') { res.status(404).json({ error: 'queued message not found (it may have been sent already)' }); return; }
+    publishQueue(convId);
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/conversations/:id/queue/:queueId', (req, res) => {
+    const convId = req.params.id;
+    const id = Number(req.params.queueId);
+    if (!Number.isInteger(id) || !removeQueuedMessage(db, convId, id)) { res.status(404).json({ error: 'queued message not found (it may have been sent already)' }); return; }
+    publishQueue(convId);
+    res.json({ ok: true });
+  });
+
+  // Send now: this message goes first, and a running turn is stopped so it can start.
+  app.post('/api/conversations/:id/queue/:queueId/send-now', (req, res) => {
+    const convId = req.params.id;
+    const id = Number(req.params.queueId);
+    if (!Number.isInteger(id) || !promoteQueuedMessage(db, convId, id)) { res.status(404).json({ error: 'queued message not found (it may have been sent already)' }); return; }
+    queueForced.add(convId);
+    const controller = abortControllers.get(convId);
+    if (controller) controller.abort(); // the turn's end triggers the drain
+    else drainQueue(convId);
+    publishQueue(convId);
+    res.json({ ok: true });
+  });
 
   // ─── Scheduled agent tasks ────────────────────────────────────────────────
   /** Last text the assistant wrote in a conversation (the deliverable of a scheduled run), or ''. */

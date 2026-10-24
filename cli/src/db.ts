@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { migrateRuns } from './runs.js';
 import { migrateSearch } from './search.js';
+import { migrateMessageQueue } from './message-queue.js';
 import { isUserTurn } from './context.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -251,6 +252,7 @@ export function runMigrations(db: Database.Database): void {
   `);
   migrateRuns(db);
   migrateSearch(db);
+  migrateMessageQueue(db);
 
   // Seed default settings
   const seedSetting = db.prepare(
