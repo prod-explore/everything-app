@@ -1,4 +1,4 @@
-# Reverse proxy for the EverythingApp web MVP (cli/server.ts).
+# Reverse proxy for the EverythingApp web app (cli/src/server.ts).
 #
 # This is the STARTING config — plain HTTP, no certificate paths. Get this
 # in place and reloaded first, then run:
@@ -12,8 +12,7 @@
 # also wires up the renewal hook correctly.
 #
 # Copy to /etc/nginx/sites-available/everythingapp.conf, symlink into
-# sites-enabled, `nginx -t`, then `systemctl reload nginx` — same as
-# whatever pattern the other services on this host already use.
+# sites-enabled, `nginx -t`, then `systemctl reload nginx`.
 
 # Login attempts are also limited in the app (8 per 15 minutes per client); this is the cheap first line.
 limit_req_zone $binary_remote_addr zone=ea_login:1m rate=10r/m;

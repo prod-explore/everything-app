@@ -1,5 +1,5 @@
-# EverythingApp — Docker Compose
-# Sandbox Hardening, Playwright browser agent, Git Proxy, Orchestrator
+# EverythingApp — Docker Compose: the orchestrator (web), the sandbox supervisor and its MCP server, the browser agent
+# and the git proxy.
 #
 # Run: docker compose up
 # Prerequisites:
@@ -112,7 +112,7 @@ services:
   # Network: public internet allowed; private networks are NOT (see deploy/egress-guard.sh
   # for the network layer and playwright-mcp/src/urlSafety.ts for the application layer).
   # No docker.sock. Lives on its own `browser-egress` bridge — it shares NO network with the
-  # supervisor, sandbox-mcp or github-mcp (holds the PAT); only the web server is attached
+  # supervisor, sandbox-mcp or git-proxy (holds the GitHub credentials); only the web server is attached
   # to both sides so it can call the MCP endpoint.
   playwright-mcp:
     container_name: everythingapp-playwright-mcp
@@ -131,12 +131,12 @@ services:
       # SSRF guard: the browser may only reach the PUBLIC internet. Comma-separated private
       # hostnames/IPs to allow on purpose (default none), e.g. a NAS you want the agent to read.
       BROWSER_ALLOW_PRIVATE_HOSTS: ${BROWSER_ALLOW_PRIVATE_HOSTS:-}
-      # N3b browser policy (operator layer; the cli's per-project `_policy` can only tighten it).
+      # Browser policy (operator layer; the cli's per-project `_policy` can only tighten it).
       # Comma-separated globs like *.example.com. Empty allowlist = any public domain.
       BROWSER_DOMAIN_ALLOW: ${BROWSER_DOMAIN_ALLOW:-}
       BROWSER_DOMAIN_DENY: ${BROWSER_DOMAIN_DENY:-}
       BROWSER_JS_POLICY: ${BROWSER_JS_POLICY:-allowed}   # disabled | review | allowed
-      # Observation v2: deterministic observations.
+      # Observations are built deterministically (no model between the page and the agent) and cut to this length.
       OBSERVATION_MAX_TEXT_CHARS: ${OBSERVATION_MAX_TEXT_CHARS:-12000}
     # No volumes on purpose: browser profiles are EPHEMERAL (no persistent logins). A leftover
     # `playwright_profiles` volume from older versions can be deleted:
