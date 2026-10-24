@@ -17,16 +17,6 @@ import type { BrowserContext } from 'playwright';
  *      a public page embedding http://192.168.1.1/…), which is where SSRF actually happens.
  */
 
-/** Scheme allowlist. Only http(s) — no file:, data:, javascript:, etc. */
-export function isAllowedUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
 function parseIPv4(ip: string): number[] | null {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
   if (!m) return null;

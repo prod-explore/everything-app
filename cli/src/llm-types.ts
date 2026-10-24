@@ -63,7 +63,6 @@ export interface Tool {
   description?: string;
   input_schema: { type: 'object'; properties?: Record<string, unknown>; required?: string[]; [k: string]: unknown };
 }
-export type ToolUnion = Tool;
 
 export interface MessageCreateParamsNonStreaming {
   model: string;

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isPrivateAddress, UrlGuard, UrlBlockedError, isAllowedUrl, parseAllowHosts } from '../urlSafety.js';
+import { isPrivateAddress, UrlGuard, UrlBlockedError, parseAllowHosts } from '../urlSafety.js';
 
 describe('isPrivateAddress', () => {
   const privateCases = [
@@ -88,10 +88,6 @@ describe('UrlGuard.check', () => {
 });
 
 describe('helpers', () => {
-  it('isAllowedUrl keeps the scheme allowlist', () => {
-    assert.equal(isAllowedUrl('https://a.b'), true);
-    assert.equal(isAllowedUrl('file:///x'), false);
-  });
   it('parseAllowHosts trims and drops empties', () => {
     assert.deepEqual(parseAllowHosts(' a.lan, ,10.0.0.1 '), ['a.lan', '10.0.0.1']);
     assert.deepEqual(parseAllowHosts(undefined), []);

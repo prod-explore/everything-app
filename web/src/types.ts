@@ -148,12 +148,6 @@ export interface PendingApproval {
 }
 
 export type CommandMode = 'strict' | 'auto' | 'allowlist';
-export interface CommandPolicy {
-  mode: CommandMode;
-  allow: string[];
-  deny: string[];
-  domains: string[];
-}
 
 export interface ConnectorInfo {
   name: string;
@@ -404,19 +398,6 @@ export interface RunRow {
 export interface BudgetWarning {
   rootRunId: string;
   usage: RunUsage;
-}
-
-export interface SubagentRunSummary {
-  id: string;
-  conversationId: string;
-  goal: string;
-  model: string;
-  allowedTools: string[];
-  status: 'running' | 'done' | 'error';
-  result: { summary: string; artifactIds: string[] } | null;
-  error: string | null;
-  startedAt: string;
-  finishedAt: string | null;
 }
 
 

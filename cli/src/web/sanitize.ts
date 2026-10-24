@@ -1,6 +1,6 @@
 // Copy of playwright-mcp/src/sanitize.ts (each package is built on its own).
 /**
- * Deterministic text cleaning for everything that comes out of a web page (Observation v2).
+ * Deterministic text cleaning for everything that comes out of a web page.
  *
  * No LLM is involved: page text and element labels are normalised and stripped of characters
  * that are invisible to a human but readable by a model — the classic carriers of hidden prompt
@@ -30,15 +30,6 @@ export interface SanitizeResult {
 
 export function emptyStats(): SanitizeStats {
   return { tagChars: 0, zeroWidth: 0, bidi: 0, control: 0 };
-}
-
-export function addStats(a: SanitizeStats, b: SanitizeStats): SanitizeStats {
-  return {
-    tagChars: a.tagChars + b.tagChars,
-    zeroWidth: a.zeroWidth + b.zeroWidth,
-    bidi: a.bidi + b.bidi,
-    control: a.control + b.control,
-  };
 }
 
 const TAG_RE = /[\u{E0000}-\u{E007F}]/gu;

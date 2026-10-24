@@ -376,10 +376,6 @@ export function artifactFileUrl(id: string): string {
 
 // ─── Usage ────────────────────────────────────────────────────────────────
 
-export function getUsage(): Promise<{ summary: string }> {
-  return request('/api/usage');
-}
-
 export function getUsageReport(range: UsageRange): Promise<UsageReport> {
   // Minutes east of UTC, so "today" and the daily buckets follow this browser's clock.
   const tzOffset = -new Date().getTimezoneOffset();
@@ -506,10 +502,6 @@ export function updateProject(id: string, patch: { name?: string; description?: 
 /** Deletes a project; its chats are deleted with it unless `keepChats` (they then become quick chats). */
 export function deleteProject(id: string, keepChats = false): Promise<{ ok: boolean }> {
   return request(`/api/projects/${id}${keepChats ? '?conversations=keep' : ''}`, { method: 'DELETE' });
-}
-
-export function listProjectConversations(id: string): Promise<{ conversations: ConversationSummary[] }> {
-  return request(`/api/projects/${id}/conversations`);
 }
 
 // ─── Approval Grants ──────────────────────────────────────────────────────

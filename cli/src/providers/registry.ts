@@ -111,17 +111,8 @@ export function setCatalogSnapshot(next: Snapshot): void {
   snapshot = next;
 }
 
-export function getProvider(slug: string): ProviderRecord | undefined {
-  return snapshot.providers.get(slug);
-}
-
 export function providerLabel(slug: string): string {
   return snapshot.providers.get(slug)?.label ?? slug;
-}
-
-/** Every model in the catalog (enabled or not), in the order providers/models were added. */
-export function listCatalog(): ModelInfo[] {
-  return [...snapshot.models.values()];
 }
 
 /** A model nobody told us about (old conversation, typo, provider removed): conservative defaults, never throws. */

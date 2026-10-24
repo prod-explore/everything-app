@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { assertStrongSecret } from './secret-check.js';
 import { parseJsPolicy, parsePatternList, type JsPolicy } from './policy.js';
+import { parseAllowHosts } from './urlSafety.js';
 
 export interface PlaywrightConfig {
   mcpPort: number;
@@ -57,7 +58,7 @@ export function loadConfig(): PlaywrightConfig {
     maxTabs: Math.max(1, parseInt(process.env['PLAYWRIGHT_MAX_TABS'] ?? '6', 10) || 6),
     sessionIdleTimeoutMs: parseInt(process.env['PLAYWRIGHT_SESSION_IDLE_TIMEOUT_MS'] ?? '1800000', 10),
     watchdogIntervalMs: parseInt(process.env['PLAYWRIGHT_WATCHDOG_INTERVAL_MS'] ?? '120000', 10),
-    allowPrivateHosts: (process.env['BROWSER_ALLOW_PRIVATE_HOSTS'] ?? '').split(',').map(h => h.trim()).filter(Boolean),
+    allowPrivateHosts: parseAllowHosts(process.env['BROWSER_ALLOW_PRIVATE_HOSTS']),
     previewHostPattern: /^sandbox-[0-9a-f]{10}$/,
     observationMaxTextChars: parseInt(process.env['OBSERVATION_MAX_TEXT_CHARS'] ?? '12000', 10),
     observationLabelMaxChars: parseInt(process.env['OBSERVATION_LABEL_MAX_CHARS'] ?? '100', 10),

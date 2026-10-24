@@ -101,8 +101,6 @@ import {
   createArtifact,
   getArtifact,
   listPins, addPin, removePin,
-  listSubagentRuns,
-  getSubagentRun,
   createProject,
   listProjects,
   getProject,
@@ -1845,17 +1843,6 @@ ${formatHumanResponse(response)}`;
     const owner = workspaceOwner(req.params.owner);
     if (!owner || typeof req.query['path'] !== 'string') { res.status(400).json({ error: 'owner and path required' }); return; }
     res.json({ ok: removePin(db, owner, req.query['path']) });
-  });
-
-  // ─── Subagent runs ──────────────────────────────────────────
-  app.get('/api/conversations/:id/subagent-runs', (req, res) => {
-    res.json({ runs: listSubagentRuns(db, req.params.id) });
-  });
-
-  app.get('/api/subagent-runs/:id', (req, res) => {
-    const run = getSubagentRun(db, req.params.id);
-    if (!run) { res.status(404).json({ error: 'run not found' }); return; }
-    res.json(run);
   });
 
   // ─── Usage ────────────────────────────────────────────────────────────────
