@@ -648,7 +648,7 @@ export class OpenAiCompatClient implements LlmClient {
   };
 
   /**
-   * N2b — real token streaming for OpenAI-compatible providers. Text deltas are emitted as
+   * Real token streaming for OpenAI-compatible providers. Text deltas are emitted as
    * `content_block_delta` events as they arrive; text, reasoning and `tool_calls` deltas (by index, with
    * arguments split across chunks) are accumulated and the final message goes through the same
    * fromChatResponse() translation as the non-streaming path, so tool calls behave identically.

@@ -4,7 +4,7 @@ import type { UrlGuard } from './urlSafety.js';
 
 /**
  * One place that creates every browser context (browser sessions), with the
- * N3b lockdown: ephemeral profile, domain/JS policy, no downloads/uploads unless the orchestrator
+ * lockdown: ephemeral profile, domain/JS policy, no downloads/uploads unless the orchestrator
  * passed `_allow_downloads`, no permissions, WebRTC leak protection, no extensions, blocked
  * chrome:/file:/devtools: schemes, and the private-network SSRF guard on every request.
  */

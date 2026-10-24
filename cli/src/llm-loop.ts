@@ -177,7 +177,7 @@ const WEB_VIRTUAL_TOOLS = new Set(['web_fetch', 'web_search']);
 const IRREVERSIBLE_WARNING = 'This browser action looks irreversible (payment, deletion, subscription…). Check that it is what you asked for.';
 const BROWSER_META_PREFIX = '[browser-meta] ';
 
-/** playwright-mcp puts `[browser-meta] {json}` on the first line of every observation (Observation v2). */
+/** playwright-mcp puts `[browser-meta] {json}` on the first line of every observation. */
 export function browserInjectionSignal(text: string): { suspected: boolean; reasons: string[] } {
   if (!text.startsWith(BROWSER_META_PREFIX)) return { suspected: false, reasons: [] };
   const nl = text.indexOf('\n');

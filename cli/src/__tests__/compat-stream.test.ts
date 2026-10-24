@@ -19,7 +19,7 @@ function client(fetchImpl: typeof fetch) {
 
 const params = { model: 'deepseek-chat', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 'srv__x', description: 'x', input_schema: { type: 'object', properties: { a: { type: 'number' } } } }] } as unknown as Llm.MessageCreateParamsNonStreaming;
 
-describe('OpenAI-compat streaming (N2b)', () => {
+describe('OpenAI-compat streaming', () => {
   it('emits text deltas live and assembles tool_calls split across chunks', async () => {
     let sent: any;
     const c = client((async (_u: string, init: RequestInit) => {

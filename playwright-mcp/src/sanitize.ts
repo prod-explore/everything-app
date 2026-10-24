@@ -1,5 +1,5 @@
 /**
- * Deterministic text cleaning for everything that comes out of a web page (Observation v2).
+ * Deterministic text cleaning for everything that comes out of a web page.
  *
  * No LLM is involved: page text and element labels are normalised and stripped of characters
  * that are invisible to a human but readable by a model — the classic carriers of hidden prompt

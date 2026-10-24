@@ -6,7 +6,7 @@ import type { JsPolicy } from './policy.js';
 import { addStats, emptyStats, sanitizeLabel, sanitizeText, type SanitizeStats } from './sanitize.js';
 
 /**
- * Observation v2 — the deterministic source of truth for what the agent sees of a page.
+ * The deterministic source of truth for what the agent sees of a page.
  *
  * No LLM sits between the page and the agent any more. Code collects visible text and interactive
  * elements (in-page script below), Node cleans them (sanitize.ts), builds the element table with

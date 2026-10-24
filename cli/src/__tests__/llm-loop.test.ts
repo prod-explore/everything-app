@@ -389,7 +389,7 @@ describe('runTurn — kill switch while parked on the approval gate', () => {
   });
 });
 
-describe('runTurn — streaming text deltas (N2b)', () => {
+describe('runTurn — streaming text deltas', () => {
   const baseDeps = (client: LlmClient, extra: Record<string, unknown> = {}) => ({
     llm: client,
     model: '@test/model',
