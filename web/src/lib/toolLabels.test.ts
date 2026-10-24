@@ -29,13 +29,7 @@ describe('toolLabel', () => {
     expect(toolLabel('read_file', { path: 7 }, false).detail).toBeUndefined();
   });
 
-  it('names an unknown connector tool readably and shows what it acts on', () => {
-    expect(toolLabel('crm__find_contact', {}, false)).toMatchObject({ label: 'crm · find contact' });
-    expect(toolLabel('obsidian__write_note', { path: '01-Projects/Remonty/cennik.md', content: 'long body' }, false)).toMatchObject({
-      label: 'obsidian · write note',
-      detail: '01-Projects/Remonty/cennik.md',
-    });
-    expect(toolLabel('plain_tool', {}, false).label).toBe('plain tool');
-    expect(toolLabel('obsidian__move_note', { from: 'a.md', to: 'b/a.md' }, false).detail).toBe('a.md → b/a.md');
+  it('shows an unknown tool under its own name, with no guessed summary', () => {
+    expect(toolLabel('crm__find_contact', { query: 'x' }, false)).toEqual({ icon: expect.anything(), label: 'crm__find_contact' });
   });
 });

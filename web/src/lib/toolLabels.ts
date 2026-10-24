@@ -36,23 +36,6 @@ function baseName(toolName: string): string {
   return i >= 0 ? toolName.slice(i + 2) : toolName;
 }
 
-/** The argument most connector tools use to say what they act on; shown on the collapsed row so a step is not just a name. */
-const SUBJECT_KEYS = ['path', 'file_path', 'filePath', 'file', 'old_path', 'source', 'command', 'cmd', 'url', 'query', 'q', 'name', 'title', 'id'];
-
-/** A move or copy names two places; show both ("a.md → b/a.md"). */
-function moveDetail(args: Args): string | undefined {
-  const from = str(args, 'from', 'source_path', 'old_path');
-  const to = str(args, 'to', 'destination', 'target_path', 'new_path');
-  return from && to ? clip(`${from} → ${to}`, 80) : undefined;
-}
-
-/** `obsidian__write_note` → "obsidian · write note". A tool without a server prefix just loses its underscores. */
-export function connectorToolLabel(toolName: string): string {
-  const i = toolName.lastIndexOf('__');
-  const words = (s: string) => s.replace(/[_-]+/g, ' ').trim();
-  return i > 0 ? `${words(toolName.slice(0, i))} · ${words(toolName.slice(i + 2))}` : words(toolName);
-}
-
 /**
  * Human-readable label + icon for a raw tool call (F13). Unknown tools fall back to the raw name,
  * so a new connector never renders as nothing. Past tense once finished, present while running.
@@ -108,6 +91,6 @@ export function toolLabel(toolName: string, args: Args, running: boolean): ToolL
     case 'get_run':
       return { icon: Bot, label: r('Checked on agents', 'Checking on agents') };
     default:
-      return { icon: Wrench, label: connectorToolLabel(toolName), detail: moveDetail(args) ?? clip(str(args, ...SUBJECT_KEYS)) };
+      return { icon: Wrench, label: toolName };
   }
 }
