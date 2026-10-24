@@ -100,7 +100,7 @@ export function GitPanel({ projectId, onClose, onConnect }: { projectId: string;
   useEffect(() => {
     if (!current) return;
     if (disabled(tab)) setTab(current.dir === null ? 'pulls' : 'changes');
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the repository changes, not on every tab switch
   }, [current?.key]);
 
   const loading = local === null;

@@ -39,7 +39,7 @@ export function contentDisposition(type: 'inline' | 'attachment', filename: stri
 
 /** Last path segment only, control characters removed, bounded length, never empty. */
 export function sanitizeFilename(raw: string): string {
-  // eslint-disable-next-line no-control-regex
+  // The pattern is meant to match control characters: they are what gets removed.
   let name = raw.replace(/[\u0000-\u001f\u007f]/g, '').split(/[\\/]/).pop()!.trim();
   if (name === '.' || name === '..') name = '';
   if (name.length > 120) {

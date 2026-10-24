@@ -419,7 +419,6 @@ export function BrowserPanel({
                 You have control
               </div>
             )}
-            {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
             <img
               ref={imgRef}
               alt="Live browser view"

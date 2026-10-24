@@ -55,7 +55,7 @@ export function SkillsTab({ conversationId }: { conversationId?: string }) {
   useEffect(() => {
     setLoading(true);
     reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloads when the chat changes; `reload` is re-created on every render
   }, [conversationId]);
 
   function startCreate() {

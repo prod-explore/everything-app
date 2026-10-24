@@ -3,7 +3,7 @@
  *
  * - App shell: navigations are network-first (fresh deploys win), falling back to the cached shell offline.
  * - Hashed build assets (/assets/*) are cache-first — their names change on every build.
- * - Never touches /api, /internal, SSE streams or the live-view proxy: those carry the auth token and
+ * - Never touches /api, /internal, SSE streams or the live-view proxy: those carry the session and
  *   live data, and must always hit the server.
  */
 const CACHE = 'ea-shell-v1';

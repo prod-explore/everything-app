@@ -172,7 +172,6 @@ describe('WebApprovalGate', () => {
     const gate = new WebApprovalGate(freshDb());
     // TypeScript prevents this at compile time, but the server validates at runtime too —
     // test the raw JS behaviour to make sure resolve() doesn't throw on a bad value.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     assert.doesNotThrow(() => gate.resolve('unknown-id', true, 'bogus' as any));
   });
 });
