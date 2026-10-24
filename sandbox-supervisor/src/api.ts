@@ -156,7 +156,8 @@ export function createSupervisorApp(sandboxes: SandboxManager, defaultTimeoutMs 
 
   const owners = express.Router({ mergeParams: true });
   app.use('/sandboxes/:owner', (req, res, next) => {
-    if (!SandboxManager.validOwner(req.params['owner'] ?? '')) {
+    const owner = req.params['owner'];
+    if (typeof owner !== 'string' || !SandboxManager.validOwner(owner)) {
       res.status(400).json({ error: 'invalid owner id (letters, digits, _ and -, max 64)' });
       return;
     }
