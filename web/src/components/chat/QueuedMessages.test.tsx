@@ -9,9 +9,9 @@ vi.mock('@assistant-ui/react', () => ({ useAuiState: (select: (s: unknown) => un
 
 function controls(over: Partial<MessageQueueControls> = {}): MessageQueueControls {
   return {
-    items: [{ id: 'a', text: 'first' }, { id: 'b', text: 'second' }],
+    items: [{ id: 1, text: 'first', images: 0 }, { id: 2, text: 'second', images: 2 }],
     paused: false,
-    add: vi.fn(),
+    interruptNext: vi.fn(),
     edit: vi.fn(),
     remove: vi.fn(),
     sendNow: vi.fn(),
@@ -31,6 +31,11 @@ describe('QueuedMessages', () => {
     expect(screen.getByText('#2')).toBeTruthy();
   });
 
+  it('shows that a waiting message carries images', () => {
+    render(<QueuedMessages queue={controls()} />);
+    expect(screen.getByLabelText('2 images')).toBeTruthy();
+  });
+
   it('says "paused" when the line is stuck behind a failed turn', () => {
     render(<QueuedMessages queue={controls({ paused: true })} />);
     expect(screen.getByText('paused')).toBeTruthy();
@@ -40,9 +45,9 @@ describe('QueuedMessages', () => {
     const q = controls();
     render(<QueuedMessages queue={q} />);
     await userEvent.click(screen.getAllByLabelText('Stop the assistant and send now')[1]);
-    expect(q.sendNow).toHaveBeenCalledWith('b');
+    expect(q.sendNow).toHaveBeenCalledWith(2);
     await userEvent.click(screen.getAllByLabelText('Remove from queue')[0]);
-    expect(q.remove).toHaveBeenCalledWith('a');
+    expect(q.remove).toHaveBeenCalledWith(1);
   });
 
   it('edits a message in place and saves with Enter', async () => {
@@ -52,7 +57,7 @@ describe('QueuedMessages', () => {
     const box = screen.getByLabelText('Edit queued message');
     await userEvent.clear(box);
     await userEvent.type(box, 'changed{Enter}');
-    expect(q.edit).toHaveBeenCalledWith('a', 'changed');
+    expect(q.edit).toHaveBeenCalledWith(1, 'changed');
   });
 
   it('does not save an edit that was cancelled with Escape', async () => {

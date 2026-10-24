@@ -1,33 +1,10 @@
-import { AttachmentPrimitive, ComposerPrimitive, ThreadPrimitive, useAui, useAuiState } from '@assistant-ui/react';
+import { AttachmentPrimitive, ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, ListPlus, Minimize2, Paperclip, RotateCw, Send, X } from 'lucide-react';
+import { AlertTriangle, Minimize2, Paperclip, RotateCw, Send, X } from 'lucide-react';
 import type { TurnErrorKind } from '../../types';
 import { StopButton } from './StopButton';
 import { SlashMenu } from './SlashMenu';
 import { QueuedMessages, type MessageQueueControls } from './QueuedMessages';
-
-/** While the assistant works, "send" puts the message in line instead (images wait: they only go out with a live send). */
-function QueueButton({ queue }: { queue: MessageQueueControls }) {
-  const aui = useAui();
-  const text = useAuiState(s => s.composer.text);
-  const hasImage = useAuiState(s => s.composer.attachments.length > 0);
-  const disabled = !text.trim() || hasImage;
-  return (
-    <button
-      type="button"
-      aria-label="Add to queue"
-      title={hasImage ? 'Images can be sent once the assistant is done' : 'Add to queue (Enter) — sent when the assistant is done; Ctrl+Enter sends now'}
-      disabled={disabled}
-      onClick={() => {
-        queue.add(text);
-        aui.composer().setText('');
-      }}
-      className="flex size-[42px] shrink-0 items-center justify-center rounded-button bg-fg text-bg transition-opacity disabled:opacity-30"
-    >
-      <ListPlus size={16} />
-    </button>
-  );
-}
 
 export function Composer({
   error,
@@ -54,7 +31,6 @@ export function Composer({
   /** Messages waiting for their turn; without it the box is locked while the assistant works. */
   queue?: MessageQueueControls;
 }) {
-  const aui = useAui();
   return (
     <div className="border-t border-border bg-bg">
       {error && (
@@ -128,30 +104,23 @@ export function Composer({
           id="composer-input"
           rows={1}
           placeholder="Message…"
+          // Enter queues the message while the assistant works; Ctrl/Cmd+Enter makes it go out now (see lib/runtime.ts).
           onKeyDown={e => {
-            // ComposerPrimitive ignores Enter while the assistant works; here Enter joins the queue and Ctrl/Cmd+Enter sends right away.
-            if (!queue || e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
-            if (!aui.thread().getState().isRunning) return;
-            e.preventDefault();
-            const typed = aui.composer().getState().text;
-            if (!typed.trim() || aui.composer().getState().attachments.length > 0) return;
-            const id = queue.add(typed);
-            aui.composer().setText('');
-            // Ctrl/Cmd+Enter: don't wait for the turn — stop it and send this one now.
-            if (e.ctrlKey || e.metaKey) queue.sendNow(id);
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) queue?.interruptNext();
           }}
           className="max-h-32 min-w-0 flex-1 resize-none rounded-button border border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-border-hover max-sm:order-first max-sm:max-h-52 max-sm:min-h-[84px] max-sm:basis-full"
         />
 
         {trailing}
 
-        <ThreadPrimitive.If running={false}>
-          <ComposerPrimitive.Send aria-label="Send message" className="flex size-[42px] shrink-0 items-center justify-center rounded-button bg-fg text-bg transition-opacity disabled:opacity-30">
-            <Send size={16} />
-          </ComposerPrimitive.Send>
-        </ThreadPrimitive.If>
+        <ComposerPrimitive.Send
+          aria-label="Send message"
+          title={queue ? 'Send (while the assistant works: add to the queue — Ctrl+Enter sends right away)' : 'Send'}
+          className="flex size-[42px] shrink-0 items-center justify-center rounded-button bg-fg text-bg transition-opacity disabled:opacity-30"
+        >
+          <Send size={16} />
+        </ComposerPrimitive.Send>
         <ThreadPrimitive.If running>
-          {queue && <QueueButton queue={queue} />}
           <StopButton />
         </ThreadPrimitive.If>
       </ComposerPrimitive.Root>

@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef } from 'react';
-import { getTurnStatus } from '../api';
+import { getMessageQueue, getTurnStatus, type MessageQueueInfo } from '../api';
 import type { ConversationStateInfo, TurnErrorKind } from '../types';
 
 /**
@@ -38,13 +38,16 @@ export interface LiveTurnState {
   context?: { used: number; limit: number | null };
   /** Pushed by the server when the effort / the todo list change. */
   convState?: ConversationStateInfo;
+  /** Messages waiting for the assistant to be free (kept on the server, pushed as they change). */
+  queue: MessageQueueInfo;
   /** Bumped when the server summarised older messages — consumers refetch the message list. */
   compactedCount: number;
   /** Bumped on every turn:done/error/aborted — lets consumers notice "a turn just finished" even if `running` briefly reads false in both the old and new state. */
   finishedCount: number;
 }
 
-export const INITIAL_STATE: LiveTurnState = { running: false, parts: [], finishedCount: 0, compactedCount: 0 };
+const EMPTY_QUEUE: MessageQueueInfo = { items: [], paused: false };
+export const INITIAL_STATE: LiveTurnState = { running: false, parts: [], finishedCount: 0, compactedCount: 0, queue: EMPTY_QUEUE };
 
 export type LiveTurnAction =
   | { type: 'clear' }
@@ -59,20 +62,23 @@ export type LiveTurnAction =
   | { type: 'finish'; error?: string; kind?: TurnErrorKind; detail?: string }
   | { type: 'context'; used: number; limit: number | null }
   | { type: 'conv_state'; state: ConversationStateInfo }
+  | { type: 'queue'; queue: MessageQueueInfo }
   | { type: 'compacted' };
 
 export function liveTurnReducer(state: LiveTurnState, action: LiveTurnAction): LiveTurnState {
   switch (action.type) {
     case 'clear':
-      return { running: false, parts: [], finishedCount: state.finishedCount, compactedCount: state.compactedCount };
+      return { running: false, parts: [], finishedCount: state.finishedCount, compactedCount: state.compactedCount, queue: EMPTY_QUEUE };
     case 'start':
-      return { running: true, parts: [], finishedCount: state.finishedCount, compactedCount: state.compactedCount, context: state.context, convState: state.convState };
+      return { running: true, parts: [], finishedCount: state.finishedCount, compactedCount: state.compactedCount, queue: state.queue, context: state.context, convState: state.convState };
     case 'resume':
       return state.running ? state : liveTurnReducer(state, { type: 'start' });
     case 'context':
       return { ...state, context: { used: action.used, limit: action.limit } };
     case 'conv_state':
       return { ...state, convState: action.state };
+    case 'queue':
+      return { ...state, queue: action.queue };
     case 'compacted':
       return { ...state, compactedCount: state.compactedCount + 1 };
     case 'text_delta': {
@@ -225,6 +231,9 @@ export function useSSE(conversationId: string | null, onSideEvent?: (event: Side
         dispatch({ type: 'conv_state', state: JSON.parse((e as MessageEvent).data) as ConversationStateInfo });
       });
       source.addEventListener('conversation:compacted', () => dispatch({ type: 'compacted' }));
+      source.addEventListener('queue:changed', e => {
+        dispatch({ type: 'queue', queue: JSON.parse((e as MessageEvent).data) as MessageQueueInfo });
+      });
       source.addEventListener('turn:aborted', e => {
         const data = JSON.parse((e as MessageEvent).data) as { error: string };
         dispatch({ type: 'finish', error: data.error });
@@ -243,6 +252,10 @@ export function useSSE(conversationId: string | null, onSideEvent?: (event: Side
         void getTurnStatus(id)
           .then(s => { if (!closed && s.status === 'running') dispatch({ type: 'resume' }); })
           .catch(() => { /* the next event or reconnect sorts it out */ });
+        // Messages queued before the reload (or from another device) are still waiting on the server.
+        void getMessageQueue(id)
+          .then(q => { if (!closed) dispatch({ type: 'queue', queue: q }); })
+          .catch(() => { /* the next queue:changed sets it */ });
       };
 
       source.onerror = () => {

@@ -2,8 +2,8 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { INITIAL_STATE, liveTurnReducer, useSSE, type LiveTurnAction, type LiveTurnState } from './useSSE';
 
-const { getTurnStatus } = vi.hoisted(() => ({ getTurnStatus: vi.fn() }));
-vi.mock('../api', () => ({ getTurnStatus }));
+const { getTurnStatus, getMessageQueue } = vi.hoisted(() => ({ getTurnStatus: vi.fn(), getMessageQueue: vi.fn() }));
+vi.mock('../api', () => ({ getTurnStatus, getMessageQueue }));
 
 const run = (actions: LiveTurnAction[], from: LiveTurnState = INITIAL_STATE) => actions.reduce(liveTurnReducer, from);
 
@@ -111,6 +111,8 @@ describe('useSSE', () => {
     vi.useFakeTimers();
     getTurnStatus.mockReset();
     getTurnStatus.mockResolvedValue({ id: 0, status: 'idle', usage: '' });
+    getMessageQueue.mockReset();
+    getMessageQueue.mockResolvedValue({ items: [], paused: false });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -138,6 +140,24 @@ describe('useSSE', () => {
     expect(result.current.parts).toMatchObject([{ type: 'text', text: 'Hi' }]);
     act(() => es.emit('turn:error', { error: 'boom', kind: 'other' }));
     expect(result.current).toMatchObject({ running: false, error: 'boom', finishedCount: 1 });
+  });
+
+  it('shows messages waiting on the server, from the stream and after a reconnect', async () => {
+    const waiting = { items: [{ id: 7, text: 'later', images: 1 }], paused: false };
+    getMessageQueue.mockResolvedValue(waiting);
+    const { result } = renderHook(() => useSSE('c1'));
+    const es = FakeEventSource.instances[0]!;
+    await act(async () => { es.onopen?.(); });
+    expect(getMessageQueue).toHaveBeenCalledWith('c1');
+    expect(result.current.queue).toEqual(waiting);
+    act(() => es.emit('queue:changed', { items: [], paused: false }));
+    expect(result.current.queue.items).toEqual([]);
+  });
+
+  it('keeps the queue across turns', () => {
+    const queue = { items: [{ id: 1, text: 'x', images: 0 }], paused: true };
+    const s = run([{ type: 'queue', queue }, { type: 'start' }, { type: 'finish' }]);
+    expect(s.queue).toEqual(queue);
   });
 
   it('picks up a turn that is already running when the stream connects (reload, switching back, reconnect)', async () => {

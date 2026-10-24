@@ -13,7 +13,7 @@ async function open(vp, mobile) {
   return page;
 }
 const send = async (page, t) => { await page.fill('#composer-input', t); await page.keyboard.press('Enter'); };
-const idle = page => page.waitForSelector('button[aria-label="Send message"]', { timeout: 30000 });
+const idle = page => page.waitForSelector('button[title="Stop (kill switch)"]', { state: 'detached', timeout: 30000 });
 
 let page = await open({ width: 1440, height: 900 });
 await send(page, 'long'); await page.waitForSelector('text=A longer answer'); await idle(page);

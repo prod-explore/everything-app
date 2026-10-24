@@ -1,26 +1,28 @@
 import { useAuiState } from '@assistant-ui/react';
 import { useState } from 'react';
-import { Check, Clock, Pencil, SendHorizontal, Trash2, X } from 'lucide-react';
-import type { QueuedMessage } from '../../lib/messageQueue';
+import { Check, Clock, Image as ImageIcon, Pencil, SendHorizontal, Trash2, X } from 'lucide-react';
+import type { QueuedMessageInfo } from '../../api';
 
 export interface MessageQueueControls {
-  items: readonly QueuedMessage[];
+  items: readonly QueuedMessageInfo[];
   paused: boolean;
-  add: (text: string) => string;
-  edit: (id: string, text: string) => void;
-  remove: (id: string) => void;
-  sendNow: (id: string) => void;
+  edit: (id: number, text: string) => void;
+  remove: (id: number) => void;
+  sendNow: (id: number) => void;
+  /** The next submit from the composer interrupts the running turn instead of waiting (Ctrl/Cmd+Enter). */
+  interruptNext: () => void;
 }
 
 /** Messages waiting for their turn, above the message box: change them, drop them, or send one right away. */
 export function QueuedMessages({ queue }: { queue: MessageQueueControls }) {
   const running = useAuiState(s => s.thread.isRunning);
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
   if (queue.items.length === 0) return null;
 
   const save = () => {
-    if (editing) queue.edit(editing.id, editing.text);
+    const current = editing;
     setEditing(null);
+    if (current && current.text !== queue.items.find(m => m.id === current.id)?.text) queue.edit(current.id, current.text);
   };
 
   return (
@@ -49,7 +51,10 @@ export function QueuedMessages({ queue }: { queue: MessageQueueControls }) {
             </>
           ) : (
             <>
-              <span className="line-clamp-3 min-w-0 flex-1 whitespace-pre-wrap break-words" title={m.text}>{m.text}</span>
+              <span className="line-clamp-3 min-w-0 flex-1 whitespace-pre-wrap break-words" title={m.text}>
+                {m.images > 0 && <ImageIcon size={12} className="mr-1 inline align-[-1px] text-fg-tertiary" aria-label={`${m.images} image${m.images === 1 ? '' : 's'}`} />}
+                {m.text}
+              </span>
               <span className="mt-0.5 shrink-0 text-fg-tertiary">{i === 0 ? (queue.paused ? 'paused' : 'next') : `#${i + 1}`}</span>
               <IconButton label="Edit" onClick={() => setEditing({ id: m.id, text: m.text })}><Pencil size={13} /></IconButton>
               <IconButton label={running ? 'Stop the assistant and send now' : 'Send now'} onClick={() => queue.sendNow(m.id)}><SendHorizontal size={13} /></IconButton>

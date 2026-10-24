@@ -155,6 +155,31 @@ export function sendMessage(
   });
 }
 
+/** A message waiting for its turn, as the server keeps it (images stay on the server; only their number is sent back). */
+export interface QueuedMessageInfo { id: number; text: string; images: number }
+export interface MessageQueueInfo { items: QueuedMessageInfo[]; paused: boolean }
+
+export function getMessageQueue(conversationId: string): Promise<MessageQueueInfo> {
+  return request(`/api/conversations/${conversationId}/queue`);
+}
+
+export function queueMessage(conversationId: string, content: string, attachments?: OutgoingAttachment[]): Promise<{ ok: true; id: number }> {
+  return request(`/api/conversations/${conversationId}/queue`, { method: 'POST', body: JSON.stringify({ content, attachments }) });
+}
+
+export function editQueuedMessage(conversationId: string, id: number, text: string): Promise<{ ok: true }> {
+  return request(`/api/conversations/${conversationId}/queue/${id}`, { method: 'PATCH', body: JSON.stringify({ text }) });
+}
+
+export function removeQueuedMessage(conversationId: string, id: number): Promise<{ ok: true }> {
+  return request(`/api/conversations/${conversationId}/queue/${id}`, { method: 'DELETE' });
+}
+
+/** Moves the message to the front of the line and stops the running turn so it goes out now. */
+export function sendQueuedMessageNow(conversationId: string, id: number): Promise<{ ok: true }> {
+  return request(`/api/conversations/${conversationId}/queue/${id}/send-now`, { method: 'POST' });
+}
+
 export function killTurn(conversationId: string): Promise<{ ok: true }> {
   return request(`/api/conversations/${conversationId}/kill`, { method: 'POST' });
 }

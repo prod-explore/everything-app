@@ -1,11 +1,10 @@
 import { SimpleImageAttachmentAdapter, useExternalStoreRuntime } from '@assistant-ui/react';
 import type { AppendMessage, ThreadMessageLike } from '@assistant-ui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, editMessage, getMessages, deleteMessageFrom, killTurn, regenerateMessage, retryLastMessage, sendMessage } from '../api';
+import { ApiError, editMessage, editQueuedMessage, getMessages, deleteMessageFrom, killTurn, queueMessage, regenerateMessage, removeQueuedMessage, retryLastMessage, sendMessage, sendQueuedMessageNow } from '../api';
 import type { OutgoingAttachment, TurnErrorKind } from '../types';
 import { useSSE } from '../hooks/useSSE';
 import { foldRawMessages, liveTurnToMessage } from './messages';
-import { dequeue, editQueued, enqueue, promoteQueued, queueOf, removeQueued, requeueFirst, type MessageQueues } from './messageQueue';
 
 /** What to tell the person when their message could not be sent (the server refuses with 409 while a turn is running). */
 export function sendFailureMessage(e: unknown): string {
@@ -52,10 +51,9 @@ export function useEverythingAppRuntime(conversationId: string | null) {
   // A message the server refused: shown in the composer's banner, and the text goes back into the box.
   const [sendError, setSendError] = useState<string | null>(null);
   const composerRef = useRef<{ setText: (text: string) => void } | null>(null);
-  // Messages typed while a turn runs wait here (see lib/messageQueue.ts) and go out one by one.
-  const [queues, setQueues] = useState<MessageQueues>({});
-  const handingOver = useRef(false); // a queued message is on its way to the server and its turn has not shown up yet
-  const interrupting = useRef(false); // the person asked to send a queued message right now, so a stopped turn must not hold it back
+  // Set by Ctrl/Cmd+Enter just before the composer submits: this message should not wait for the running turn.
+  const interruptNext = useRef(false);
+  const runningRef = useRef(false);
 
   const refetch = useCallback(() => {
     if (!conversationId) {
@@ -129,72 +127,6 @@ export function useEverythingAppRuntime(conversationId: string | null) {
     [conversationId],
   );
 
-  const sendQueued = useCallback(async (convId: string, text: string): Promise<boolean> => {
-    setSendError(null);
-    setPersisted(prev => [...prev, { id: `opt-${Date.now()}`, role: 'user', content: [{ type: 'text', text }] }]);
-    try {
-      await sendMessage(convId, text);
-      return true;
-    } catch (e) {
-      setPersisted(prev => prev.slice(0, -1));
-      setSendError(sendFailureMessage(e));
-      return false;
-    }
-  }, []);
-
-  // The next turn is under way (or already over), so the next queued message may follow.
-  useEffect(() => {
-    handingOver.current = false;
-  }, [live.running, live.finishedCount]);
-
-  // When the assistant is free, send the oldest queued message. After a failed or stopped turn the queue waits for the
-  // person (the banner says why) unless they chose "send now".
-  useEffect(() => {
-    if (!conversationId || live.running || handingOver.current) return;
-    if (live.error && !interrupting.current) return;
-    const { next, queues: rest } = dequeue(queues, conversationId);
-    if (!next) {
-      interrupting.current = false;
-      return;
-    }
-    interrupting.current = false;
-    handingOver.current = true;
-    setQueues(rest);
-    void sendQueued(conversationId, next.text).then(ok => {
-      if (ok) return;
-      handingOver.current = false;
-      setQueues(q => requeueFirst(q, conversationId, next));
-    });
-  }, [conversationId, live.running, live.error, queues, sendQueued]);
-
-  const queue = useMemo(
-    () => ({
-      items: queueOf(queues, conversationId),
-      /** True when the line is stuck behind a failed or stopped turn. */
-      paused: !live.running && !!live.error && queueOf(queues, conversationId).length > 0,
-      /** Returns the id of the queued message. */
-      add: (text: string): string => {
-        const id = `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        if (conversationId) setQueues(q => enqueue(q, conversationId, { id, text }));
-        return id;
-      },
-      edit: (id: string, text: string) => {
-        if (conversationId) setQueues(q => editQueued(q, conversationId, id, text));
-      },
-      remove: (id: string) => {
-        if (conversationId) setQueues(q => removeQueued(q, conversationId, id));
-      },
-      /** Moves a message to the front and stops the running turn so it goes out now. */
-      sendNow: (id: string) => {
-        if (!conversationId) return;
-        interrupting.current = true;
-        setQueues(q => promoteQueued(q, conversationId, id));
-        if (live.running) killTurn(conversationId).catch(() => { interrupting.current = false; });
-      },
-    }),
-    [queues, conversationId, live.running, live.error],
-  );
-
   const onEdit = useCallback(
     async (message: AppendMessage) => {
       if (!conversationId) return;
@@ -257,9 +189,70 @@ export function useEverythingAppRuntime(conversationId: string | null) {
     [conversationId, persisted, refetch],
   );
 
+  useEffect(() => { runningRef.current = live.running; }, [live.running]);
+
+  // Typed while the assistant works, a message goes into the server's queue (see cli/src/message-queue.ts) instead of
+  // being refused; the library routes every composer send through this adapter, so an idle send is passed on to onNew.
+  const submit = useCallback(
+    async (message: AppendMessage) => {
+      if (!runningRef.current) {
+        interruptNext.current = false;
+        await onNew(message);
+        return;
+      }
+      if (!conversationId) return;
+      const text = message.content.flatMap(c => (c.type === 'text' ? [c.text] : [])).join('');
+      const attachments = imagesOf(message).map(splitDataUrl).filter((a): a is OutgoingAttachment => a !== null);
+      const interrupt = interruptNext.current;
+      interruptNext.current = false;
+      try {
+        const { id } = await queueMessage(conversationId, text, attachments.length > 0 ? attachments : undefined);
+        if (interrupt) await sendQueuedMessageNow(conversationId, id);
+      } catch (e) {
+        setSendError(sendFailureMessage(e));
+        if (text) composerRef.current?.setText(text);
+      }
+    },
+    [conversationId, onNew],
+  );
+
+  const queueAdapter = useMemo(
+    () => ({
+      items: live.queue.items.map(m => ({ id: String(m.id), prompt: m.text, parts: [{ type: 'text' as const, text: m.text }] })),
+      steerItems: [],
+      enqueue: (m: AppendMessage) => void submit(m),
+      steer: (m: AppendMessage) => void submit(m),
+      move: () => {},
+      edit: () => {},
+      remove: () => {},
+    }),
+    [live.queue.items, submit],
+  );
+
+  const queue = useMemo(
+    () => ({
+      items: live.queue.items,
+      paused: live.queue.paused,
+      edit: (id: number, text: string) => {
+        if (conversationId) void editQueuedMessage(conversationId, id, text).catch(e => setSendError(sendFailureMessage(e)));
+      },
+      remove: (id: number) => {
+        if (conversationId) void removeQueuedMessage(conversationId, id).catch(e => setSendError(sendFailureMessage(e)));
+      },
+      /** Moves a message to the front and stops the running turn so it goes out now. */
+      sendNow: (id: number) => {
+        if (conversationId) void sendQueuedMessageNow(conversationId, id).catch(e => setSendError(sendFailureMessage(e)));
+      },
+      /** The next submit from the composer should interrupt instead of waiting (Ctrl/Cmd+Enter). */
+      interruptNext: () => { interruptNext.current = true; },
+    }),
+    [live.queue, conversationId],
+  );
+
   const runtime = useExternalStoreRuntime({
     messages,
     isRunning: live.running,
+    queue: queueAdapter,
     convertMessage: (m: ThreadMessageLike) => m,
     onNew,
     onEdit,
