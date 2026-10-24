@@ -84,22 +84,24 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
 
   images:
-    name: docker build (${{ matrix.package }})
+    name: docker build (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: [cli, git-proxy, sandbox-mcp, sandbox-supervisor, playwright-mcp]
+        include:
+          # cli is built from the repository root (it bundles web/); the others from their own folder.
+          - { name: cli, file: cli/Dockerfile, context: . }
+          - { name: git-proxy, file: git-proxy/Dockerfile, context: git-proxy }
+          - { name: sandbox-mcp, file: sandbox-mcp/Dockerfile, context: sandbox-mcp }
+          - { name: sandbox-supervisor, file: sandbox-supervisor/Dockerfile, context: sandbox-supervisor }
+          - { name: playwright-mcp, file: playwright-mcp/Dockerfile, context: playwright-mcp }
+          # The image the code sandboxes run in (built by hand before `docker compose up`, see the README).
+          - { name: sandbox-image, file: sandbox-supervisor/sandbox-image/Dockerfile, context: sandbox-supervisor/sandbox-image }
     steps:
       - uses: actions/checkout@v4
-      # cli is built from the repository root (it bundles web/); the others from their own folder.
       - name: Build image
-        run: |
-          if [ "${{ matrix.package }}" = "cli" ]; then
-            docker build -f cli/Dockerfile .
-          else
-            docker build ${{ matrix.package }}
-          fi
+        run: docker build -f ${{ matrix.file }} ${{ matrix.context }}
 
   secrets:
     name: secret scan
