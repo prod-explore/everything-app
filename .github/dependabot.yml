@@ -1,5 +1,6 @@
-# Weekly dependency updates. Minor and patch updates of one package are grouped into a single pull request;
-# a major update gets its own, so it can be reviewed on its own.
+# Weekly dependency updates. Minor and patch updates of one package are grouped into a single pull request.
+# Major versions (a new TypeScript, a new Node typings line, a new Ubuntu) are chosen by hand, so they are ignored here;
+# `npm audit` in CI still fails the build on a high or critical advisory, which is what forces an earlier major bump.
 version: 2
 
 updates:
@@ -11,6 +12,9 @@ updates:
     commit-message: { prefix: "chore(deps)" }
     groups:
       minor-and-patch: { patterns: ["*"], update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /web
@@ -19,6 +23,9 @@ updates:
     commit-message: { prefix: "chore(deps)" }
     groups:
       minor-and-patch: { patterns: ["*"], update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /git-proxy
@@ -27,6 +34,9 @@ updates:
     commit-message: { prefix: "chore(deps)" }
     groups:
       minor-and-patch: { patterns: ["*"], update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /sandbox-mcp
@@ -35,6 +45,9 @@ updates:
     commit-message: { prefix: "chore(deps)" }
     groups:
       minor-and-patch: { patterns: ["*"], update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /sandbox-supervisor
@@ -43,6 +56,9 @@ updates:
     commit-message: { prefix: "chore(deps)" }
     groups:
       minor-and-patch: { patterns: ["*"], update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /playwright-mcp
@@ -52,13 +68,15 @@ updates:
     groups:
       minor-and-patch: { patterns: ["*"], update-types: [minor, patch] }
     ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
       # The Dockerfile's PLAYWRIGHT_IMAGE_TAG has to equal the locked playwright version (a test checks it),
       # so playwright is bumped by hand, together with the image tag.
       - dependency-name: playwright
       - dependency-name: playwright-core
 
   # ── Docker base images ──────────────────────────────────────────────────────────────────────────────────────────
-  # Major Node and Ubuntu releases are chosen by hand, the rest of the tag follows Dependabot.
+  # Major Node releases are chosen by hand, the rest of the tag follows Dependabot.
   - package-ecosystem: docker
     directory: /cli
     schedule: { interval: weekly, day: monday }
@@ -110,8 +128,8 @@ updates:
     open-pull-requests-limit: 2
     commit-message: { prefix: "chore(docker)" }
     ignore:
+      # LTS releases only, and by hand: 24.10 and the other interim releases look like minor updates to Dependabot.
       - dependency-name: ubuntu
-        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /playwright-mcp
