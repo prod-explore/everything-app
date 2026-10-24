@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ubuntu:24.10
 
 # Non-interactive apt
 ENV DEBIAN_FRONTEND=noninteractive
