@@ -36,5 +36,6 @@ describe('toolLabel', () => {
       detail: '01-Projects/Remonty/cennik.md',
     });
     expect(toolLabel('plain_tool', {}, false).label).toBe('plain tool');
+    expect(toolLabel('obsidian__move_note', { from: 'a.md', to: 'b/a.md' }, false).detail).toBe('a.md → b/a.md');
   });
 });
