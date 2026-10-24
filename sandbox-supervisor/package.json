@@ -11,7 +11,7 @@
     "test": "rm -rf dist && npm run build && node --test --test-timeout=15000 dist/__tests__/*.test.js"
   },
   "dependencies": {
-    "dockerode": "^4.0.2",
+    "dockerode": "^5.0.1",
     "express": "^4.19.2",
     "tar-stream": "^3.2.2"
   },
