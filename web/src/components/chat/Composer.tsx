@@ -16,7 +16,7 @@ function QueueButton({ queue }: { queue: MessageQueueControls }) {
     <button
       type="button"
       aria-label="Add to queue"
-      title={hasImage ? 'Images can be sent once the assistant is done' : 'Add to queue — sent when the assistant is done'}
+      title={hasImage ? 'Images can be sent once the assistant is done' : 'Add to queue (Enter) — sent when the assistant is done; Ctrl+Enter sends now'}
       disabled={disabled}
       onClick={() => {
         queue.add(text);
@@ -129,14 +129,16 @@ export function Composer({
           rows={1}
           placeholder="Message…"
           onKeyDown={e => {
-            // ComposerPrimitive ignores Enter while the assistant works; here it joins the queue instead.
+            // ComposerPrimitive ignores Enter while the assistant works; here Enter joins the queue and Ctrl/Cmd+Enter sends right away.
             if (!queue || e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
             if (!aui.thread().getState().isRunning) return;
             e.preventDefault();
             const typed = aui.composer().getState().text;
             if (!typed.trim() || aui.composer().getState().attachments.length > 0) return;
-            queue.add(typed);
+            const id = queue.add(typed);
             aui.composer().setText('');
+            // Ctrl/Cmd+Enter: don't wait for the turn — stop it and send this one now.
+            if (e.ctrlKey || e.metaKey) queue.sendNow(id);
           }}
           className="max-h-32 min-w-0 flex-1 resize-none rounded-button border border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-border-hover max-sm:order-first max-sm:max-h-52 max-sm:min-h-[84px] max-sm:basis-full"
         />

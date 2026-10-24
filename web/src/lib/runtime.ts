@@ -172,8 +172,11 @@ export function useEverythingAppRuntime(conversationId: string | null) {
       items: queueOf(queues, conversationId),
       /** True when the line is stuck behind a failed or stopped turn. */
       paused: !live.running && !!live.error && queueOf(queues, conversationId).length > 0,
-      add: (text: string) => {
-        if (conversationId) setQueues(q => enqueue(q, conversationId, { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, text }));
+      /** Returns the id of the queued message. */
+      add: (text: string): string => {
+        const id = `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        if (conversationId) setQueues(q => enqueue(q, conversationId, { id, text }));
+        return id;
       },
       edit: (id: string, text: string) => {
         if (conversationId) setQueues(q => editQueued(q, conversationId, id, text));

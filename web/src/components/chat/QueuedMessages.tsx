@@ -6,7 +6,7 @@ import type { QueuedMessage } from '../../lib/messageQueue';
 export interface MessageQueueControls {
   items: readonly QueuedMessage[];
   paused: boolean;
-  add: (text: string) => void;
+  add: (text: string) => string;
   edit: (id: string, text: string) => void;
   remove: (id: string) => void;
   sendNow: (id: string) => void;
