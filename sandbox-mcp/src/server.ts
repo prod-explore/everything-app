@@ -7,6 +7,11 @@ import { Config } from './config.js';
 import { SupervisorClient } from './supervisor-client.js';
 import { registerAllTools } from './tools/index.js';
 
+/**
+ * HTTP front of sandbox-mcp: bearer-key auth and the two MCP transports, stateless Streamable HTTP and the
+ * older HTTP+SSE transport.
+ */
+
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 /** Constant-time comparison of two secrets (length differences leak nothing useful: keys are fixed-length hex). */
@@ -70,7 +75,7 @@ export function createApp(config: Config, supervisor: SupervisorClient): express
 
   const sseSessions = new Map<string, SseSession>();
 
-  // Suppress OAuth discovery probes from MCP clients
+  // MCP clients probe for OAuth metadata before connecting; a 404 tells them there is none and the bearer key is used.
   app.get(/^\/\.well-known\/oauth-.*/, (_req, res) => res.status(404).end());
 
   // ── Streamable HTTP (stateless — Antigravity, Cursor, etc.) ──

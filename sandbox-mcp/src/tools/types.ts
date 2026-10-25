@@ -37,4 +37,8 @@ export function ownerOf(args: { _conversation_id?: string; _project_id?: string 
   return args._project_id ?? args._conversation_id ?? 'default';
 }
 
+/**
+ * Upper bound for one command. Kept below the orchestrator's MCP tool-call timeout (MCP_TOOL_TIMEOUT_MS in
+ * cli/src/mcp-client.ts), so a command that runs out of time still returns its output instead of the call being cut off.
+ */
 export const MAX_COMMAND_MS = 280_000;

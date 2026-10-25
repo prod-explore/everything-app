@@ -2,6 +2,11 @@ import { loadConfig } from './config.js';
 import { SupervisorClient } from './supervisor-client.js';
 import { createApp } from './server.js';
 
+/**
+ * Entry point of sandbox-mcp: the MCP server that gives agents a shell, git and checkpoints in their project's
+ * sandbox. It never touches Docker itself; every operation goes through the sandbox-supervisor's HTTP API.
+ */
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const supervisor = new SupervisorClient(config.supervisorUrl, config.supervisorToken);

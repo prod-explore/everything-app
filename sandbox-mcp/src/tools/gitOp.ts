@@ -2,8 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ok, fail, ownerIds, ownerOf, ToolContext } from './types.js';
 
-// Whitelist: only subcommands useful for coding agent work.
-// `push` is deliberately excluded: pushing needs a credential and a human approval, and git
+// The subcommands a coding agent needs. `push` is deliberately excluded: pushing needs a credential and a human approval, and git
 // credentials never enter the sandbox (they stay in git-proxy).
 const ALLOWED_SUBCOMMANDS = [
   'clone',
@@ -53,7 +52,6 @@ export function registerGitOp(server: McpServer, { config, supervisor }: ToolCon
         const claimed = await supervisor.claim(owner);
         containerId = claimed.containerId;
 
-        // Run git in the conversation's workspace subdirectory.
         const command = `cd ${claimed.workspacePath} && git ${escapedArgs}`;
 
         const result = await supervisor.exec(containerId, command, config.sandboxTimeoutMs);
@@ -71,7 +69,7 @@ export function registerGitOp(server: McpServer, { config, supervisor }: ToolCon
         const message = err instanceof Error ? err.message : String(err);
         return fail(`git_op error: ${message}`);
       }
-      // Note: no release here — sticky leases persist until idle timeout.
+      // The sandbox is not released after the command: the supervisor stops it once it has been idle long enough.
     },
   );
 }
