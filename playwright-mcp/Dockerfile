@@ -11,7 +11,6 @@ RUN npm run build
 
 FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_IMAGE_TAG}
 
-# Install Node.js 22
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
@@ -26,13 +25,12 @@ RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
 
-# Playwright browsers are bundled in the base image.
-# Only Chromium is needed; others are excluded to save ~500MB.
+# The browsers come with the base image; nothing is downloaded at install or run time.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
-# No docker.sock — this container only has outbound HTTP access.
-# Controlled via Docker network rules; does NOT touch the bash sandbox.
+# No docker.sock. The container sits on its own network (browser-egress in docker-compose.yml) and shares none with the
+# sandboxes or the other services; deploy/egress-guard.sh keeps it off private ranges.
 USER pwuser
 
 EXPOSE 3003

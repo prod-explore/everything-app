@@ -8,13 +8,13 @@ import type { BrowserContext } from 'playwright';
  * The agent (and any page it opens) must be able to reach the PUBLIC internet freely — shops,
  * price checks, docs — but never the operator's own network: loopback, the LAN (router, NAS,
  * other self-hosted services), link-local / cloud-metadata addresses, other containers, the Docker host.
- * That is the same rule every hosted IDE/agent sandbox applies.
  *
  * Defence in depth — this guard is the application layer; the network layer (DOCKER-USER
  * rules, see deploy/egress-guard.sh) is the backstop. Two places enforce it here:
  *   1. tools check the URL the model asked for (clear error message),
- *   2. installRequestGuard() checks EVERY request the browser makes (redirects, sub-resources,
- *      a public page embedding http://192.168.1.1/…), which is where SSRF actually happens.
+ *   2. the context's request route (installPolicyRoutes in browserContext.ts) checks EVERY request the browser
+ *      makes (redirects, sub-resources, a public page embedding http://192.168.1.1/…), which is where SSRF
+ *      actually happens.
  */
 
 function parseIPv4(ip: string): number[] | null {

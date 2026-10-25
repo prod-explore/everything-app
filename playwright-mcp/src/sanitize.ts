@@ -47,7 +47,7 @@ const ZERO_WIDTH_RE =
   /[\u200B-\u200D\u2060-\u2064\uFEFF\u180E\u00AD\u034F\u115F\u1160\u3164\uFFA0\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu;
 // LRM, RLM, ALM, LRE/RLE/PDF/LRO/RLO, LRI/RLI/FSI/PDI.
 const BIDI_RE = /[\u200E\u200F\u061C\u202A-\u202E\u2066-\u2069]/g;
-// C0 (minus \t \n \r) + DEL + C1, plus the Unicode line/paragraph separators (normalised to \n later).
+// C0 (minus \t \n \r) + DEL + C1. Line and paragraph separators (U+2028, U+2029, U+0085) are already \n by then.
 const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 
 function countAndStrip(input: string, re: RegExp): [string, number] {

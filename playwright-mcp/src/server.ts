@@ -10,6 +10,11 @@ import { BrowserSessionPool, ChromiumLauncher } from './sessionPool.js';
 import { guardFor } from './urlGuardFor.js';
 import { attachLiveView } from './liveview.js';
 
+/**
+ * HTTP front of playwright-mcp: bearer-key auth, the two MCP transports (stateless Streamable HTTP and the older
+ * HTTP+SSE transport) and the process-wide browser session pool they share.
+ */
+
 /** Constant-time comparison of two secrets (length differences leak nothing useful: keys are fixed-length hex). */
 function safeEqual(a: string, b: string): boolean {
   const x = Buffer.from(a);
@@ -81,6 +86,7 @@ export function createApp(config: PlaywrightConfig): {
     makeLauncher: () => new ChromiumLauncher(guardFor(config)),
   });
 
+  // MCP clients probe for OAuth metadata before connecting; a 404 tells them there is none and the bearer key is used.
   app.get(/^\/\.well-known\/oauth-.*/, (_req, res) => res.status(404).end());
 
   // Streamable HTTP (stateless)

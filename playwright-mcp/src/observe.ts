@@ -8,7 +8,7 @@ import { addStats, emptyStats, sanitizeLabel, sanitizeText, type SanitizeStats }
 /**
  * The deterministic source of truth for what the agent sees of a page.
  *
- * No LLM sits between the page and the agent any more. Code collects visible text and interactive
+ * No model sits between the page and the agent. Code collects visible text and interactive
  * elements (in-page script below), Node cleans them (sanitize.ts), builds the element table with
  * exact refs (the same refs browser_act resolves), bounds the page text and wraps it — and every
  * label — in a nonce-tagged untrusted-data block (spotlighting). A heuristic classifier

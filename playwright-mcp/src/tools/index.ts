@@ -9,7 +9,6 @@ import { registerBrowserTabs } from './browserTabs.js';
 import { registerBrowserScreenshot } from './browserScreenshot.js';
 
 export function registerAllTools(server: McpServer, config: PlaywrightConfig, pool: BrowserSessionPool): void {
-  // Multi-step, session-based — for tasks that need to click/type/navigate.
   registerBrowserOpen(server, config, pool);
   registerBrowserObserve(server, config, pool);
   registerBrowserAct(server, config, pool);

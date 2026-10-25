@@ -14,14 +14,14 @@ import { openTab } from './sessionPool.js';
  *
  * Two modes, switched by the client:
  *
- * 1. **Watch mode** (default): the server streams CDP screencast frames from
- *    the active Playwright session as binary JPEG blobs. The web client renders
- *    them in an <img> tag. Frames are sent at most once per FRAME_INTERVAL_MS —
- *    if the session is idle (no action in flight) we skip frames, saving CPU.
+ * 1. **Watch mode** (default): every FRAME_INTERVAL_MS the server takes a JPEG
+ *    screenshot of the session's active tab and sends it as a binary message,
+ *    followed by a JSON status (URL, takeover state, tabs). The web client
+ *    renders the frames in an <img> tag.
  *
  * 2. **Takeover mode**: the client sends pointer/keyboard events as JSON
- *    messages; the server dispatches them into the real CDP session using
- *    Playwright's `page.mouse` / `page.keyboard` / `page.touchscreen` APIs.
+ *    messages; the server dispatches them into the real page using
+ *    Playwright's `page.mouse` / `page.keyboard` APIs.
  *    The agent's tool calls are NOT blocked during takeover — if the agent
  *    tries to act while a human is in control, the action queues normally
  *    (Playwright serialises all CDP calls already). The web UI shows a visual
@@ -31,8 +31,9 @@ import { openTab } from './sessionPool.js';
  *  - The WS upgrade path requires the same Bearer token as all other endpoints.
  *  - Takeover events are structurally validated (type-checked) before dispatch —
  *    arbitrary JS/CDP commands cannot be injected through this channel.
- *  - The session is identified by conversationId, NOT by a sessionId the client
- *    manufactures — so one conversation cannot reach another conversation's tab.
+ *  - A connection is bound to the conversationId it was opened with and only ever
+ *    drives that conversation's session. Viewers never connect here directly: the
+ *    orchestrator relays them (cli/src/liveview-proxy.ts) and is the only holder of the key.
  */
 
 function safeEqual(a: string, b: string): boolean {
@@ -107,7 +108,7 @@ export function attachLiveView(
     const client: SessionClient = { ws, convId, takeover: false, frameTimer: null };
     clients.set(ws, client);
 
-    // Start streaming frames immediately if there's a session
+    // The frame loop starts at once and picks the session up on whichever tick it exists.
     startFraming(client, pool, config);
 
     ws.on('message', (raw: Buffer | string) => {
@@ -133,10 +134,6 @@ export function attachLiveView(
     });
   });
 
-  // When a new session opens in the pool, notify any watching clients so they
-  // can start streaming without having to reconnect.
-  // (This is best-effort — the frame loop already handles the "session not yet
-  // ready" case by checking pool.get() on each tick.)
 }
 
 function startFraming(client: SessionClient, pool: BrowserSessionPool, _config: PlaywrightConfig): void {
@@ -154,9 +151,8 @@ function startFraming(client: SessionClient, pool: BrowserSessionPool, _config: 
     }
     try {
       const screenshot = await session.page.screenshot({ type: 'jpeg', quality: JPEG_QUALITY });
-      // Send raw binary frame — client can decode it as an image blob
       safeSend(client.ws, screenshot);
-      // Also send metadata so the client knows current URL and takeover state
+      // The status after every frame keeps the panel's URL bar, takeover badge and tab strip current.
       safeSend(
         client.ws,
         JSON.stringify({

@@ -49,7 +49,7 @@ export function chromiumLaunchArgs(): string[] {
   return [
     '--no-sandbox',
     '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage', // Pi has limited /dev/shm
+    '--disable-dev-shm-usage', // Docker's default /dev/shm (64 MB) is too small for Chromium
     '--disable-gpu',
     '--disable-extensions',
     '--disable-component-extensions-with-background-pages',

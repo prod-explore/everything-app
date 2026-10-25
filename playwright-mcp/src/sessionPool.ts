@@ -5,15 +5,10 @@ import { TabLimitError, TabSet, type Tab } from './tabs.js';
 import type { EffectivePolicy, PolicyOverride } from './policy.js';
 
 /**
- * Browser-agent equivalent of sandbox-supervisor/src/pool.ts's sticky lease +
- * idle watchdog — same shape, deliberately, since it's the same problem: a
- * conversation gets the same live resource back across multiple tool calls
- * (the "works with app closed, reconnect" requirement), and idle resources
- * get reclaimed so one forgotten tab doesn't sit open forever.
- *
- * Unlike the sandbox pool, sessions aren't pre-warmed — a Chromium process
- * per idle slot isn't worth the RAM on a Pi-sized box, so sessions are
- * created lazily on first use and capped at maxSessions concurrent.
+ * One live browser session per conversation, with an idle watchdog: a conversation gets the same session back across
+ * tool calls (and when the user reconnects to the live view), and a forgotten session is reclaimed instead of keeping
+ * a Chromium open forever. Sessions are created lazily on first use and capped at maxSessions: an idle Chromium per
+ * slot is not worth the RAM on a Pi-sized box.
  */
 
 export interface SessionHandle {

@@ -2,6 +2,11 @@ import * as http from 'node:http';
 import { loadConfig } from './config.js';
 import { createApp } from './server.js';
 
+/**
+ * Entry point of playwright-mcp: the browser agent's MCP server (one ephemeral Chromium session per conversation)
+ * and the live-view WebSocket, served on one port.
+ */
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const { app, attachLiveViewToServer } = createApp(config);
