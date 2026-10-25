@@ -5,7 +5,7 @@ import { TerminalManager } from './terminals.js';
 
 /**
  * HTTP API of the sandbox-supervisor. sandbox-mcp uses it for commands, terminals and checkpoints; the orchestrator
- * for the workspace explorer, checkpoints, browser previews and project deletion.
+ * for the workspace explorer, checkpoints and browser previews.
  */
 
 const MAX_TIMEOUT_MS = 30 * 60_000;
