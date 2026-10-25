@@ -1,5 +1,8 @@
-// Audit trail: one JSON line per event on stdout, mirrored (fire-and-forget) to the orchestrator.
-// Never put proxy tokens or GitHub credentials in an event.
+/**
+ * Audit trail: one JSON line per event on stdout, mirrored (fire-and-forget) to the orchestrator.
+ * Never put proxy tokens or GitHub credentials in an event.
+ */
+
 export type AuditEvent = { type: string } & Record<string, unknown>;
 
 export class AuditLog {

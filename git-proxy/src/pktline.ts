@@ -1,6 +1,9 @@
-// Git pkt-line helpers: parsing the receive-pack command section and building report-status replies.
-// Format reference: gitprotocol-common(5), gitprotocol-pack(5).
 import type { Readable } from 'node:stream';
+
+/**
+ * Git pkt-line helpers: parsing the receive-pack command section and building report-status replies.
+ * Format reference: gitprotocol-common(5), gitprotocol-pack(5).
+ */
 
 export const FLUSH_PKT = Buffer.from('0000', 'latin1');
 const MAX_PKT_LEN = 65520;

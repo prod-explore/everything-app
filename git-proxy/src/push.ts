@@ -1,7 +1,10 @@
-// Push classification (create/update/delete, force detection) and the approval policy.
 import { isZeroSha, type RefCommand } from './pktline.js';
 import type { CredentialProvider, FetchFn } from './orchestrator.js';
 import type { PushMode } from './tokens.js';
+
+/**
+ * Push classification (create/update/delete, force detection) and the approval policy.
+ */
 
 export type RefKind = 'create' | 'update' | 'delete';
 

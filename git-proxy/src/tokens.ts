@@ -1,6 +1,9 @@
-// Short-lived opaque proxy tokens bound to a project and a list of repos. In memory only (v1);
-// the map is keyed by sha256(token) so a heap dump doesn't hand out usable tokens.
 import { createHash, randomBytes } from 'node:crypto';
+
+/**
+ * Short-lived opaque proxy tokens bound to a project and a list of repos. In memory only, so a restart of git-proxy
+ * revokes them all; the map is keyed by sha256(token) so a heap dump doesn't hand out usable tokens.
+ */
 
 export type PushMode = 'allow' | 'ask' | 'deny';
 export const PUSH_MODES: readonly PushMode[] = ['allow', 'ask', 'deny'];

@@ -5,6 +5,11 @@ import { createGitProxy } from './server.js';
 import { assertStrongSecret } from './secret-check.js';
 import { TokenStore } from './tokens.js';
 
+/**
+ * Entry point of git-proxy: the only place the GitHub credential lives. Sandboxes reach GitHub through it with
+ * short-lived proxy tokens minted by the orchestrator; see server.ts.
+ */
+
 const env = (name: string): string | undefined => {
   const v = process.env[name];
   return v === undefined || v === '' ? undefined : v;

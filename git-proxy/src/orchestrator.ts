@@ -1,9 +1,12 @@
-// Everything git-proxy needs from the orchestrator (the EverythingApp web/cli server):
-//   GET  /internal/github-token?projectId=…   -> { token, expiresAt? }       (credential provider)
-//   POST /internal/push-approval              -> { approved, reason? }       (long poll, held until the user decides)
-//   POST /internal/audit                      -> 2xx, body ignored           (fire-and-forget)
-// All calls carry `Authorization: Bearer <GIT_PROXY_ADMIN_TOKEN>`.
 import type { ClassifiedRef } from './push.js';
+
+/**
+ * Everything git-proxy needs from the orchestrator (the EverythingApp web/cli server):
+ *   GET  /internal/github-token?projectId=…   -> { token, expiresAt? }       (credential provider)
+ *   POST /internal/push-approval              -> { approved, reason? }       (long poll, held until the user decides)
+ *   POST /internal/audit                      -> 2xx, body ignored           (fire-and-forget)
+ * All calls carry `Authorization: Bearer <GIT_PROXY_ADMIN_TOKEN>`.
+ */
 
 export type FetchFn = typeof fetch;
 
@@ -95,7 +98,7 @@ export interface OrchestratorCredentialOptions {
 }
 
 /**
- * v1 credential provider: ask the orchestrator for the project's GitHub token (OAuth / App installation
+ * Credential provider: ask the orchestrator for the project's GitHub token (OAuth / App installation
  * token), fall back to GITHUB_PAT. Tokens are cached briefly per project.
  */
 export class OrchestratorCredentialProvider implements CredentialProvider {

@@ -1,4 +1,3 @@
-// git smart-HTTP pass-through to GitHub with credential injection, repo binding and push approval.
 import http, { type IncomingMessage, type ServerResponse, type OutgoingHttpHeaders } from 'node:http';
 import https from 'node:https';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -9,6 +8,11 @@ import { classifyRefs, decidePush, type ClassifiedRef, type CompareFn } from './
 import { CredentialError, type CredentialProvider, type Orchestrator } from './orchestrator.js';
 import { findGrant, PUSH_MODES, TokenStore, type RepoGrant, type TokenBinding } from './tokens.js';
 import type { AuditLog } from './audit.js';
+
+/**
+ * git smart-HTTP pass-through to GitHub with credential injection, repo binding and push approval, plus the admin API
+ * the orchestrator uses to mint and revoke proxy tokens.
+ */
 
 export interface ProxyConfig {
   adminToken: string;
@@ -125,7 +129,7 @@ export function createGitProxy(cfg: ProxyConfig): http.Server {
   const upstreamPrefix = upstream.pathname.replace(/\/+$/, '');
   const transport = upstream.protocol === 'https:' ? https : http;
 
-  // ---------- admin API ----------
+  // ─── Admin API (orchestrator only) ───
   async function handleAdmin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const auth = req.headers.authorization ?? '';
     const presented = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
@@ -175,7 +179,7 @@ export function createGitProxy(cfg: ProxyConfig): http.Server {
     throw new HttpError(404, 'not found');
   }
 
-  // ---------- upstream forwarding ----------
+  // ─── Upstream forwarding ───
   function forward(
     req: IncomingMessage,
     res: ServerResponse,
