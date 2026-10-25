@@ -14,7 +14,7 @@
 # Copy to /etc/nginx/sites-available/everythingapp.conf, symlink into
 # sites-enabled, `nginx -t`, then `systemctl reload nginx`.
 
-# Login attempts are also limited in the app (8 per 15 minutes per client); this is the cheap first line.
+# Login attempts are also limited in the app (LoginLimiter in cli/src/session.ts); this is the cheap first line.
 limit_req_zone $binary_remote_addr zone=ea_login:1m rate=10r/m;
 
 server {
@@ -31,7 +31,7 @@ server {
         return 404;
     }
 
-    # Server-sent events: one long-lived response per open chat. The app sends a keepalive every 25 s.
+    # Server-sent events: one long-lived response per open chat, kept alive by the app's periodic keepalive comments.
     location ~ ^/api/conversations/[^/]+/stream$ {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;

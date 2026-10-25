@@ -2,8 +2,8 @@
 /**
  * Scriptable OpenAI-compatible mock LLM for local E2E tests and CI (no API keys, deterministic).
  *
- * Add it in EverythingApp like any provider (Settings → Models → + Other, or the MindGate preset with
- * MINDGATE_BASE_URL=http://127.0.0.1:4010/v1): base URL http://127.0.0.1:4010/v1, "No key needed";
+ * Add it in EverythingApp like any provider (Settings → Models → + Add provider): base URL http://127.0.0.1:4010/v1,
+ * "No key needed";
  *   its model list (GET /models) offers "mock-1" and "mock-fast" (both reported as `locality: local`, so ghost chats can be tried).
  *
  * Behaviour is driven by the latest user message (case-insensitive):
@@ -17,7 +17,7 @@
  *   "spawn"             → spawn_agent (worker on the default agent model) then wait_agents
  *   "tool: <name> <json>" → call any tool by (suffix) name with JSON args
  *   "todo"              → todo_write with a three-item list
- *   "plan: <task>"      → propose_plan (the tool exists only while plan mode is on)
+ *   "plan: <task>"      → propose_plan
  *   "long"              → long markdown answer (streamed slowly)
  *   "error"             → HTTP 500
  * Worker agents (system prompt contains "worker agent") answer with a short report.

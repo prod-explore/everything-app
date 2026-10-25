@@ -6,9 +6,8 @@
 # Prerequisites:
 #   1. The sandbox image: `deploy/deploy.sh` pulls it; or build it by hand:
 #        docker build -t everything-sandbox:latest ./sandbox-supervisor/sandbox-image/
-#   2. Copy .env.example → .env and fill in all required values
-#   3. For GitHub: set GITHUB_PAT in .env
-#   4. For Playwright: set PLAYWRIGHT_MCP_API_KEY in .env
+#   2. Copy .env.example → .env and fill in all required values (compose refuses to start without them)
+#   3. GitHub is connected in the app (Settings → GitHub); GITHUB_PAT in .env is only git-proxy's fallback
 
 # Docker keeps container logs forever by default; on a Raspberry Pi that is the SD card.
 x-logging: &default-logging
@@ -29,7 +28,7 @@ services:
     group_add:
       - "${DOCKER_GID:-999}"
     # Supervisor is the ONLY service that holds docker.sock.
-    # sandbox-mcp and playwright-mcp talk to it over the internal network.
+    # sandbox-mcp and the web server talk to it over sandbox-internal.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -142,9 +141,7 @@ services:
       BROWSER_JS_POLICY: ${BROWSER_JS_POLICY:-allowed}   # disabled | review | allowed
       # Observations are built deterministically (no model between the page and the agent) and cut to this length.
       OBSERVATION_MAX_TEXT_CHARS: ${OBSERVATION_MAX_TEXT_CHARS:-12000}
-    # No volumes on purpose: browser profiles are EPHEMERAL (no persistent logins). A leftover
-    # `playwright_profiles` volume from older versions can be deleted:
-    #   docker volume rm <project>_playwright_profiles
+    # No volumes on purpose: browser profiles are EPHEMERAL (no persistent logins).
     ports:
       - "127.0.0.1:3003:3003"
     restart: unless-stopped
@@ -219,7 +216,7 @@ services:
       # Optional: where always-allow / always-block command prefixes and known domains live (hot-reloaded).
       EVERYTHINGAPP_POLICY_FILE: ${EVERYTHINGAPP_POLICY_FILE:-}
       PORT: 3000
-      # Connectors: add playwright when services are deployed.
+      # Operator connectors (comma-separated names); each one needs MCP_<NAME>_URL (and _API_KEY) below.
       MCP_CONNECTORS: ${EVERYTHINGAPP_MCP_CONNECTORS:-sandbox,playwright}
       MCP_SANDBOX_URL: http://sandbox-mcp:3002/mcp/sse
       MCP_SANDBOX_API_KEY: ${MCP_API_KEY:-}
