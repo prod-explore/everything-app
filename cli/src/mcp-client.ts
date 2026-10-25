@@ -45,7 +45,7 @@ export interface McpConnectionLike {
 }
 
 /**
- * One connection to one MCP server (sandbox, GitHub, a notes server, ...).
+ * One connection to one MCP server (sandbox, browser, a notes server, ...).
  * Thin wrapper — the SDK's Client already does the protocol work, this just
  * gives us a stable interface the rest of the CLI can depend on, and a place
  * to inject a fake in tests instead of hitting a real server.
@@ -140,7 +140,7 @@ export class McpConnection implements McpConnectionLike {
   private async callOnce(name: string, args: Record<string, unknown>): Promise<McpToolCallResult> {
     if (!this.client) await this.connect();
     // The SDK's default request timeout is 60s, which would cut off a long `npm install` that the sandbox
-    // itself is still happily running. Sandbox commands cap at 280s; leave headroom above that.
+    // itself is still happily running. Sandbox commands have their own, lower cap (MAX_COMMAND_MS in sandbox-mcp).
     const result = await this.client!.callTool({ name, arguments: args }, undefined, { timeout: TOOL_CALL_TIMEOUT_MS });
     const content = (result.content ?? []) as Array<{ type: string; text?: string; data?: unknown; mimeType?: unknown }>;
     const { images, notes } = pickImages(content);

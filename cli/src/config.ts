@@ -17,14 +17,14 @@ export interface Config {
 }
 
 /**
- * Connectors are entirely config-driven — adding one (GitHub's official remote
- * MCP server, a workflow engine, a calendar MCP, whatever) never needs a
- * code change here, only a new name in MCP_CONNECTORS plus its URL/key pair.
+ * Operator connectors are entirely config-driven — adding one (a notes server,
+ * a workflow engine, a calendar MCP, whatever) never needs a code change here,
+ * only a new name in MCP_CONNECTORS plus its URL/key pair.
  *
- * MCP_CONNECTORS=sandbox,obsidian,github
+ * MCP_CONNECTORS=sandbox,playwright,notes
  * MCP_SANDBOX_URL=...        MCP_SANDBOX_API_KEY=...
- * MCP_OBSIDIAN_URL=...       MCP_OBSIDIAN_API_KEY=...
- * MCP_GITHUB_URL=...         MCP_GITHUB_API_KEY=...
+ * MCP_PLAYWRIGHT_URL=...     MCP_PLAYWRIGHT_API_KEY=...
+ * MCP_NOTES_URL=...          MCP_NOTES_API_KEY=...
  */
 function loadMcpServers(): McpServerConfig[] {
   const names = (process.env['MCP_CONNECTORS'] ?? '')

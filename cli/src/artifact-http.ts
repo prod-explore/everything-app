@@ -1,7 +1,6 @@
 /**
- * HTTP-safety helpers for user/agent-supplied artifact files (artifacts used to be served inline
- * with a client-chosen MIME type from the app's own origin, i.e. an uploaded text/html or SVG was
- * active content next to the page that holds the API token).
+ * HTTP-safety helpers for user/agent-supplied artifact files. Served inline with a client-chosen MIME type from the
+ * app's own origin, an uploaded text/html or SVG would be active content next to the page that holds the session.
  *
  * Rule: only content that cannot execute in the app's origin is shown inline; everything else is a
  * download. The MIME type STORED in the database is never trusted for serving.

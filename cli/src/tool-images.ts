@@ -1,7 +1,7 @@
 import type * as Llm from './llm-types.js';
 
 /**
- * Images that come back from a tool (a browser screenshot today, a screen capture of the user's computer later).
+ * Images that come back from a tool (a browser screenshot, for instance).
  * They travel as `image` blocks inside the `tool_result`, are stored with the message like an attached image, and are
  * described by a vision model for a model that cannot read images (see vision.ts).
  */

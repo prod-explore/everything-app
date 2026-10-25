@@ -32,9 +32,8 @@ RUN apk add --no-cache python3 make g++ \
 COPY --from=cli-builder /cli/dist/ ./dist/
 COPY --from=web-builder /web/dist/ /app/web/dist/
 
-# node user is uid 1000 in node:alpine — no special group needed here,
-# unlike sandbox-supervisor (no docker.sock access from this container).
-# Ensure default data directory exists with proper ownership for user node
+# The data directory must exist and belong to `node` in the image: Docker seeds a new named volume
+# (everythingapp_web_data in docker-compose.yml) with the ownership of the directory it is mounted over.
 RUN mkdir -p /home/node/.everythingapp && chown -R node:node /home/node/.everythingapp
 
 USER node

@@ -12,7 +12,7 @@
 export type ProviderId = string;
 
 export const MODEL_KINDS = ['chat', 'image', 'tts', 'stt', 'embedding'] as const;
-/** What an endpoint does. Only `chat` is wired up today; the field exists so voice/image models can be added without reshaping anything. */
+/** What an endpoint does. Only `chat` models can run a conversation; models of the other kinds stay in the catalog but are never used for chat. */
 export type ModelKind = (typeof MODEL_KINDS)[number];
 export const isModelKind = (v: unknown): v is ModelKind => typeof v === 'string' && (MODEL_KINDS as readonly string[]).includes(v);
 

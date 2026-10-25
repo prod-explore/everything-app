@@ -98,7 +98,7 @@ export interface AgentManagerDeps {
   approval: WebApprovalGate;
   sse: SSEManager;
   limits?: AgentLimits;
-  /** Usage of every worker API call → the usage ledger; returns its cost. */
+  /** Usage of every worker API call → the usage ledger. */
   recordUsage: (u: { conversationId: string | null; provider: ProviderId; model: string; usage: Llm.Usage }) => void;
   /** The project's browser policy for worker browser calls. */
   browserPolicyOf?: (projectId: string | null) => ConversationBrowserPolicy | undefined;

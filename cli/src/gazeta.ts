@@ -3,6 +3,11 @@ import type Database from 'better-sqlite3';
 import { createGazetaItem, type GazetaItem } from './db.js';
 import type { LlmClient } from './llm-loop.js';
 
+/**
+ * Gazeta, the one inbox between the agents and the user: the request_human_input and post_report tool definitions,
+ * the registry of turns blocked on an answer, and the daily digest.
+ */
+
 export type { GazetaItem };
 
 /**
@@ -91,8 +96,8 @@ export interface GazetaField {
 }
 
 /**
- * Called by server.ts when the model invokes 'request_human_input'.
- * Creates a gazeta item and returns a confirmation message to the model.
+ * Called by server.ts when the model invokes 'request_human_input': creates the Gazeta item (a form, a choice or free
+ * text). What the model is told is up to the caller.
  */
 export function handleRequestHumanInput(
   db: Database.Database,
@@ -123,9 +128,8 @@ export function handleRequestHumanInput(
 }
 
 /**
- * Generates a daily digest of all pending gazeta items and new conversation
- * activity, written by the helper model.
- * Returns the gazeta item ID for the summary.
+ * Generates a daily digest of the pending Gazeta items (ghost items excluded), written by the helper model.
+ * Returns the Gazeta item ID of the digest.
  */
 export async function generateDailySummary(
   db: Database.Database,

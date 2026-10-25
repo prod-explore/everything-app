@@ -200,8 +200,8 @@ describe('message branching: edit / regenerate / retry / delete', () => {
       const convId = created.json['id'] as string;
 
       await jsonRequest(port, 'POST', `/api/conversations/${convId}/message`, { content: 'will fail once' });
-      // The simulated failure leaves exactly the user message, no reply — this is the fixed
-      // behavior from the disappearing-messages bug: the message is never rolled back.
+      // The simulated failure leaves exactly the user message, no reply: a failed turn never rolls back
+      // what the user typed.
       const afterFailure = await waitForMessageCount(port, convId, 1);
       assert.equal(afterFailure.length, 1);
       assert.equal(afterFailure[0]!.role, 'user');

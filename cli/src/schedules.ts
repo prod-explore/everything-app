@@ -19,7 +19,7 @@ export const MAX_RUN_LIMIT = 1000;
 export const MAX_APPROVAL_WAIT_MIN = 720;
 /**
  * Wake-ups: the agent waking itself up later in the same chat (schedule_wakeup). They are schedules too — one time, bound to a
- * chat — but kept apart from the user's own 50: a few per chat, and a chain of them without a word from the user is cut.
+ * chat — but kept apart from the user's own (MAX_SCHEDULES): a few per chat, and a chain of them without a word from the user is cut.
  */
 export const MAX_WAKEUPS_PER_CHAT = 5;
 export const MAX_WAKEUPS = 100;

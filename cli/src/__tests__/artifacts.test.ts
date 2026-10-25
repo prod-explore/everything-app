@@ -100,7 +100,7 @@ describe('report snapshot endpoint', () => {
       assert.match(String(mdRes.headers['content-security-policy']), /sandbox/);
 
       assert.equal((await call(port, 'GET', '/api/artifacts/nope/file')).status, 404);
-      // nothing uploads or lists generic artifacts any more: files the user wants at hand are pins of the workspace
+      // Generic artifacts cannot be uploaded or listed: files the user wants at hand are pins of the workspace.
       assert.equal((await call(port, 'POST', '/api/artifacts?filename=x.bin', {})).status, 404);
       assert.equal((await call(port, 'GET', '/api/artifacts')).status, 404);
     } finally {

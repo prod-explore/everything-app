@@ -19,6 +19,12 @@ import {
 import { mergeCommandPolicy, type PolicyStore } from './policy-file.js';
 
 /**
+ * The approval gate. For every tool call that needs one it decides whether the call runs: by policy (the command
+ * policy and policy.json), by a standing grant, or by asking a person (the card in the chat and in Gazeta). Every
+ * decision is written to the approval audit log.
+ */
+
+/**
  * Patterns that look potentially irreversible/destructive. This is a UI
  * hint, not a security boundary (the real boundary is that the call needs
  * a human "y" at all — enforcement lives outside the model, not in string matching that a
@@ -57,7 +63,7 @@ export function looksDangerous(args: Record<string, unknown>): boolean {
 /**
  * How broadly a single approval grants future auto-approval:
  * - 'once'   — this specific call only, always re-prompts next time
- * - 'chat'   — auto-approve this tool for the rest of this conversation session
+ * - 'chat'   — auto-approve this tool for the rest of this conversation
  * - 'project' — auto-approve this tool across all chats for a specific project
  * - 'always' — auto-approve this tool globally (until revoked)
  *
@@ -149,7 +155,7 @@ export class WebApprovalGate {
     const audit = (action: string) => logApprovalAudit(this.db, { action, toolLabel, toolArgs: JSON.stringify(args), conversationId });
 
     // Shell commands: classified per sub-command by the project's command policy.
-    // A tool-level grant on run_bash deliberately does NOT apply here — that was the hole.
+    // A tool-level grant on run_bash deliberately does NOT apply here: it would approve any command the tool can run.
     const command = extractCommand(toolLabel, args);
     let commands: SubcommandVerdict[] | undefined;
     if (command !== null) {

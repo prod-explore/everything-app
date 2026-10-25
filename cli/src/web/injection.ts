@@ -1,13 +1,13 @@
 import type { SanitizeStats } from './sanitize.js';
 
-// Copy of playwright-mcp/src/injection.ts (each package is built on its own): the web_fetch / web_search results get
-// the same deterministic signal as browser observations.
-
 /**
  * Prompt-injection classifier — deterministic, non-generative, and used ONLY as a signal.
  *
- * It never rewrites, drops or reorders page content (that was the old LLM filter's failure mode:
- * a model deciding what the agent gets to see). It scores the already-sanitised text against a fixed
+ * Copy of playwright-mcp/src/injection.ts (each package is built on its own), so web_fetch / web_search results get
+ * the same signal as browser observations.
+ *
+ * It never rewrites, drops or reorders page content: what the agent gets to see is decided by code, never by a model
+ * that could itself be steered by the page. It scores the already-sanitised text against a fixed
  * set of patterns and reports `suspected` + human-readable reasons, which the tool result exposes as
  * `injection_suspected` for the orchestrator's approval gate to consume.
  */

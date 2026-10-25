@@ -8,6 +8,11 @@ import { collectContextUrls, urlIsInContext } from './web/provenance.js';
 import { assertPublicUrl, hostOfUrl, UrlBlockedError } from './web/url-safety.js';
 
 /**
+ * The agent loop of one turn (runTurn): model request, tool calls through the approval gate and the per-domain web gate,
+ * results back to the model, until it answers without calling a tool. Provider-agnostic: it only sees an LlmClient.
+ */
+
+/**
  * The one method the tool loop needs from any provider. The OpenAI-compatible adapter
  * (providers/openai-compat.ts) implements it by translating to/from chat-completions, so this loop
  * never knows or cares which provider it is talking to. Also what tests inject.
@@ -19,7 +24,7 @@ export interface LlmClient {
       options?: { signal?: AbortSignal },
     ): Promise<Llm.Message>;
     /**
-     * Optional streaming variant. A client without it (Gemini, test doubles) simply falls back to
+     * Optional streaming variant. A client without it (a test double, say) simply falls back to
      * `create` — nothing breaks, the reply just arrives in one piece instead of token by token.
      */
     stream?(params: Llm.MessageCreateParamsNonStreaming, options?: { signal?: AbortSignal }): MessageStreamLike;
@@ -32,6 +37,12 @@ export interface MessageStreamLike {
   finalMessage(): Promise<Llm.Message>;
 }
 
+export interface VirtualToolContext {
+  toolUseId: string;
+  conversationId?: string;
+  signal?: AbortSignal;
+}
+
 /**
  * In-process tool the orchestrator itself executes (e.g. request_human_input,
  * spawn_agent). Unlike MCP tools it never goes through ToolRegistry, but it
@@ -39,12 +50,6 @@ export interface MessageStreamLike {
  * tool_use id, in order, in the same turn. Names must not contain "__" (that
  * separator is reserved for "<mcp-server>__<tool>").
  */
-export interface VirtualToolContext {
-  toolUseId: string;
-  conversationId?: string;
-  signal?: AbortSignal;
-}
-
 export interface VirtualTool {
   definition: Llm.Tool;
   /** Route through the approval gate before running. Default: false. */
@@ -94,9 +99,8 @@ export interface ConversationDeps {
   /** Max tool output length in characters before truncating for the model context. Default 12 000 (see output-truncator.ts). */
   maxToolOutputLength?: number;
   /**
-   * Current conversation ID — injected into sandbox tool args as `_conversation_id`
-   * so the sandbox-supervisor can maintain sticky per-conversation container leases.
-   * The model never needs to supply this; the orchestrator sets it.
+   * Current conversation ID — injected as `_conversation_id` into sandbox and browser tool args: the browser keeps one
+   * session per chat, and a chat without a project owns its sandbox. The model never supplies this; the orchestrator sets it.
    */
   conversationId?: string;
   /**
@@ -157,18 +161,14 @@ export class StepLimitError extends Error {
 
 const DENIED_MESSAGE = 'Rejected by user (approval gate) — not executed.';
 
-/**
- * Tools that are pinned to one conversation and need `_conversation_id`
- * injected so their MCP server can maintain a sticky per-conversation
- * lease — the sandbox's container pool and the playwright-mcp browser
- * session pool work the same way. Matches by the
- * real tool name portion (after the `__` separator ToolRegistry uses for
- * namespacing).
- */
 /** Browser tools: per chat; they get the orchestrator's `_policy`, model-supplied hidden args are stripped. */
 const BROWSER_TOOL_NAMES = new Set(['browser_open', 'browser_observe', 'browser_screenshot', 'browser_act', 'browser_tabs', 'browser_close']);
 /** The subset that lives in the project-scoped sandbox. */
 const SANDBOX_TOOL_NAMES = new Set(['run_bash', 'git_op', 'read_log', 'terminal_list', 'terminal_close']);
+/**
+ * Tools pinned to one conversation: they get `_conversation_id` injected so their MCP server can keep per-chat state
+ * (the sandbox owner, the browser session). Matched by the real tool name (after the `__` separator ToolRegistry uses).
+ */
 const STATEFUL_TOOL_NAMES = new Set([...SANDBOX_TOOL_NAMES, ...BROWSER_TOOL_NAMES]);
 /** Read-only tools that stay unprompted even after a page looked like a prompt injection. */
 const READ_ONLY_AFTER_INJECTION = new Set(['browser_observe', 'browser_screenshot', 'browser_tabs', 'browser_close', 'read_log', 'terminal_list', 'read_file']);

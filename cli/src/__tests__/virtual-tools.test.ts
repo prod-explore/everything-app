@@ -8,9 +8,8 @@ import { ProviderRouter } from '../providers/router.js';
 import { openDb, runMigrations, listGazetaItems, getMessages } from '../db.js';
 
 /**
- * Regression for the 2026-09-29 audit: request_human_input used to be treated as an MCP tool
- * ("Unknown tool" result + a raw-JSON approval prompt) and its Gazeta item was created by
- * scanning the WHOLE history after the turn — so every later turn created a duplicate.
+ * request_human_input is a virtual tool: it runs inside the loop (no "Unknown tool" result, no raw-JSON approval
+ * prompt), and each call creates exactly one Gazeta item — a later turn must not create it again.
  */
 const TOKEN = 't';
 const usage = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: null, cache_read_input_tokens: null, server_tool_use: null, service_tier: null, cache_creation: null };

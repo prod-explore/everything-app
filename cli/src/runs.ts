@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 
 /**
  * Durable runs. A run is one agent working on one goal: every live chat turn is a
- * root run, and Agents-lite workers are child runs. Rows survive restarts; v1 does not resume them —
+ * root run, and Agents-lite workers are child runs. Rows survive restarts, but runs are not resumed —
  * anything still active at startup is marked `interrupted` (heartbeat_at shows when it last lived).
  */
 
@@ -199,7 +199,7 @@ export function countTreeRuns(db: Database.Database, rootRunId: string): number 
   return (db.prepare(`SELECT COUNT(*) AS n FROM runs WHERE root_run_id = ? AND id != ?`).get(rootRunId, rootRunId) as { n: number }).n;
 }
 
-/** Startup: v1 has no resume — every run that was alive when the process died becomes `interrupted`. */
+/** Startup: runs are not resumed — every run that was alive when the process died becomes `interrupted`. */
 export function interruptOrphanedRuns(db: Database.Database): number {
   return db.prepare(`
     UPDATE runs SET status = 'interrupted', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),

@@ -179,8 +179,8 @@ export class GitHubCredentials {
 }
 
 /**
- * Which GitHub REST paths the human-facing panel may reach through the server: anything under a repo bound
- * to the project, plus a few account-level reads. Returns the owner/repo it targets, 'account', or null.
+ * Which GitHub REST paths the human-facing panel may reach through the server: anything under /repos/<owner>/<repo>,
+ * plus a few account-level reads. Returns the owner/repo it targets, 'account', or null.
  */
 export function classifyGithubPath(path: string): { kind: 'repo'; owner: string; repo: string } | { kind: 'account' } | null {
   if (!path.startsWith('/') || path.includes('..') || /[\s#]/.test(path)) return null;

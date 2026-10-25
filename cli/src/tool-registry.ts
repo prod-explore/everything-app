@@ -17,12 +17,6 @@ interface RegisteredTool {
 }
 
 /**
- * Aggregates every tool from every connected MCP server into one flat list
- * for the model, and routes tool_use calls back to whichever server actually
- * owns that tool. Also the single place that decides whether a call needs a
- * human's yes/no before it runs.
- */
-/**
  * Parameters the orchestrator sets itself on a call (the chat the call belongs to, the project, the browser policy…).
  * The loop overwrites or strips whatever a model puts there, so offering them only costs tokens on every request —
  * about 2k for the browser and sandbox tools — and tells the model about knobs it must not touch.
@@ -41,6 +35,12 @@ export function withoutOrchestratorParams(schema: Record<string, unknown>): Reco
   return { ...rest, properties: kept, ...(required && required.length > 0 ? { required } : {}) };
 }
 
+/**
+ * Aggregates every tool from every connected MCP server into one flat list
+ * for the model, and routes tool_use calls back to whichever server actually
+ * owns that tool. Also the single place that decides whether a call needs a
+ * human's yes/no before it runs.
+ */
 export class ToolRegistry {
   private tools = new Map<string, RegisteredTool>();
 
@@ -144,7 +144,7 @@ export class ToolRegistry {
     return !this.autoApproveTools.includes(realName);
   }
 
-  /** Exposed names of the tools of one connection. */
+  /** Real (unprefixed) names and descriptions of the tools of one connection. */
   toolsOf(connectionName: string): Array<{ name: string; description: string }> {
     return [...this.tools.values()].filter(t => t.connection.name === connectionName).map(t => ({ name: t.realName, description: t.description }));
   }

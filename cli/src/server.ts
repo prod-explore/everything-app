@@ -111,6 +111,12 @@ import {
   listProjectConversations,
 } from './db.js';
 
+/**
+ * HTTP server of EverythingApp, the orchestrator: the REST API and SSE streams the web UI talks to, the agent turn
+ * loop around them (approvals, virtual tools, worker agents, scheduled runs) and the static frontend. `buildApp` assembles
+ * all of it; `main` adds what belongs to the process (MCP connections, listening, signals).
+ */
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_SYSTEM_PROMPT = `You are a personal AI assistant running inside EverythingApp, a self-hosted, bring-your-own-key AI workspace. You have access to tools exposed by connected MCP servers. Every tool call with a side effect goes through the Approval Gate — if one is rejected, tell the user and suggest an alternative instead of retrying the same call in a loop. When you need non-urgent input from the user, use the request_human_input tool to queue it in their Gazeta inbox. Be concise and direct.`;
@@ -142,13 +148,13 @@ const unattendedPrompt = (maxSteps: number, approvalWaitMin = 0): string =>
   'Do not ask the user anything now (if something truly needs them later, use request_human_input with wait=false). ' +
   `You have at most ${maxSteps} steps, so be economical. Finish with one complete, self-contained final answer: it is posted to the user's Gazeta inbox as the report of this run, so write it for someone who reads it later without the conversation.`;
 
-/** Steps a scheduled run may take, and the longest it may run. */
 /** The user's time zone for what the agent schedules ("at 08:30"): TZ of the container, else the machine's, else UTC. */
 const USER_TIMEZONE = (() => {
   const tz = process.env['TZ'] || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return tz; } catch { return 'UTC'; }
 })();
 
+/** Model steps one scheduled run may take (SCHEDULE_MAX_STEPS). */
 const SCHEDULE_MAX_STEPS = Number(process.env['SCHEDULE_MAX_STEPS']) > 0 ? Number(process.env['SCHEDULE_MAX_STEPS']) : 25;
 
 function isValidAuthHeader(header: string | undefined, expectedToken: string): boolean {
@@ -166,9 +172,8 @@ const MAX_ATTACHMENT_BASE64_LENGTH = 8_000_000;
 
 /**
  * Builds the content to send to the model (and to persist) from a composer
- * submission: plain text, or text + inline image attachments. Returns null
- * when there's nothing usable to send (images only for now; other file
- * types are not supported yet).
+ * submission: plain text, or text + inline image attachments. Images are the
+ * only attachments accepted. Returns null when there's nothing usable to send.
  */
 function buildMessageContent(rawContent: unknown, rawAttachments: unknown): Llm.MessageParam['content'] | null {
   const text = typeof rawContent === 'string' ? rawContent : '';
@@ -270,18 +275,6 @@ async function main(): Promise<void> {
   }
 }
 
-/**
- * Assembles the Express app: tool registry, shared services (approval gate,
- * usage tracker, SSE manager), every /api route, static frontend serving,
- * and the background digest + SSE-keepalive intervals.
- *
- * Split out from main() so integration tests can build a real app against a
- * fake model client (LlmClient) and an
- * in-memory db, with zero MCP connections and no live API key. main() still
- * owns app.listen() and process-level concerns (real MCP connect(), graceful
- * shutdown, SIGTERM/SIGINT) — a test can listen on an ephemeral port itself,
- * or hit the returned app directly.
- */
 export interface BuildAppOptions {
   db: ReturnType<typeof openDb>;
   /** Shell inside the sandbox — tests inject a fake; defaults to the real supervisor. */
@@ -319,6 +312,17 @@ export interface BuiltApp {
   scheduler: Scheduler;
 }
 
+/**
+ * Assembles the Express app: tool registry, shared services (approval gate,
+ * usage tracker, SSE manager), every /api route, static frontend serving,
+ * and the background digest + SSE-keepalive intervals.
+ *
+ * Split out from main() so integration tests can build a real app against a
+ * fake model client (LlmClient) and an in-memory db, with zero MCP connections
+ * and no live API key. main() still owns app.listen() and process-level concerns
+ * (real MCP connect(), graceful shutdown, SIGTERM/SIGINT) — a test can listen on
+ * an ephemeral port itself, or hit the returned app directly.
+ */
 export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   const { db, connections, authToken, config } = opts;
   const auth = createAuth({ db, authToken, password: opts.password });
@@ -405,9 +409,6 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
     activeConversationFor: projectId => lastConvForProject.get(projectId) ?? latestOwnerConversation(db, projectId),
   });
 
-  // request_human_input / spawn_agent are orchestrator-executed virtual tools (see VirtualTool in
-  // llm-loop.ts) and work with any provider. Web access is a tool (browser connector), not a model feature.
-
   const isString = (v: unknown): v is string => typeof v === 'string';
 
   // ─── Agents-lite + durable runs ────────────────────────────────
@@ -437,7 +438,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
     const raw = projectId ? getProject(db, projectId)?.policy?.['browser'] : undefined;
     const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
     const list = (v: unknown) => (Array.isArray(v) ? v.filter(isString).map(x => x.trim()).filter(Boolean) : []);
-    // Legacy per-project browser settings still tighten the file (deny accumulates); the UI no longer writes them.
+    // Per-project browser settings (only older projects carry them; the UI does not write them): the deny lists add up,
+    // a project allowlist replaces the file's, and JS takes the stricter of the two.
     const domainDeny = [...new Set([...file.domainDeny, ...list(b['domainDeny'])])];
     const domainAllow = list(b['domainAllow']).length ? list(b['domainAllow']) : file.domainAllow;
     const order = { allowed: 0, review: 1, disabled: 2 } as const;
@@ -646,9 +648,9 @@ ${formatHumanResponse(response)}` };
   });
 
   // ─── Auth middleware ──────────────────────────────────────────────────────
-  // The SSE stream route is registered ABOVE this middleware because it is a GET that must also work for a
-  // bearer-token client. EventSource cannot set headers, so the browser authenticates with its session cookie;
-  // the token is never accepted in the URL (it would end up in proxy logs and Referer headers).
+  // The SSE stream checks its own auth: the session cookie (EventSource cannot set headers, so that is what the
+  // browser sends) or a bearer header. The token is never accepted in the URL (it would end up in proxy logs and
+  // Referer headers).
   app.get('/api/conversations/:id/stream', (req, res) => {
     const authorized =
       auth.isCookieValid(req.headers.cookie) ||
@@ -1615,7 +1617,7 @@ ${m.body}`),
   // Together these are the message-branching feature: editing a user
   // message or regenerating/retrying an assistant reply never destroys the
   // old branch (see db.ts's is_active) — it retires it and starts a new one.
-  // There's no UI to browse retired branches yet, but the data is there for it.
+  // The chat UI shows only the active branch; GET .../messages/full returns the retired ones too.
   app.post('/api/conversations/:id/edit', (req, res) => {
     const convId = req.params.id;
     const conv = getConversation(db, convId);
@@ -1702,9 +1704,7 @@ ${m.body}`),
     res.json({ ok: true });
   });
 
-  // Full message history including retired branches — not used by the chat
-  // UI yet (which only ever renders the active branch via GET .../messages),
-  // but exposed now for the branch-history UI planned as a follow-up.
+  // Full message history including retired branches (GET .../messages returns only the active branch).
   app.get('/api/conversations/:id/messages/full', (req, res) => {
     const conv = getConversation(db, req.params.id);
     if (!conv) { res.status(404).json({ error: 'conversation not found' }); return; }
@@ -1893,7 +1893,7 @@ ${formatHumanResponse(response)}`;
   const artifactsDir = process.env['EVERYTHINGAPP_ARTIFACTS_DIR']
     ?? path.join(os.homedir(), '.everythingapp', 'artifacts');
 
-  // On-disk name: id + an ASCII-safe filename (portable across filesystems); legacy files used the raw name.
+  // On-disk name: id + an ASCII-safe filename (portable across filesystems). A file stored under its raw name is still found.
   const artifactPath = (a: { id: string; filename: string }) => {
     const safe = path.join(artifactsDir, a.id + '_' + a.filename.replace(/[^A-Za-z0-9._-]/g, '_'));
     const legacy = path.join(artifactsDir, a.id + '_' + a.filename);
@@ -1948,7 +1948,7 @@ ${formatHumanResponse(response)}`;
       res.status(400).json({ error: `range must be one of ${USAGE_RANGES.join(', ')}` });
       return;
     }
-    // tzOffset: minutes east of UTC (Poland in summer = 120), so "today" and daily buckets follow the viewer's clock.
+    // tzOffset: minutes east of UTC (UTC+2 = 120), so "today" and daily buckets follow the viewer's clock.
     const tzOffset = Number(req.query['tzOffset'] ?? 0);
     res.json(ledger.report(range, tzOffset));
   });
@@ -2119,11 +2119,8 @@ ${formatHumanResponse(response)}`;
   // An unknown API path is a 404 in JSON, not the web app's index.html with status 200.
   app.use('/api', (_req, res) => { res.status(404).json({ error: 'not found' }); });
   app.use(express.static(webDistPath));
-  // Express 5 (path-to-regexp v7+) rejects a bare '*' — it's ambiguous
-  // now. This app is a single-page app, so the SPA fallback needs a
-  // pattern that matches literally everything not already handled above
-  // (every /api/* route, static assets from webDistPath); '/{*splat}' is
-  // the current syntax for that.
+  // SPA fallback: everything not handled above (every /api/* route, static assets from webDistPath) gets index.html.
+  // Express 5 rejects a bare '*'; '/{*splat}' is its pattern for "any path".
   app.get('/{*splat}', (req, res) => {
     // A path with a file extension that static did not find is a missing file, not a page of the app.
     if (path.extname(req.path)) { res.status(404).type('text/plain').send('not found'); return; }

@@ -1,8 +1,8 @@
 /**
- * Command policy engine — replaces "approve per tool" for shell commands.
+ * Command policy engine: shell commands are approved per command, not per tool (an "always" on run_bash would let
+ * every command through).
  *
- * Before: the approval key was the tool name, so "always" on run_bash let every command through.
- * Now: a command is split into its sub-commands (`a && b | c; $(d)`), each one is classified
+ * A command is split into its sub-commands (`a && b | c; $(d)`), each one is classified
  * allow / ask / deny against the project policy and the persisted prefix grants, and the whole
  * command is only as permissive as its least permissive part. An allow on `ls` therefore never
  * lets `ls && rm -rf ~` through.

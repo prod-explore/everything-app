@@ -8,8 +8,8 @@ type Db = ReturnType<typeof openDb>;
 /**
  * Browser sessions: log in once with the server password, get an opaque random id in an
  * HttpOnly + SameSite=Strict cookie. Only the SHA-256 of the id is stored, so a leaked database
- * cannot be replayed as cookies. The old static bearer token keeps working for scripts and tests
- * (it is never stored in the browser any more).
+ * cannot be replayed as cookies. The static bearer token (SERVER_AUTH_TOKEN) is accepted too, for
+ * scripts and tests; it is never stored in the browser.
  */
 
 export const SESSION_COOKIE = 'ea_session';
@@ -127,9 +127,9 @@ export class LoginLimiter {
 
 export interface AuthOptions {
   db: Db;
-  /** Legacy shared secret — still accepted as `Authorization: Bearer` (scripts, tests). */
+  /** Shared secret (SERVER_AUTH_TOKEN), accepted as `Authorization: Bearer` for scripts and tests. */
   authToken: string;
-  /** What the login form checks. Defaults to authToken so existing setups keep their secret as the password. */
+  /** What the login form checks (SERVER_PASSWORD). Defaults to authToken, so a setup without a password logs in with the token. */
   password?: string;
   ttlMs?: number;
 }

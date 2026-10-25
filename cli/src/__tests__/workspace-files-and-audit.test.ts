@@ -271,7 +271,7 @@ describe('server: the agent edits files without being asked', () => {
 });
 
 
-// ─── findings from the audit that still applied ──────────────────────────────
+// ─── hardening: inputs that must not slip past the checks ────────────────────
 
 describe('command policy: parsing the audit could get around', () => {
   const allowlist: CommandPolicy = { ...DEFAULT_COMMAND_POLICY, mode: 'allowlist' };

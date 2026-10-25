@@ -9,10 +9,11 @@ import { getConversation, getProject, listProjectConversations, logApprovalAudit
 /**
  * GitHub integration, orchestrator side:
  *   - credentials: GitHub App device flow / fine-grained PAT (github.ts), never sent to the sandbox
- *   - project ↔ repo bindings (project_repos) that git-proxy enforces
+ *   - one GitHub login for the whole app: a sandbox's proxy token reaches any repository that account can, and every
+ *     push asks for approval
  *   - /internal/* for git-proxy: credential injection, push approval cards, audit
  *   - sandbox git wiring: a short-lived proxy token + `insteadOf` rewrite configured INSIDE the sandbox
- *   - GitHub REST proxy for the human panel (PRs, issues, checks, Actions), limited to bound repos
+ *   - GitHub REST proxy for the human panel (PRs, issues, checks, Actions), as the connected account
  *   - Source Control: git runs inside the project sandbox (status, diff, stage incl. hunks, commit,
  *     branches, log graph, blame, stash, conflicts). Host never runs git.
  */
@@ -375,8 +376,8 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
   }
 
   /**
-   * Mints a short-lived proxy token for the project's bound repos and configures git INSIDE the sandbox
-   * to use git-proxy for github.com (HTTPS and SSH forms). The token is opaque and useless outside the
+   * Mints a short-lived proxy token (see the module header for what it may reach) and configures git INSIDE the
+   * sandbox to use git-proxy for github.com (HTTPS and SSH forms). The token is opaque and useless outside the
    * proxy; the real GitHub credential never enters the sandbox (see ADR 0003).
    */
   async function ensureSandboxGit(projectId: string): Promise<{ wired: boolean; reason?: string }> {

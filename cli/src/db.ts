@@ -7,6 +7,12 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, mkdirSync } from 'node:fs';
 
+/**
+ * The SQLite database: schema and migrations, plus the data-access functions for conversations, messages, settings,
+ * Gazeta items, skills, projects, approval grants, provider keys and report snapshots. Every function takes the
+ * connection explicitly; nothing here holds state of its own.
+ */
+
 const DEFAULT_DB_PATH = join(homedir(), '.everythingapp', 'everythingapp.db');
 
 export function dbPath(): string {
@@ -48,14 +54,11 @@ export function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
   `);
 
-  // Message branching (edit/regenerate):
-  // `parent_id` links a message to whichever message it branches off of;
-  // `is_active` marks which branch is currently the visible one.
-  // ALTER TABLE ADD COLUMN has no "IF NOT EXISTS" in SQLite, so this is
-  // guarded manually — safe to run on both a fresh db (columns already
-  // exist from CREATE TABLE below) and an existing pre-branching db.
+  // Columns added on top of the tables above. SQLite's ALTER TABLE ADD COLUMN has no "IF NOT EXISTS", hence the checks.
   // conversations.kind: 'chat' (user-visible) vs 'subagent' (isolated transcript of a spawn_agent run,
   // kept for the UI's run view but never listed in the sidebar).
+  // Message branching (edit/regenerate): `parent_id` links a message to whichever message it branches off of;
+  // `is_active` marks which branch is currently the visible one.
   if (!columnExists(db, 'conversations', 'kind')) {
     db.exec(`ALTER TABLE conversations ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'`);
   }
@@ -88,10 +91,9 @@ export function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_gazeta_status ON gazeta_items(status);
 
 
-    -- Custom Skills system
-    -- allowed_tools is a JSON array of tool name strings (informational; not
-    -- a hard filter on the tool registry — just surfaced in the UI so the user
-    -- knows what a skill was designed to use).
+    -- Skills: a reusable prompt that can be attached to conversations.
+    -- allowed_tools is a JSON array of tool names that run without an approval prompt in a chat the skill is
+    -- attached to (see WebApprovalGate.grantChatScope); it never restricts the tool registry.
     CREATE TABLE IF NOT EXISTS skills (
       id            TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
       name          TEXT NOT NULL,
@@ -254,7 +256,6 @@ export function runMigrations(db: Database.Database): void {
   migrateSearch(db);
   migrateMessageQueue(db);
 
-  // Seed default settings
   const seedSetting = db.prepare(
     `INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`,
   );
@@ -551,7 +552,7 @@ export interface FullMessageRow {
   createdAt: string;
 }
 
-/** Only the currently-active branch, in order — what every turn (live, batch, regenerate) is built from. */
+/** Only the currently-active branch, in order — what the chat view and exports show. A turn starts from loadLlmHistory. */
 export function getMessages(db: Database.Database, conversationId: string): MessageParam[] {
   const rows = db
     .prepare(`SELECT id, role, content FROM messages WHERE conversation_id = ? AND is_active = 1 ORDER BY id ASC`)
@@ -648,7 +649,7 @@ export function getConversationState(db: Database.Database, conversationId: stri
   let todos: TodoItem[] = [];
   try { todos = JSON.parse(r.todos) as TodoItem[]; } catch { /* keep empty */ }
   return {
-    // A row from before this default existed holds NULL: it reads as the default too.
+    // A NULL effort reads as the default too.
     effort: (REASONING_EFFORTS as readonly string[]).includes(r.effort ?? '') ? (r.effort as ReasoningEffort) : DEFAULT_EFFORT,
     todos,
     lastInputTokens: r.lastInputTokens,
@@ -675,7 +676,6 @@ export function appendMessage(
   const result = db
     .prepare(`INSERT INTO messages (conversation_id, role, content, parent_id) VALUES (?, ?, ?, ?)`)
     .run(conversationId, role, JSON.stringify(content), parentId);
-  // Touch updated_at on the conversation
   db.prepare(`UPDATE conversations SET updated_at = datetime('now') WHERE id = ?`).run(conversationId);
   return result.lastInsertRowid as number;
 }
@@ -686,17 +686,17 @@ export function clearMessages(db: Database.Database, conversationId: string): vo
 }
 
 /**
- * Hard-deletes a message and everything after it (across every branch, not
- * just the active one) — an explicit user "delete" is a real removal, not a
- * new branch. Distinct from clearMessages(), which wipes an entire
- * conversation.
- */
-/**
  * A summary row that only covers messages BEFORE the cut point is still true after the cut (it may have been written
  * after the message being replaced, hence its higher id) — so retiring/deleting "from here" leaves it alone.
  */
 const SPARED_SUMMARY = `role = 'summary' AND json_extract(content, '$.upTo') < ?`;
 
+/**
+ * Hard-deletes a message and everything after it (across every branch, not
+ * just the active one) — an explicit user "delete" is a real removal, not a
+ * new branch. Distinct from clearMessages(), which wipes an entire
+ * conversation.
+ */
 export function deleteMessagesFrom(db: Database.Database, conversationId: string, fromMessageId: number): boolean {
   const result = db
     .prepare(`DELETE FROM messages WHERE conversation_id = ? AND id >= ? AND NOT (${SPARED_SUMMARY})`)
@@ -708,7 +708,7 @@ export function deleteMessagesFrom(db: Database.Database, conversationId: string
 /**
  * Soft-deletes: marks a message and everything currently active after it as
  * inactive, without deleting rows — used by edit/regenerate to retire the
- * old branch while keeping it around for potential future branch-history UI.
+ * old branch while keeping its rows (getAllMessagesFull still returns them).
  */
 export function deactivateMessagesFrom(db: Database.Database, conversationId: string, fromMessageId: number): void {
   db.prepare(`UPDATE messages SET is_active = 0 WHERE conversation_id = ? AND id >= ? AND is_active = 1 AND NOT (${SPARED_SUMMARY})`).run(
