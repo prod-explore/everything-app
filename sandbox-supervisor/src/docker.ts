@@ -5,6 +5,11 @@ import type { DockerOps, ExecResult, ManagedContainer, SandboxSpec } from './san
 import type { ShellFactory, ShellProcess } from './terminals.js';
 import { WORKSPACE, type PathStat } from './explorer.js';
 
+/**
+ * The Docker side of the supervisor: DockerOps implemented with dockerode, the hardened options every sandbox
+ * container is created with, and the CPU-percent maths for the watchdog.
+ */
+
 export const LABEL = 'everythingapp.sandbox';
 const OWNER_LABEL = 'everythingapp.owner';
 const PREVIEW_LABEL = 'everythingapp.preview';

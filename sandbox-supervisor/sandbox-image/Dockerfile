@@ -1,6 +1,5 @@
 FROM ubuntu:24.04
 
-# Non-interactive apt
 ENV DEBIAN_FRONTEND=noninteractive
 
 # A normal dev toolchain, baked in: at runtime the root filesystem is READ-ONLY and the agent is not root,

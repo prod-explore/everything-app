@@ -3,6 +3,11 @@ import { DockerodeOps, configFromEnv } from './docker.js';
 import { createSupervisorApp } from './api.js';
 import { assertStrongSecret } from './secret-check.js';
 
+/**
+ * Entry point of the sandbox-supervisor, the only service that holds docker.sock. It runs one sandbox container per
+ * project (or standalone chat), stops idle ones, and serves them to sandbox-mcp and the orchestrator through api.ts.
+ */
+
 const PORT = parseInt(process.env['SUPERVISOR_PORT'] ?? '3001', 10);
 const num = (name: string, fallback: number) => {
   const n = Number(process.env[name]);

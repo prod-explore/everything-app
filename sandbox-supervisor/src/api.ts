@@ -3,6 +3,11 @@ import express from 'express';
 import { HttpError, SandboxManager } from './sandboxes.js';
 import { TerminalManager } from './terminals.js';
 
+/**
+ * HTTP API of the sandbox-supervisor. sandbox-mcp uses it for commands, terminals and checkpoints; the orchestrator
+ * for the workspace explorer, checkpoints, browser previews and project deletion.
+ */
+
 const MAX_TIMEOUT_MS = 30 * 60_000;
 
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -40,7 +45,7 @@ export function createSupervisorApp(sandboxes: SandboxManager, defaultTimeoutMs 
   app.use(express.json());
 
   const ownerOf = (body: { ownerId?: unknown; conversationId?: unknown }): string | undefined => {
-    // `conversationId` is the earlier name; a chat without a project is its own owner.
+    // `conversationId` is still accepted as an alias of `ownerId` (a chat without a project is its own owner).
     const v = body.ownerId ?? body.conversationId;
     return typeof v === 'string' && SandboxManager.validOwner(v) ? v : undefined;
   };
