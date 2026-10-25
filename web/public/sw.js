@@ -52,7 +52,7 @@ self.addEventListener('fetch', event => {
   }
 });
 
-// Web Push (urgent Gazeta items). The payload is JSON { title, body, url } from the server.
+// Web Push: shows a notification for a JSON payload { title, body, url }.
 self.addEventListener('push', event => {
   let data = { title: 'EverythingApp', body: '', url: '/' };
   try { data = { ...data, ...event.data.json() }; } catch { /* keep defaults */ }

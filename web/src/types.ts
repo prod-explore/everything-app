@@ -1,5 +1,7 @@
-// Mirrors cli/src/db.ts and cli/src/server.ts exactly — keep these two in sync by hand,
-// there's no shared package between web/ and cli/.
+/**
+ * The API's wire types. They mirror cli/src/db.ts and cli/src/server.ts and are kept in sync by hand: there is no
+ * shared package between web/ and cli/.
+ */
 
 export interface ConversationSummary {
   id: string;
@@ -361,9 +363,7 @@ export interface ProviderRetry {
   remainingMs: number;
 }
 
-// ─── Subagent runs ───────────────────────────────────────────────────────────
-
-// ─── durable runs (Agents-lite) — mirrors cli/src/runs.ts ─────────────
+// ─── Agent runs (Agents-lite) — mirrors cli/src/runs.ts ──────────────────────
 
 export type RunStatus = 'running' | 'waiting_input' | 'waiting_children' | 'done' | 'error' | 'aborted' | 'interrupted';
 

@@ -15,7 +15,7 @@ import { Button } from '../shared/Button';
  * For dangerous calls: scope picker is hidden — dangerous calls are always
  * forced to 'once' by the server regardless.
  */
-/** Worker approvals are labelled "[agent researcher] srv/tool" (or "[subagent] …") by the server. */
+/** Worker approvals are labelled "[agent researcher] srv/tool" by the server. */
 function agentOf(label: string): string | null {
   const m = /^\[(agent ([^\]]+)|subagent)\]/.exec(label);
   return m ? (m[2] ?? 'subagent') : null;

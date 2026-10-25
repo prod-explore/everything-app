@@ -26,7 +26,7 @@ function LateActions({ busy, danger, answer }: { busy: boolean; danger: boolean;
   );
 }
 
-/** Worker approvals are labelled "[agent researcher] srv/tool" (or "[subagent] …") by the server. */
+/** Worker approvals are labelled "[agent researcher] srv/tool" by the server. */
 function splitLabel(label: string): { agent: string | null; tool: string } {
   const m = /^\[(agent ([^\]]+)|subagent)\]\s*/.exec(label);
   return { agent: m ? (m[2] ?? 'subagent') : null, tool: m ? label.slice(m[0].length) : label };
@@ -183,7 +183,7 @@ export function ApprovalCard({ approval, respond }: { approval: PendingApproval;
   );
 }
 
-/** Approval cards pasted into the chat flow (F20); the full-screen modal is only an emergency fallback. */
+/** Approval cards pasted into the chat flow; the full-screen modal is only an emergency fallback. */
 export function InlineApprovals({ pending, respond }: { pending: PendingApproval[]; respond: Respond }) {
   if (pending.length === 0) return null;
   const sorted = [...pending].sort((a, b) => (b.dangerous ? 1 : 0) - (a.dangerous ? 1 : 0));

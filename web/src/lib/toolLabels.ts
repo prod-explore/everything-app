@@ -37,7 +37,7 @@ function baseName(toolName: string): string {
 }
 
 /**
- * Human-readable label + icon for a raw tool call (F13). Unknown tools fall back to the raw name,
+ * Human-readable label + icon for a raw tool call. Unknown tools fall back to the raw name,
  * so a new connector never renders as nothing. Past tense once finished, present while running.
  */
 export function toolLabel(toolName: string, args: Args, running: boolean): ToolLabel {

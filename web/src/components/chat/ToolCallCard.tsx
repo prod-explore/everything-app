@@ -17,8 +17,8 @@ const VIEWER_THRESHOLD = 500; // characters — past this, the inline preview cl
  * Note: the backend's output-truncator.ts drops the middle of very long
  * output before it ever reaches the model or this UI — "View full" here
  * only re-shows what we already have (untruncated relative to the inline
- * preview), not the portion the backend itself removed. There's currently
- * no endpoint that returns the original, pre-truncation text.
+ * preview), not the portion the backend itself removed: the original,
+ * pre-truncation text is not stored anywhere.
  */
 /** The pictures a tool returned, as lib/messages.ts attaches them to the call. */
 function imagesOf(artifact: unknown): string[] {

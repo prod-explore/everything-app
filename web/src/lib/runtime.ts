@@ -16,7 +16,7 @@ export function sendFailureMessage(e: unknown): string {
 
 /**
  * The images the person attached, as data URLs. The composer hands them over on `message.attachments` (its `content`
- * carries only the text), so both places are read — an image in neither is how a picture used to vanish silently.
+ * carries only the text), so both places are read and a picture never drops out silently whichever way it arrives.
  */
 export function imagesOf(message: Pick<AppendMessage, 'content' | 'attachments'>): string[] {
   const pick = (parts: readonly { type: string; image?: string }[]) => parts.flatMap(c => (c.type === 'image' && c.image ? [c.image] : []));
@@ -34,7 +34,7 @@ function splitDataUrl(dataUrl: string): OutgoingAttachment | null {
  * Given the full persisted list and a parentId from assistant-ui (either the
  * id of a message, or null for "the very start"), finds where a new branch
  * anchors — walking backward to the nearest USER message, mirroring
- * server.ts's findRegenerationAnchor(). Needed because a single logical turn
+ * cli/src/db.ts's findRegenerationAnchor(). Needed because a single logical turn
  * can render as several sequential assistant bubbles (one per tool-loop
  * round trip), so "the previous bubble" isn't always the user turn that
  * started it.

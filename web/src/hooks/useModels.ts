@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { getModels } from '../api';
 import type { ModelOption } from '../types';
 
-/** The server's model catalog, annotated with whether each model's provider has a key. Refresh after saving/removing a key. */
+/** Window event that makes every mounted useModels() reload the catalog. */
 const MODELS_CHANGED = 'ea:models-changed';
 
+/** The server's model catalog, annotated with whether each model's provider has a key. Refresh after saving/removing a key. */
 export function useModels() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -26,5 +27,5 @@ export function providerLabel(provider: string, models: Array<{ provider: string
   return models.find(m => m.provider === provider)?.providerLabel ?? provider;
 }
 
-/** Chat-capable models only — what a conversation or an agent can run on. Voice/image models have their own pickers later. */
+/** Chat-capable models only — what a conversation or an agent can run on. */
 export const chatModels = (models: ModelOption[]): ModelOption[] => models.filter(m => m.kind === 'chat');
