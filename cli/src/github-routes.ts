@@ -412,7 +412,18 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
     return { wired: true };
   }
 
-  return { internal, api, ensureSandboxGit };
+  /** Revokes every proxy token minted for this sandbox owner (its sandbox is being removed). */
+  async function revokeSandboxGit(projectId: string): Promise<void> {
+    sandboxTokens.delete(projectId);
+    if (!adminToken) return;
+    const res = await doFetch(`${proxyUrl.replace(/\/$/, '')}/admin/tokens?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    if (!res.ok) throw new Error(`git-proxy refused to revoke the tokens (${res.status})`);
+  }
+
+  return { internal, api, ensureSandboxGit, revokeSandboxGit };
 }
 
 export interface StatusEntry {

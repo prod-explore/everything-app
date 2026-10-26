@@ -165,6 +165,25 @@ describe('GitHub routes', () => {
     } finally { t.close(); }
   });
 
+  it('revoking a removed sandbox\'s git access revokes its proxy tokens and forgets the cached one', async () => {
+    const calls: string[] = [];
+    const t = await setup({
+      fetch: fakeFetch((url, init) => {
+        calls.push(`${init.method ?? 'GET'} ${url}`);
+        if (url.endsWith('/admin/tokens')) return { status: 201, json: { token: 'gpx_abc123', expiresAt: new Date(Date.now() + 3600e3).toISOString() } };
+        if (url.includes('/admin/tokens?projectId=')) return { status: 200, json: { revoked: 1 } };
+        return { status: 404, json: {} };
+      }),
+    });
+    try {
+      await t.routes.ensureSandboxGit(t.project.id);
+      await t.routes.revokeSandboxGit(t.project.id);
+      assert.ok(calls.includes(`DELETE http://git-proxy:8080/admin/tokens?projectId=${t.project.id}`), calls.join('\n'));
+      await t.routes.ensureSandboxGit(t.project.id);
+      assert.equal(calls.filter(c => c.endsWith('/admin/tokens')).length, 2, 'a new sandbox gets a new token');
+    } finally { t.close(); }
+  });
+
   it('source control runs git in the sandbox with quoted arguments and validates paths', async () => {
     const execs: string[] = [];
     const t = await setup({

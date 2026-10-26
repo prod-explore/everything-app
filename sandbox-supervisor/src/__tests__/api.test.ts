@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { SandboxManager, volumeName } from '../sandboxes.js';
+import { PROCESS_LIST_COMMAND, SandboxManager, parseProcessList, volumeName } from '../sandboxes.js';
 import { createSupervisorApp } from '../api.js';
 import { fakeOps } from './helpers.js';
 
@@ -178,5 +178,82 @@ describe('supervisor HTTP API — /sandboxes/:owner', () => {
     assert.deepEqual(r.json, { ok: true, containersRemoved: 1, volumeRemoved: true });
     assert.equal(fake.volumes.has(volumeName('gone1')), false);
     assert.deepEqual((await json('GET', '/sandboxes/gone1')).json, { sandbox: null });
+  });
+});
+
+describe('supervisor HTTP API — deletion dry run (GET /sandboxes/:owner/inventory)', () => {
+  let server: Server;
+  let base: string;
+  let mgr: SandboxManager;
+  let fake: ReturnType<typeof fakeOps>;
+  const PS = ['    1 tail -f /dev/null', '   12 bash --noprofile --norc', '   40 node server.js --port 5173', `   77 ${PROCESS_LIST_COMMAND}`, ''].join('\n');
+
+  before(() => {
+    fake = fakeOps({ exec: async (_id, command) => ({ stdout: command === PROCESS_LIST_COMMAND ? PS : '', stderr: '', exitCode: 0 }) });
+    mgr = new SandboxManager(fake.ops, { maxRunning: 4 });
+    server = createSupervisorApp(mgr, 5000).listen(0);
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  after(async () => {
+    server.closeAllConnections();
+    server.close();
+    await mgr.shutdown();
+  });
+  const inventory = async (owner: string) => {
+    const res = await fetch(`${base}/sandboxes/${owner}/inventory`);
+    return { status: res.status, json: (await res.json()) as any };
+  };
+  const seed = (owner: string) =>
+    fake.volumes
+      .get(volumeName(owner))!
+      .file('/workspace/src/a.ts', 'x'.repeat(300))
+      .file('/workspace/src/deep/b.ts', 'y'.repeat(200))
+      .file('/workspace/README.md', 'z'.repeat(50))
+      .symlink('/workspace/link', '/etc/hosts');
+
+  it('a running sandbox: recursive size per top-level entry, the total, and its processes', async () => {
+    await fetch(`${base}/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ownerId: 'inv1' }) });
+    seed('inv1');
+    const r = await inventory('inv1');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json, {
+      containers: 1,
+      running: true,
+      workspace: {
+        entries: [
+          { name: 'src', type: 'directory', bytes: 500 },
+          { name: 'README.md', type: 'file', bytes: 50 },
+          { name: 'link', type: 'symlink', bytes: 0 },
+        ],
+        totalBytes: 550,
+      },
+      processes: [
+        { pid: 12, command: 'bash --noprofile --norc' },
+        { pid: 40, command: 'node server.js --port 5173' },
+      ],
+    });
+  });
+
+  it('a stopped sandbox: files without starting it, no processes', async () => {
+    await fetch(`${base}/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ownerId: 'inv2' }) });
+    seed('inv2');
+    await fetch(`${base}/release`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ownerId: 'inv2' }) });
+    const r = await inventory('inv2');
+    assert.equal(r.json.running, false);
+    assert.equal(r.json.workspace.totalBytes, 550);
+    assert.deepEqual(r.json.processes, []);
+    assert.equal(mgr.sandboxStatus('inv2')!.running, false, 'the dry run did not start it');
+  });
+
+  it('an owner without a sandbox: nothing to remove, and nothing is created', async () => {
+    const r = await inventory('nobody');
+    assert.deepEqual(r.json, { containers: 0, running: false, workspace: null, processes: [] });
+    assert.equal(fake.volumes.has(volumeName('nobody')), false);
+    assert.equal((await inventory('a.b')).status, 400);
+  });
+
+  it('parseProcessList drops the keep-alive and the listing itself', () => {
+    assert.deepEqual(parseProcessList(PS).map(p => p.pid), [12, 40]);
+    assert.deepEqual(parseProcessList('garbage\n'), []);
   });
 });

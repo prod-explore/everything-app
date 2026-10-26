@@ -36,7 +36,8 @@ services:
       SUPERVISOR_TOKEN: ${SUPERVISOR_TOKEN:?SUPERVISOR_TOKEN is required (openssl rand -hex 32)}
       SANDBOX_IMAGE: ${SANDBOX_IMAGE:-everything-sandbox:latest}
       SUPERVISOR_PORT: ${SUPERVISOR_PORT:-3001}
-      # One sandbox per project (or standalone chat); idle ones are STOPPED, never deleted, workspace volumes are kept.
+      # One sandbox per project (or standalone chat); idle ones are STOPPED, not deleted. Containers and the workspace
+      # volume are removed only when the project is deleted.
       MAX_RUNNING_SANDBOXES: ${MAX_RUNNING_SANDBOXES:-2}
       SANDBOX_IDLE_TIMEOUT_MS: ${SANDBOX_IDLE_TIMEOUT_MS:-1800000}   # 30 min
       SANDBOX_WATCHDOG_INTERVAL_MS: ${SANDBOX_WATCHDOG_INTERVAL_MS:-120000} # 2 min

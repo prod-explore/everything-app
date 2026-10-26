@@ -16,7 +16,8 @@ a Raspberry Pi), reaching it from other devices, letting sandboxes use GitHub, a
 | sandboxes (one per project or standalone chat) | `sandbox-supervisor/sandbox-image/Dockerfile`, tagged `SANDBOX_IMAGE` | a named workspace volume each | `ea-sandbox-egress` (bridge `br-ea-sandbox`, container-to-container traffic off) |
 
 Every service port is published on `127.0.0.1` only. Data lives in the `everythingapp_web_data` volume (database,
-`policy.json`, artifacts, backups) and in one `everythingapp-*` workspace volume per project.
+`policy.json`, artifacts, backups) and in one `everything-workspace-*` volume per project, which is removed when the
+project is deleted.
 
 ## Secrets
 
@@ -136,6 +137,6 @@ writes a copy of the database next to it (`*.pre-v<N>.bak`). Usage, approval-aud
 ## Sizing
 
 The defaults assume a small machine shared with other services: at most `MAX_RUNNING_SANDBOXES=2` sandboxes run at once
-(an idle one is stopped after 30 minutes, never deleted), each with 512 MB and one CPU, a 2 GB workspace quota per
+(an idle one is stopped after 30 minutes and only removed with its project), each with 512 MB and one CPU, a 2 GB workspace quota per
 project, and four browser sessions in a container limited to 2 GB. Raise them in `.env`; every variable is listed with its
 default in `.env.example` and `docker-compose.yml`.

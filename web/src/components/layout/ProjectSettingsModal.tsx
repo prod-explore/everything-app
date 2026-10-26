@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Trash2 } from 'lucide-react';
-import { deleteProject, getProject, listApprovalGrants, revokeApprovalGrant, updateProject } from '../../api';
+import { getProject, listApprovalGrants, revokeApprovalGrant, updateProject } from '../../api';
 import type { ApprovalGrantRow, CommandMode } from '../../types';
 import { Button } from '../shared/Button';
 import { Modal } from '../shared/Modal';
+import { DeleteProjectDialog } from './DeleteProjectDialog';
 
 const MODES: { id: CommandMode; label: string; hint: string }[] = [
   { id: 'strict', label: 'Strict', hint: 'Ask before every command (except prefixes you granted).' },
@@ -29,8 +30,6 @@ export function ProjectSettingsModal({ projectId, onClose, onChanged, onDeleted 
   const [grants, setGrants] = useState<ApprovalGrantRow[]>([]);
   const [status, setStatus] = useState<'loading' | 'idle' | 'saving' | 'saved' | 'error'>('loading');
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,18 +65,6 @@ export function ProjectSettingsModal({ projectId, onClose, onChanged, onDeleted 
   async function revoke(id: string) {
     await revokeApprovalGrant(id);
     setGrants(gs => gs.filter(g => g.id !== id));
-  }
-
-  async function remove(keepChats: boolean) {
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      await deleteProject(projectId, keepChats);
-      onDeleted();
-    } catch (e) {
-      setDeleteError((e as Error).message);
-      setDeleting(false);
-    }
   }
 
   const field = 'w-full rounded-button border border-border bg-bg px-3 py-2 text-sm text-fg outline-none focus:border-border-hover';
@@ -140,20 +127,12 @@ export function ProjectSettingsModal({ projectId, onClose, onChanged, onDeleted 
 
           <section className="rounded-button border border-danger/40 p-3" aria-label="Danger zone">
             <h3 className="mb-1 text-sm font-medium text-danger">Delete project</h3>
-            <p className="mb-2 text-xs text-fg-tertiary">Files in the sandbox workspace are kept on disk; chats, agent runs and grants are removed — or you can keep the chats as quick chats.</p>
-            {!confirmDelete ? (
-              <Button variant="ghost" onClick={() => setConfirmDelete(true)}>Delete project…</Button>
-            ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={() => void remove(false)} disabled={deleting}>Delete project and its chats</Button>
-                <Button variant="ghost" onClick={() => void remove(true)} disabled={deleting}>Delete project, keep chats</Button>
-                <Button variant="ghost" onClick={() => setConfirmDelete(false)} disabled={deleting}>Cancel</Button>
-              </div>
-            )}
-            {deleteError && <p className="mt-2 text-xs text-danger" role="alert">{deleteError}</p>}
+            <p className="mb-2 text-xs text-fg-tertiary">Removes the project with its chats, running agents, sandbox, processes and workspace files. You see the full list before anything is deleted.</p>
+            <Button variant="danger" onClick={() => setConfirmDelete(true)}>Delete project…</Button>
           </section>
         </div>
       )}
+      {confirmDelete && <DeleteProjectDialog projectId={projectId} onCancel={() => setConfirmDelete(false)} onDeleted={onDeleted} />}
     </Modal>
   );
 }

@@ -6,9 +6,11 @@ import {
   WORKSPACE,
   listDirectory,
   readFile,
+  summarizeDirectoryTar,
   type ArchiveOps,
   type FileResult,
   type Listing,
+  type WorkspaceSummary,
 } from './explorer.js';
 import {
   ROLLBACK_NOT_FOUND,
@@ -87,6 +89,32 @@ export interface DockerOps extends ArchiveOps {
   listPreviewNetworks(): Promise<Array<{ name: string; ownerId: string }>>;
   exec(id: string, command: string, timeoutMs: number): Promise<ExecResult>;
   shellFactory(id: string): ShellFactory;
+}
+
+/** What destroying an owner's sandbox would remove: the dry run behind the project-deletion dialog. */
+export interface SandboxInventory {
+  /** Containers of this owner (running or stopped). */
+  containers: number;
+  running: boolean;
+  /** The workspace volume, per top-level entry; null when there is no volume. */
+  workspace: WorkspaceSummary | null;
+  /** Processes running in the sandbox now (none when it is stopped); the container's keep-alive process is left out. */
+  processes: Array<{ pid: number; command: string }>;
+}
+
+/** Lists every process in the container; the keep-alive (pid 1) and this `ps` itself are filtered out by the parser. */
+export const PROCESS_LIST_COMMAND = 'ps -eo pid=,args=';
+
+export function parseProcessList(stdout: string): Array<{ pid: number; command: string }> {
+  const out: Array<{ pid: number; command: string }> = [];
+  for (const line of stdout.split('\n')) {
+    const m = /^\s*(\d+)\s+(.*\S)\s*$/.exec(line);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    if (pid === 1 || m[2] === PROCESS_LIST_COMMAND) continue;
+    out.push({ pid, command: m[2]! });
+  }
+  return out;
 }
 
 export interface CpuWatchdogOptions {
@@ -418,6 +446,27 @@ export class SandboxManager {
     const volumeRemoved = await this.ops.removeVolume(volumeName(ownerId));
     console.log(`[sandboxes] destroyed ${ownerId}: ${containersRemoved} container(s), volume ${volumeRemoved ? 'removed' : 'absent'}`);
     return { containersRemoved, volumeRemoved };
+  }
+
+  /**
+   * Dry run of `destroy`: what it would remove. Starts nothing; a volume without a container gets a stopped container
+   * around it (as the explorer does) so its files can be read through the archive API.
+   */
+  async inventory(ownerId: string): Promise<SandboxInventory> {
+    if (!OWNER_RE.test(ownerId)) throw new HttpError(`Invalid owner id "${ownerId}"`, 400);
+    const s = await this.browseTarget(ownerId);
+    const containers = new Set((await this.ops.listManaged()).filter(m => m.ownerId === ownerId).map(m => m.id));
+    if (s) containers.add(s.containerId);
+    if (!s) return { containers: containers.size, running: false, workspace: null, processes: [] };
+    const stat = await this.ops.statPath(s.containerId, WORKSPACE);
+    const workspace = stat ? await summarizeDirectoryTar(await this.ops.getArchive(s.containerId, WORKSPACE), WORKSPACE) : { entries: [], totalBytes: 0 };
+    let processes: SandboxInventory['processes'] = [];
+    if (s.running) {
+      const r = await this.ops.exec(s.containerId, PROCESS_LIST_COMMAND, 10_000);
+      if (r.exitCode !== 0) throw new HttpError(`listing processes failed (exit ${r.exitCode}): ${r.stderr.trim().slice(0, 500)}`, 500);
+      processes = parseProcessList(r.stdout);
+    }
+    return { containers: containers.size, running: s.running, workspace, processes };
   }
 
   /** Run a command in one of the owner's terminals, creating the sandbox and terminal if needed. */

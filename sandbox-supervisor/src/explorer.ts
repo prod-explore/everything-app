@@ -210,6 +210,57 @@ export function parseDirectoryTar(stream: Readable, abs: string, opts: ListOptio
   });
 }
 
+export interface SizedEntry {
+  name: string;
+  type: EntryType;
+  /** Apparent size: the file itself, or everything below a directory. */
+  bytes: number;
+}
+
+export interface WorkspaceSummary {
+  /** Direct children of the archived directory, largest first. */
+  entries: SizedEntry[];
+  totalBytes: number;
+}
+
+/**
+ * Sum a directory archive per DIRECT child (recursive sizes), reading only the tar headers; file bodies are drained
+ * unread. Unlike the listing there is no scan budget: the result is shown before the files are deleted, so it must be
+ * complete, and the workspace quota bounds how much there is to stream.
+ */
+export function summarizeDirectoryTar(stream: Readable, abs: string): Promise<WorkspaceSummary> {
+  const base = path.posix.basename(abs);
+  return new Promise((resolve, reject) => {
+    const extract = tar.extract();
+    const byName = new Map<string, SizedEntry>();
+    let totalBytes = 0;
+    let done = false;
+    const stop = feed(stream, extract, err => {
+      if (done) return;
+      done = true;
+      stop();
+      reject(err);
+    });
+    extract.on('entry', (header, body, next) => {
+      const parts = header.name.replace(/\/+$/, '').split('/');
+      if (parts[0] === base && parts[1]) {
+        const bytes = entryType(header.type) === 'file' ? (header.size ?? 0) : 0;
+        const entry = byName.get(parts[1]) ?? { name: parts[1], type: parts.length === 2 ? entryType(header.type) : 'directory', bytes: 0 };
+        entry.bytes += bytes;
+        byName.set(parts[1], entry);
+        totalBytes += bytes;
+      }
+      body.on('end', () => next());
+      body.resume();
+    });
+    extract.on('finish', () => {
+      if (done) return;
+      done = true;
+      resolve({ entries: [...byName.values()].sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name)), totalBytes });
+    });
+  });
+}
+
 export interface FileResult {
   path: string;
   name: string;

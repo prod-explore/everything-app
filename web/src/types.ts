@@ -229,6 +229,26 @@ export interface ProjectRow {
   updatedAt: string;
 }
 
+/** GET /api/projects/:id/deletion-preview — everything DELETE /api/projects/:id removes. */
+export interface ProjectDeletionPreview {
+  project: { id: string; name: string };
+  conversations: Array<{ id: string; title: string; messageCount: number }>;
+  agentTranscripts: number;
+  /** Chat turns and agents that are stopped. */
+  running: Array<{ runId: string; kind: 'chat' | 'agent'; label: string }>;
+  /** The project's sandbox, plus any a chat brought along (then `conversationTitle` names it). */
+  sandboxes: Array<{
+    owner: string;
+    conversationTitle?: string;
+    containers: number;
+    running: boolean;
+    workspace: { entries: Array<{ name: string; type: 'file' | 'directory' | 'symlink' | 'other'; bytes: number }>; totalBytes: number } | null;
+    processes: Array<{ pid: number; command: string }>;
+  }>;
+  /** Report snapshots taken in the project's chats. */
+  snapshots: number;
+}
+
 export interface ProjectListItem {
   id: string;
   name: string;

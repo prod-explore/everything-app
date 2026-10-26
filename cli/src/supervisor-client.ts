@@ -1,6 +1,6 @@
 /**
  * The orchestrator's view of the sandbox-supervisor: byte-level reads of project workspaces (Explorer,
- * report pins) and checkpoints. The host never executes anything on agent files — the supervisor
+ * report pins), checkpoints, and removing a deleted project's sandbox. The host never executes anything on agent files — the supervisor
  * reads via the Docker archive API and runs git only inside the sandbox.
  */
 
@@ -16,6 +16,22 @@ export interface Checkpoint {
   id: string;
   label: string;
   createdAt: string;
+}
+
+/** What destroying an owner's sandbox would remove (the supervisor's GET /sandboxes/:owner/inventory). */
+export interface SandboxInventory {
+  containers: number;
+  running: boolean;
+  /** Top-level workspace entries with their recursive size, largest first; null when there is no workspace. */
+  workspace: { entries: Array<{ name: string; type: WorkspaceEntry['type']; bytes: number }>; totalBytes: number } | null;
+  processes: Array<{ pid: number; command: string }>;
+}
+
+/** The sandbox lifecycle calls project deletion needs; tests inject a fake. */
+export interface SandboxLifecycle {
+  inventory(owner: string): Promise<SandboxInventory>;
+  /** Removes the owner's containers (killing everything in them) and its workspace volume. */
+  destroy(owner: string): Promise<{ containersRemoved: number; volumeRemoved: boolean }>;
 }
 
 const MAX_PIN_BYTES = 2 * 1024 * 1024;
@@ -36,7 +52,7 @@ async function sfetch(url: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-export class OrchestratorSupervisorClient {
+export class OrchestratorSupervisorClient implements SandboxLifecycle {
   constructor(private readonly baseUrl: string = process.env['SUPERVISOR_URL'] ?? 'http://sandbox-supervisor:3001') {}
 
   private url(owner: string, suffix: string): string {
@@ -58,6 +74,14 @@ export class OrchestratorSupervisorClient {
     return this.json(await sfetch(`${this.baseUrl.replace(/\/$/, '')}/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerId: owner }),
     }));
+  }
+
+  async inventory(owner: string): Promise<SandboxInventory> {
+    return this.json(await sfetch(this.url(owner, '/inventory')));
+  }
+
+  async destroy(owner: string): Promise<{ containersRemoved: number; volumeRemoved: boolean }> {
+    return this.json(await sfetch(this.url(owner, '/volume'), { method: 'DELETE' }));
   }
 
   async listFiles(owner: string, path: string): Promise<{ path: string; entries: WorkspaceEntry[] }> {

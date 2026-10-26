@@ -1074,25 +1074,26 @@ export function updateProject(
 }
 
 /**
- * Removes a project. By default its conversations go with it (messages, agent transcripts and runs cascade);
- * `conversations: 'keep'` detaches them into plain quick chats instead. Sandbox workspace files on the Pi
- * are never touched — they outlive the project record by design.
+ * Removes a project's records: its conversations (messages, agent transcripts and runs cascade), the wake-ups set in
+ * them, its grants, its pins and the report snapshots taken in its chats. Returns the snapshots so the caller can
+ * delete their files, or null when there is no such project. The sandbox is the caller's job (see DELETE
+ * /api/projects/:id): it lives in the supervisor, not in this database.
  */
-export function deleteProject(db: Database.Database, id: string, opts: { conversations?: 'delete' | 'keep' } = {}): boolean {
+export function deleteProject(db: Database.Database, id: string): { snapshots: Array<{ id: string; filename: string }> } | null {
   const run = db.transaction(() => {
-    if ((opts.conversations ?? 'delete') === 'delete') {
-      db.prepare(`DELETE FROM conversations WHERE project_id = ?`).run(id);
-    }
-    const removed = db.prepare(`DELETE FROM projects WHERE id = ?`).run(id).changes > 0;
-    if (removed) db.prepare(`DELETE FROM workspace_pins WHERE owner = ?`).run(id);
-    return removed;
+    if (!db.prepare(`SELECT 1 FROM projects WHERE id = ?`).get(id)) return null;
+    const inProject = `SELECT id FROM conversations WHERE project_id = ?`;
+    const snapshots = db.prepare(`SELECT id, filename FROM artifacts WHERE conversation_id IN (${inProject})`).all(id) as Array<{ id: string; filename: string }>;
+    db.prepare(`DELETE FROM artifacts WHERE conversation_id IN (${inProject})`).run(id);
+    db.prepare(`DELETE FROM schedules WHERE conversation_id IN (${inProject})`).run(id);
+    db.prepare(`DELETE FROM workspace_pins WHERE owner = ? OR owner IN (${inProject})`).run(id, id);
+    db.prepare(`DELETE FROM approval_grants WHERE project_id = ? OR conversation_id IN (${inProject})`).run(id, id);
+    db.prepare(`DELETE FROM conversations WHERE project_id = ?`).run(id);
+    db.prepare(`DELETE FROM runs WHERE project_id = ?`).run(id);
+    db.prepare(`DELETE FROM projects WHERE id = ?`).run(id);
+    return { snapshots };
   });
   return run();
-}
-
-/** Ids of every conversation (chats and agent transcripts) that belongs to a project. */
-export function listProjectConversationIds(db: Database.Database, projectId: string): string[] {
-  return (db.prepare(`SELECT id FROM conversations WHERE project_id = ?`).all(projectId) as Array<{ id: string }>).map(r => r.id);
 }
 
 export function listProjectConversations(db: Database.Database, projectId: string): ConversationListItem[] {

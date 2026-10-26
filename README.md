@@ -34,6 +34,8 @@ All screenshots were taken against the scripted mock model in `tools/mock-llm` (
   [Providers, models and slots](docs/providers.md).
 - **A sandbox per project.** One container per project (or per standalone chat) with a persistent `/workspace`: a shell,
   git, terminals, a file explorer, a Source Control panel, and a checkpoint before every turn that you can roll back to.
+  Deleting a project lists exactly what goes (chats, running agents, processes, workspace files with sizes) and then
+  removes all of it, sandbox included.
 - **Approvals as cards.** Shell commands are judged one sub-command at a time; anything not allowed by a rule or an earlier
   grant shows a card: allow once, for this chat, for this project, or always. Destructive-looking calls always ask.
 - **Web access.** `web_search` (SearXNG or Brave) and `web_fetch`, plus a Chromium the agent drives and you can watch or

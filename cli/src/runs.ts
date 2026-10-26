@@ -161,6 +161,12 @@ export function listRuns(db: Database.Database, filter: { rootRunId?: string; co
   return (db.prepare(sql).all(...args, filter.limit ?? 200) as Record<string, unknown>[]).map(toRow);
 }
 
+/** Runs of a project that are still active (chat turns and their workers), oldest first. */
+export function listActiveProjectRuns(db: Database.Database, projectId: string): RunRow[] {
+  const statuses = ACTIVE_STATUSES.map(() => '?').join(', ');
+  return (db.prepare(`SELECT * FROM runs WHERE project_id = ? AND status IN (${statuses}) ORDER BY created_at`).all(projectId, ...ACTIVE_STATUSES) as Record<string, unknown>[]).map(toRow);
+}
+
 export function setRunStatus(db: Database.Database, id: string, status: RunStatus, extra?: { result?: string; error?: string }): void {
   const finished = !ACTIVE_STATUSES.includes(status);
   db.prepare(`

@@ -5,7 +5,7 @@ import { TerminalManager } from './terminals.js';
 
 /**
  * HTTP API of the sandbox-supervisor. sandbox-mcp uses it for commands, terminals and checkpoints; the orchestrator
- * for the workspace explorer, checkpoints and browser previews.
+ * for the workspace explorer, checkpoints, browser previews and project deletion (inventory, then removal).
  */
 
 const MAX_TIMEOUT_MS = 30 * 60_000;
@@ -230,6 +230,14 @@ export function createSupervisorApp(sandboxes: SandboxManager, defaultTimeoutMs 
     '/rollback',
     wrap(async (req, res) => {
       res.json({ ok: true, ...(await sandboxes.rollback(req.params.owner, (req.body ?? {}).checkpointId)) });
+    }),
+  );
+
+  // GET /sandboxes/:owner/inventory — dry run of the DELETE below: containers, workspace sizes, running processes.
+  owners.get(
+    '/inventory',
+    wrap(async (req, res) => {
+      res.json(await sandboxes.inventory(req.params.owner));
     }),
   );
 

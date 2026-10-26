@@ -19,6 +19,7 @@ import type {
   ModelLocality,
   ModelOption,
   PendingApproval,
+  ProjectDeletionPreview,
   ProjectListItem,
   ProjectRow,
   ProviderId,
@@ -524,9 +525,14 @@ export function updateProject(id: string, patch: { name?: string; description?: 
   return request(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
 }
 
-/** Deletes a project; its chats are deleted with it unless `keepChats` (they then become quick chats). */
-export function deleteProject(id: string, keepChats = false): Promise<{ ok: boolean }> {
-  return request(`/api/projects/${id}${keepChats ? '?conversations=keep' : ''}`, { method: 'DELETE' });
+/** What deleting the project would remove (a dry run on the server). */
+export function getProjectDeletionPreview(id: string): Promise<ProjectDeletionPreview> {
+  return request(`/api/projects/${id}/deletion-preview`);
+}
+
+/** Deletes a project with everything in it: chats, running work, sandbox containers, processes and workspace files. */
+export function deleteProject(id: string): Promise<{ ok: boolean }> {
+  return request(`/api/projects/${id}`, { method: 'DELETE' });
 }
 
 // ─── Approval Grants ──────────────────────────────────────────────────────

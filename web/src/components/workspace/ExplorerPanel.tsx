@@ -2,18 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, File, FileText, Folder, FolderTree, History, Image, Link2, Pencil, Pin, PinOff, RotateCcw } from 'lucide-react';
 import { fetchWorkspaceFile, listCheckpoints, listWorkspaceFiles, rollbackWorkspace, saveWorkspaceFile, workspacePins, type WorkspacePin } from '../../api-workspace';
 import type { Checkpoint, WorkspaceEntry, WorkspaceListing } from '../../types-workspace';
+import { formatSize } from '../../lib/format';
 import { formatStoredTime } from '../../lib/time';
 import { DockPanel, PanelMessage } from '../shared/DockPanel';
 
 const ROOT = '/workspace';
 /** Same cap as the server (workspace-write.ts). */
 const MAX_EDIT_BYTES = 512 * 1024;
-
-function formatSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
 
 function EntryIcon({ e }: { e: WorkspaceEntry }) {
   if (e.type === 'directory') return <Folder size={14} className="shrink-0 text-accent" />;

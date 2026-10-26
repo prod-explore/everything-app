@@ -21,7 +21,7 @@ describe('workspace pins', () => {
     assert.equal(deleteConversation(db, chat), true);
     assert.deepEqual(listPins(db, chat), []);
     addPin(db, project.id, '/workspace/c.md');
-    assert.equal(deleteProject(db, project.id), true);
+    assert.deepEqual(deleteProject(db, project.id), { snapshots: [] });
     assert.deepEqual(listPins(db, project.id), []);
   });
 

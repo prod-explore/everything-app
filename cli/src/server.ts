@@ -33,8 +33,8 @@ import { REQUEST_HUMAN_INPUT_TOOL, POST_REPORT_TOOL, formatHumanResponse, handle
 import { parseCommandPolicy } from './command-policy.js';
 import { PolicyStore, policyFilePath } from './policy-file.js';
 import { AgentManager } from './agents.js';
-import { ACTIVE_STATUSES, addRunUsage, createRun, drainRunMessages, getRun, heartbeatRun, interruptOrphanedRuns, listRuns, postRunMessage, setRunStatus } from './runs.js';
-import { OrchestratorSupervisorClient, SupervisorExec, guessMime, type SandboxExec } from './supervisor-client.js';
+import { ACTIVE_STATUSES, addRunUsage, createRun, drainRunMessages, getRun, heartbeatRun, interruptOrphanedRuns, listActiveProjectRuns, listRuns, postRunMessage, setRunStatus } from './runs.js';
+import { OrchestratorSupervisorClient, SupervisorExec, guessMime, type SandboxExec, type SandboxInventory, type SandboxLifecycle } from './supervisor-client.js';
 import { GitHubCredentials } from './github.js';
 import { createGithubRoutes, latestOwnerConversation } from './github-routes.js';
 import { Scheduler, type RunOutcome } from './scheduler.js';
@@ -107,7 +107,6 @@ import {
   getProject,
   updateProject,
   deleteProject,
-  listProjectConversationIds,
   listProjectConversations,
 } from './db.js';
 
@@ -279,6 +278,8 @@ export interface BuildAppOptions {
   db: ReturnType<typeof openDb>;
   /** Shell inside the sandbox — tests inject a fake; defaults to the real supervisor. */
   sandboxExec?: SandboxExec;
+  /** Sandbox inventory / removal for project deletion — tests inject a fake; defaults to the real supervisor. */
+  sandboxLifecycle?: SandboxLifecycle;
   connections: McpConnection[];
   /** Provider resolution + key vault. Omit in tests to get a router that serves every model from `llm`. */
   router?: ProviderRouter;
@@ -402,6 +403,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   };
   const supervisor = new OrchestratorSupervisorClient();
   const sandboxExec: SandboxExec = opts.sandboxExec ?? new SupervisorExec();
+  const sandboxLifecycle: SandboxLifecycle = opts.sandboxLifecycle ?? supervisor;
   /** Most recently active chat per project — where push approval cards from git-proxy are shown. */
   const lastConvForProject = new Map<string, string>();
   const github = createGithubRoutes({
@@ -889,13 +891,97 @@ ${formatHumanResponse(response)}` };
     res.json({ ok: true });
   });
 
-  app.delete('/api/projects/:id', (req, res) => {
-    if (!getProject(db, req.params.id)) { res.status(404).json({ error: 'project not found' }); return; }
-    // Stop anything still running inside the project before its rows disappear.
-    for (const convId of listProjectConversationIds(db, req.params.id)) abortControllers.get(convId)?.abort();
-    const ok = deleteProject(db, req.params.id, { conversations: req.query['conversations'] === 'keep' ? 'keep' : 'delete' });
-    if (!ok) { res.status(404).json({ error: 'project not found' }); return; }
-    res.json({ ok: true });
+  /**
+   * Sandboxes a project's deletion removes: the project's own, plus any a chat brought along from before it was moved
+   * into the project (a chat without a project is its own sandbox owner).
+   */
+  async function projectSandboxes(projectId: string, conversations: Array<{ id: string; title: string }>): Promise<Array<SandboxInventory & { owner: string; conversationTitle?: string }>> {
+    const out: Array<SandboxInventory & { owner: string; conversationTitle?: string }> = [];
+    for (const owner of [{ id: projectId, title: undefined as string | undefined }, ...conversations]) {
+      const inv = await sandboxLifecycle.inventory(owner.id);
+      if (inv.containers === 0 && inv.workspace === null) continue;
+      out.push({ owner: owner.id, ...(owner.title !== undefined ? { conversationTitle: owner.title } : {}), ...inv });
+    }
+    return out;
+  }
+
+  const projectConversations = (projectId: string) =>
+    db.prepare(`SELECT id, title, kind, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as messageCount FROM conversations c WHERE project_id = ? ORDER BY updated_at DESC`)
+      .all(projectId) as Array<{ id: string; title: string; kind: string; messageCount: number }>;
+
+  /** Dry run of DELETE /api/projects/:id: exactly what it removes, for the confirmation dialog. */
+  app.get('/api/projects/:id/deletion-preview', async (req, res) => {
+    const project = getProject(db, req.params.id);
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const conversations = projectConversations(project.id);
+    let sandboxes;
+    try {
+      sandboxes = await projectSandboxes(project.id, conversations);
+    } catch (err) {
+      res.status(502).json({ error: `Could not read the project's sandbox: ${(err as Error).message}` });
+      return;
+    }
+    const titleOf = new Map(conversations.map(c => [c.id, c.title]));
+    res.json({
+      project: { id: project.id, name: project.name },
+      conversations: conversations.filter(c => c.kind === 'chat').map(({ id, title, messageCount }) => ({ id, title, messageCount })),
+      agentTranscripts: conversations.filter(c => c.kind !== 'chat').length,
+      running: listActiveProjectRuns(db, project.id).map(r => ({
+        runId: r.id,
+        kind: r.depth === 0 ? 'chat' : 'agent',
+        label: r.depth === 0 ? titleOf.get(r.conversationId ?? '') ?? r.label : r.label,
+      })),
+      sandboxes,
+      snapshots: (db.prepare(`SELECT COUNT(*) as n FROM artifacts WHERE conversation_id IN (SELECT id FROM conversations WHERE project_id = ?)`).get(project.id) as { n: number }).n,
+    });
+  });
+
+  /** Projects being deleted right now: nothing new may start in them meanwhile. */
+  const deletingProjects = new Set<string>();
+  /** How long a deletion waits for aborted turns to store what they did before their rows go. */
+  const TURN_SETTLE_MS = 10_000;
+
+  /**
+   * Deletes a project and everything that belongs to it, so nothing is left that the UI no longer shows: running turns
+   * and agents are stopped, its sandboxes (containers, the processes in them, the workspace volume) are removed, then
+   * its records (chats, transcripts, runs, grants, pins, report snapshots and their files). The sandbox goes first: if
+   * the supervisor cannot remove it, the project stays as it was and the deletion can be retried.
+   */
+  app.delete('/api/projects/:id', async (req, res) => {
+    const id = req.params.id;
+    if (!getProject(db, id)) { res.status(404).json({ error: 'project not found' }); return; }
+    if (deletingProjects.has(id)) { res.status(409).json({ error: 'this project is already being deleted' }); return; }
+    deletingProjects.add(id);
+    try {
+      const conversations = projectConversations(id);
+      for (const run of listActiveProjectRuns(db, id)) agents.stop(run.id, 'the project was deleted');
+      for (const c of conversations) abortControllers.get(c.id)?.abort();
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        Promise.allSettled(conversations.map(c => turnPromises.get(c.id)).filter(p => p !== undefined)),
+        new Promise<void>(resolve => { timer = setTimeout(resolve, TURN_SETTLE_MS); }),
+      ]);
+      clearTimeout(timer);
+
+      const owners = [id, ...conversations.map(c => c.id)];
+      try {
+        for (const owner of owners) await sandboxLifecycle.destroy(owner);
+      } catch (err) {
+        res.status(502).json({ error: `The project was not deleted: its sandbox could not be removed (${(err as Error).message}).` });
+        return;
+      }
+      // The tokens lived in the removed sandboxes only; revoking them is tidiness, so a git-proxy hiccup does not block.
+      for (const owner of owners) await github.revokeSandboxGit(owner).catch(err => console.warn(`[projects] revoking git-proxy tokens of ${owner}: ${(err as Error).message}`));
+
+      const removed = deleteProject(db, id);
+      if (!removed) { res.status(404).json({ error: 'project not found' }); return; }
+      for (const snapshot of removed.snapshots) {
+        fs.rmSync(artifactPath(snapshot), { force: true });
+      }
+      res.json({ ok: true });
+    } finally {
+      deletingProjects.delete(id);
+    }
   });
 
   app.get('/api/projects/:id/conversations', (req, res) => {
@@ -918,6 +1004,14 @@ ${formatHumanResponse(response)}` };
   });
 
   // ─── Conversations ────────────────────────────────────────────────────────
+  // While a project is being deleted its chats take no new messages, edits or turns.
+  app.use('/api/conversations/:id', (req, res, next) => {
+    if (deletingProjects.size === 0 || req.method === 'GET') { next(); return; }
+    const projectId = getConversation(db, req.params['id'] ?? '')?.projectId;
+    if (projectId && deletingProjects.has(projectId)) { res.status(409).json({ error: 'this chat\'s project is being deleted' }); return; }
+    next();
+  });
+
   app.get('/api/conversations', (_req, res) => {
     res.json({ conversations: listConversations(db) });
   });
@@ -940,6 +1034,7 @@ ${formatHumanResponse(response)}` };
         res.status(400).json({ error: 'unknown projectId' });
         return;
       }
+      if (deletingProjects.has(project.id)) { res.status(409).json({ error: 'this project is being deleted' }); return; }
     }
     // A chat in a ghost project is a ghost chat. It starts on a local model — the one asked for, else a local default.
     const ghost = req.body?.ghost === true || project?.ghost === true;
@@ -1395,7 +1490,7 @@ ${m.body}`),
   function drainQueue(convId: string): void {
     if (isBusy(convId)) return;
     const conv = getConversation(db, convId);
-    if (!conv) return;
+    if (!conv || (conv.projectId && deletingProjects.has(conv.projectId))) return;
     if (queuePaused(convId) || (conv.ghost && ghostModelProblem(conv.model))) { publishQueue(convId); return; }
     const next = takeNextQueued(db, convId);
     queueForced.delete(convId);
@@ -1495,6 +1590,7 @@ ${m.body}`),
 
     const project = s.projectId ? getProject(db, s.projectId) : null;
     if (s.projectId && !project) return problem('The project this task belongs to no longer exists.');
+    if (s.projectId && deletingProjects.has(s.projectId)) return problem('The project this task belongs to is being deleted.');
     if (project?.ghost) return problem('A ghost project cannot run scheduled tasks.');
 
     const candidates = router.chatCandidates();
