@@ -246,6 +246,8 @@ export interface DeletionPreview {
   agentTranscripts: number;
   /** Chat turns and agents that are stopped. */
   running: Array<{ runId: string; kind: 'chat' | 'agent'; label: string }>;
+  /** false: no sandbox service is configured, so there is no sandbox to remove. */
+  sandboxRuntime: boolean;
   /** The target's sandbox, plus any a chat brought along (then `conversationTitle` names it). */
   sandboxes: Array<{
     owner: string;

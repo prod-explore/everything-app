@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import { addPin, appendMessage, createApprovalGrant, createArtifact, createGazetaItem, listApprovalGrants, listPins, openDb, runMigrations } from '../db.js';
 import { createRun } from '../runs.js';
 import { ProviderRouter } from '../providers/router.js';
-import type { SandboxInventory, SandboxLifecycle } from '../supervisor-client.js';
+import { SANDBOX_UNREACHABLE, type SandboxInventory, type SandboxLifecycle } from '../supervisor-client.js';
 
 const TOKEN = 'test-token';
 function req(port: number, method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
@@ -30,8 +30,8 @@ function req(port: number, method: string, path: string, body?: unknown): Promis
 function fakeSandboxes(existing: Record<string, SandboxInventory> = {}) {
   const sandboxes = new Map(Object.entries(existing));
   const destroyed: string[] = [];
-  let failing = false;
-  const failure = () => new Error('disk full');
+  let failing: false | 'error' | 'unreachable' = false;
+  const failure = () => new Error(failing === 'unreachable' ? SANDBOX_UNREACHABLE : 'disk full');
   const lifecycle: SandboxLifecycle = {
     async inventory(owner) {
       if (failing) throw failure();
@@ -45,7 +45,7 @@ function fakeSandboxes(existing: Record<string, SandboxInventory> = {}) {
       return { containersRemoved: had?.containers ?? 0, volumeRemoved: had?.workspace != null };
     },
   };
-  return { lifecycle, sandboxes, destroyed, fail: (on: boolean) => { failing = on; } };
+  return { lifecycle, sandboxes, destroyed, fail: (mode: typeof failing) => { failing = mode; } };
 }
 
 describe('deleting messages, conversations and projects', () => {
@@ -137,6 +137,7 @@ describe('deleting messages, conversations and projects', () => {
       conversations: [{ id: convId, title: 'Preview chat', messageCount: 1 }],
       agentTranscripts: 1,
       running: [{ runId, kind: 'agent', label: 'worker' }],
+      sandboxRuntime: true,
       sandboxes: [
         { owner: projectId, ...sandbox.sandboxes.get(projectId) },
         { owner: convId, conversationTitle: 'Preview chat', ...sandbox.sandboxes.get(convId) },
@@ -189,10 +190,11 @@ describe('deleting messages, conversations and projects', () => {
 
   it('keeps everything when the sandbox service fails, with a message that says so', async () => {
     const { projectId, convId, file } = await seedProject('Kept');
-    sandbox.fail(true);
+    sandbox.fail('error');
     try {
       const r = await req(port, 'DELETE', `/api/projects/${projectId}`);
       assert.equal(r.status, 502);
+      assert.equal(r.json.code, 'sandbox_failed');
       assert.match(r.json.error, /nothing was deleted: disk full/);
       assert.equal((await req(port, 'DELETE', `/api/conversations/${convId}`)).status, 502);
     } finally {
@@ -206,5 +208,56 @@ describe('deleting messages, conversations and projects', () => {
   it('refuses to delete a conversation or project while a turn is running', async () => {
     assert.equal((await req(port, 'DELETE', '/api/conversations/nope')).status, 404);
     assert.equal((await req(port, 'DELETE', '/api/projects/nope')).status, 404);
+  });
+});
+
+describe('deleting without a reachable sandbox service', () => {
+  async function app(opts: { sandboxLifecycle?: SandboxLifecycle | null; supervisorUrl?: string }) {
+    const db = openDb(':memory:'); runMigrations(db);
+    const before = process.env['SUPERVISOR_URL'];
+    if (opts.supervisorUrl === undefined) delete process.env['SUPERVISOR_URL']; else process.env['SUPERVISOR_URL'] = opts.supervisorUrl;
+    const router = new ProviderRouter({ db, env: {} as NodeJS.ProcessEnv, fetchImpl: (async () => new Response('{}')) as typeof fetch });
+    const built = await buildApp({ db, connections: [], router, authToken: TOKEN, ...('sandboxLifecycle' in opts ? { sandboxLifecycle: opts.sandboxLifecycle } : {}), config: { model: '@test/model-a', autoApproveTools: [] } });
+    if (before === undefined) delete process.env['SUPERVISOR_URL']; else process.env['SUPERVISOR_URL'] = before;
+    const server = built.app.listen(0);
+    const port = (server.address() as AddressInfo).port;
+    return { db, port, close: () => { built.stop(); server.close(); db.close(); } };
+  }
+
+  it('with no sandbox service configured (no SUPERVISOR_URL), projects and chats are deleted without it', async () => {
+    const t = await app({});
+    try {
+      const projectId = (await req(t.port, 'POST', '/api/projects', { name: 'Local' })).json.id;
+      const chat = (await req(t.port, 'POST', '/api/conversations', { title: 'c', projectId })).json.id;
+      const quick = (await req(t.port, 'POST', '/api/conversations', { title: 'q' })).json.id;
+      const preview = await req(t.port, 'GET', `/api/projects/${projectId}/deletion-preview`);
+      assert.equal(preview.status, 200);
+      assert.equal(preview.json.sandboxRuntime, false);
+      assert.deepEqual(preview.json.sandboxes, []);
+      assert.equal((await req(t.port, 'DELETE', `/api/projects/${projectId}`)).status, 200);
+      assert.equal((await req(t.port, 'GET', `/api/conversations/${chat}`)).status, 404);
+      assert.equal((await req(t.port, 'DELETE', `/api/conversations/${quick}`)).status, 200);
+    } finally {
+      t.close();
+    }
+  });
+
+  it('with one configured but unreachable, refuses with a clear message and deletes nothing', async () => {
+    // A dead local port: the real supervisor client, failing as it would when the container is down.
+    const t = await app({ supervisorUrl: 'http://127.0.0.1:9' });
+    try {
+      const projectId = (await req(t.port, 'POST', '/api/projects', { name: 'Remote' })).json.id;
+      const quick = (await req(t.port, 'POST', '/api/conversations', { title: 'q' })).json.id;
+      for (const [method, path] of [['GET', `/api/projects/${projectId}/deletion-preview`], ['DELETE', `/api/projects/${projectId}`], ['GET', `/api/conversations/${quick}/deletion-preview`], ['DELETE', `/api/conversations/${quick}`]] as const) {
+        const r = await req(t.port, method, path);
+        assert.equal(r.status, 503, `${method} ${path}`);
+        assert.equal(r.json.code, 'sandbox_unreachable');
+        assert.match(r.json.error, /The sandbox service is not reachable, so .* nothing was deleted\. Start sandbox-supervisor/);
+      }
+      assert.equal((await req(t.port, 'GET', `/api/projects/${projectId}`)).status, 200);
+      assert.equal((await req(t.port, 'GET', `/api/conversations/${quick}`)).status, 200);
+    } finally {
+      t.close();
+    }
   });
 });

@@ -34,7 +34,7 @@ import { parseCommandPolicy } from './command-policy.js';
 import { PolicyStore, policyFilePath } from './policy-file.js';
 import { AgentManager } from './agents.js';
 import { ACTIVE_STATUSES, addRunUsage, createRun, drainRunMessages, getRun, heartbeatRun, interruptOrphanedRuns, listActiveRuns, listRuns, postRunMessage, setRunStatus } from './runs.js';
-import { OrchestratorSupervisorClient, SupervisorExec, guessMime, type SandboxExec, type SandboxInventory, type SandboxLifecycle } from './supervisor-client.js';
+import { OrchestratorSupervisorClient, SANDBOX_UNREACHABLE, SupervisorExec, guessMime, type SandboxExec, type SandboxInventory, type SandboxLifecycle } from './supervisor-client.js';
 import { GitHubCredentials } from './github.js';
 import { createGithubRoutes, latestOwnerConversation } from './github-routes.js';
 import { Scheduler, type RunOutcome } from './scheduler.js';
@@ -280,8 +280,11 @@ export interface BuildAppOptions {
   db: ReturnType<typeof openDb>;
   /** Shell inside the sandbox — tests inject a fake; defaults to the real supervisor. */
   sandboxExec?: SandboxExec;
-  /** Sandbox inventory / removal when a project or chat is deleted — tests inject a fake; defaults to the real supervisor. */
-  sandboxLifecycle?: SandboxLifecycle;
+  /**
+   * Sandbox inventory / removal when a project or chat is deleted. Defaults to the supervisor when SUPERVISOR_URL is set;
+   * null means no sandbox service is configured (there is then no sandbox to remove). Tests inject a fake.
+   */
+  sandboxLifecycle?: SandboxLifecycle | null;
   connections: McpConnection[];
   /** Provider resolution + key vault. Omit in tests to get a router that serves every model from `llm`. */
   router?: ProviderRouter;
@@ -405,7 +408,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   };
   const supervisor = new OrchestratorSupervisorClient();
   const sandboxExec: SandboxExec = opts.sandboxExec ?? new SupervisorExec();
-  const sandboxLifecycle: SandboxLifecycle = opts.sandboxLifecycle ?? supervisor;
+  const sandboxLifecycle: SandboxLifecycle | null = opts.sandboxLifecycle !== undefined
+    ? opts.sandboxLifecycle
+    : process.env['SUPERVISOR_URL']?.trim() ? supervisor : null;
   /** Most recently active chat per project — where push approval cards from git-proxy are shown. */
   const lastConvForProject = new Map<string, string>();
   const github = createGithubRoutes({
@@ -910,20 +915,31 @@ ${formatHumanResponse(response)}` };
   const sandboxOwners = (t: Target, conversations: Array<{ id: string }>) =>
     [...new Set([...(t.kind === 'project' ? [t.id] : []), ...conversations.map(c => c.id)])];
 
+  /** A sandbox service that is configured but failed: a message for the person, not a bare status. */
   function sandboxFailure(res: express.Response, err: unknown, what: string): void {
-    res.status(502).json({ error: `The sandbox service could not handle ${what}, so nothing was deleted: ${(err as Error).message}` });
+    const message = (err as Error).message;
+    if (message === SANDBOX_UNREACHABLE) {
+      res.status(503).json({
+        code: 'sandbox_unreachable',
+        error: `The sandbox service is not reachable, so ${what} cannot be checked or removed, and nothing was deleted. Start sandbox-supervisor (docker compose up -d sandbox-supervisor) and try again.`,
+      });
+      return;
+    }
+    res.status(502).json({ code: 'sandbox_failed', error: `The sandbox service could not handle ${what}, so nothing was deleted: ${message}` });
   }
 
-  /** Dry run: everything deleting `target` removes. Throws when the sandbox service fails. */
+  /** Dry run: everything deleting `target` removes. Throws when the sandbox service is configured but fails. */
   async function deletionPreview(target: Target) {
     const owned = ownedRecords(db, targetKey(target))!;
     const titleOf = new Map(owned.conversations.map(c => [c.id, c.title]));
     const sandboxes: Array<SandboxInventory & { owner: string; conversationTitle?: string }> = [];
-    for (const owner of sandboxOwners(target, owned.conversations)) {
-      const inv = await sandboxLifecycle.inventory(owner);
-      if (inv.containers === 0 && inv.workspace === null) continue;
-      const title = owner === target.id ? undefined : titleOf.get(owner);
-      sandboxes.push({ owner, ...(title !== undefined ? { conversationTitle: title } : {}), ...inv });
+    if (sandboxLifecycle) {
+      for (const owner of sandboxOwners(target, owned.conversations)) {
+        const inv = await sandboxLifecycle.inventory(owner);
+        if (inv.containers === 0 && inv.workspace === null) continue;
+        const title = owner === target.id ? undefined : titleOf.get(owner);
+        sandboxes.push({ owner, ...(title !== undefined ? { conversationTitle: title } : {}), ...inv });
+      }
     }
     return {
       target,
@@ -934,6 +950,8 @@ ${formatHumanResponse(response)}` };
         kind: r.depth === 0 ? 'chat' : 'agent',
         label: r.depth === 0 ? titleOf.get(r.conversationId ?? '') ?? r.label : r.label,
       })),
+      /** false: no sandbox service is configured, so there is no sandbox to remove. */
+      sandboxRuntime: sandboxLifecycle !== null,
       sandboxes,
       snapshots: owned.snapshots.length,
       schedules: owned.schedules,
@@ -961,11 +979,13 @@ ${formatHumanResponse(response)}` };
 
       // The sandbox goes first: if it cannot be removed, nothing is deleted and the deletion can be retried.
       const owners = sandboxOwners(target, owned.conversations);
-      try {
-        for (const owner of owners) await sandboxLifecycle.destroy(owner);
-      } catch (err) {
-        sandboxFailure(res, err, `this ${target.kind}'s sandbox`);
-        return;
+      if (sandboxLifecycle) {
+        try {
+          for (const owner of owners) await sandboxLifecycle.destroy(owner);
+        } catch (err) {
+          sandboxFailure(res, err, `this ${target.kind}'s sandbox`);
+          return;
+        }
       }
       // The tokens lived in the removed sandboxes only; revoking them is tidiness, so a git-proxy hiccup does not block.
       for (const owner of owners) await github.revokeSandboxGit(owner).catch(err => console.warn(`[delete] revoking git-proxy tokens of ${owner}: ${(err as Error).message}`));

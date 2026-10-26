@@ -11,6 +11,7 @@ const PREVIEW: DeletionPreview = {
   conversations: [{ id: 'c1', title: 'Checkout bug', messageCount: 12 }],
   agentTranscripts: 2,
   running: [{ runId: 'r1', kind: 'agent', label: 'test-runner' }],
+  sandboxRuntime: true,
   sandboxes: [
     {
       owner: 'p1',
@@ -81,13 +82,6 @@ describe('DeletionDialog: project', () => {
     expect(onDeleted).toHaveBeenCalledTimes(1);
   });
 
-  it('cannot delete when the preview failed', async () => {
-    server({ status: 502, body: { error: 'supervisor down' } });
-    render(<DeletionDialog target={{ kind: 'project', id: 'p1' }} onCancel={vi.fn()} onDeleted={vi.fn()} />);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/can't be deleted right now: supervisor down/);
-    expect(screen.getByRole('button', { name: 'Delete project' })).toBeDisabled();
-  });
-
   it('shows why a deletion failed and keeps the dialog open', async () => {
     server({ status: 200, body: PREVIEW }, { status: 502, body: { error: 'The sandbox service could not handle this project\'s sandbox, so nothing was deleted: disk full' } });
     const onDeleted = vi.fn();
@@ -96,6 +90,26 @@ describe('DeletionDialog: project', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Delete project' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/nothing was deleted: disk full/);
     expect(onDeleted).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Delete project' })).toBeEnabled();
+  });
+});
+
+describe('DeletionDialog: sandbox service', () => {
+  it('when it is configured but down, says so plainly and cannot delete', async () => {
+    const message = 'The sandbox service is not reachable, so the project\'s sandbox cannot be checked or removed, and nothing was deleted. Start sandbox-supervisor (docker compose up -d sandbox-supervisor) and try again.';
+    server({ status: 503, body: { code: 'sandbox_unreachable', error: message } });
+    render(<DeletionDialog target={{ kind: 'project', id: 'p1' }} onCancel={vi.fn()} onDeleted={vi.fn()} />);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('The project can\'t be deleted right now.');
+    expect(alert).toHaveTextContent(message);
+    expect(alert).not.toHaveTextContent(/502|503|request failed/);
+    expect(screen.getByRole('button', { name: 'Delete project' })).toBeDisabled();
+  });
+
+  it('when none is configured, says there is no sandbox to remove and deletes normally', async () => {
+    server({ status: 200, body: { ...PREVIEW, sandboxRuntime: false, sandboxes: [] } });
+    render(<DeletionDialog target={{ kind: 'project', id: 'p1' }} onCancel={vi.fn()} onDeleted={vi.fn()} />);
+    expect(await screen.findByText('No sandbox service is configured, so there is no sandbox to remove.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete project' })).toBeEnabled();
   });
 });

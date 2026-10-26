@@ -75,7 +75,7 @@ export function DeletionDialog({ target, onCancel, onDeleted, remove }: {
       {!preview && !loadError && <p className="text-sm text-fg-tertiary">Checking what the {noun} contains…</p>}
       {loadError && (
         <p className="text-sm text-danger" role="alert">
-          Couldn't find out what would be removed, so the {noun} can't be deleted right now: {loadError}
+          The {noun} can't be deleted right now. {loadError}
         </p>
       )}
       {preview && (
@@ -146,7 +146,9 @@ export function DeletionDialog({ target, onCancel, onDeleted, remove }: {
 
           {preview.sandboxes.length === 0 ? (
             <Section title="Sandbox">
-              <p className="text-xs text-fg-tertiary">The {noun} has no sandbox.</p>
+              <p className="text-xs text-fg-tertiary">
+                {preview.sandboxRuntime ? `The ${noun} has no sandbox.` : 'No sandbox service is configured, so there is no sandbox to remove.'}
+              </p>
             </Section>
           ) : (
             preview.sandboxes.map(s => (
