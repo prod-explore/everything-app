@@ -45,18 +45,24 @@ function loadMcpServers(): McpServerConfig[] {
   return servers;
 }
 
+/**
+ * Default-deny on purpose ("whitelist, never a bare shell"): a tool that is not in this list asks for a manual approval.
+ * AUTO_APPROVE_TOOLS replaces the list. Browser: opening a page is approved per DOMAIN in the orchestrator (llm-loop: Allow
+ * once / this chat / always), so browser_open needs no second prompt (also with new_tab); browser_tabs only switches
+ * between pages already open; browser_act runs unprompted inside the approved domain, except actions that look
+ * irreversible (payment, deletion…), which always ask; after a page looked like a prompt injection every effectful call
+ * asks again.
+ */
+export const DEFAULT_AUTO_APPROVE_TOOLS: readonly string[] = [
+  'read_log', 'get_path', 'search_notes', 'browser_open', 'browser_observe', 'browser_screenshot', 'browser_act', 'browser_tabs', 'browser_close',
+];
+
 function loadAutoApproveTools(): string[] {
   const fromEnv = process.env['AUTO_APPROVE_TOOLS'];
   if (fromEnv) {
     return fromEnv.split(',').map(t => t.trim()).filter(Boolean);
   }
-  // Default-deny on purpose ("whitelist, never a bare shell"): a tool that is not in this
-  // list asks for a manual approval. Override via AUTO_APPROVE_TOOLS (the variable REPLACES this list).
-  // Browser: opening a page is approved per DOMAIN in the orchestrator (llm-loop: Allow once / this chat / always), so
-  // browser_open needs no second prompt (also with new_tab); browser_tabs only switches between pages already open; browser_act runs unprompted inside the approved domain, except actions that
-  // look irreversible (payment, deletion…), which always ask; after a page looked like a prompt injection every
-  // effectful call asks again.
-  return ['read_log', 'get_path', 'search_notes', 'browser_open', 'browser_observe', 'browser_screenshot', 'browser_act', 'browser_tabs', 'browser_close'];
+  return [...DEFAULT_AUTO_APPROVE_TOOLS];
 }
 
 /**

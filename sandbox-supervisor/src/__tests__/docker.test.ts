@@ -168,3 +168,27 @@ describe('DockerodeOps helpers', () => {
     assert.equal(cpuPercentFromStats(stats(1000, 4000, 1000, 4000), 1), 0, 'no system delta → 0, not NaN');
   });
 });
+
+describe('docker-compose.yml', () => {
+  it('passes the sandbox settings with the defaults the code has', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    // dist/__tests__ → repository root
+    const compose = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'docker-compose.yml'), 'utf8');
+    const block = /^ {2}sandbox-supervisor:\n((?: {4}.*\n|\s*\n)+)/m.exec(compose)?.[1] ?? '';
+    const passed = (name: string) => {
+      const m = new RegExp(`^ {6}${name}: \\$\\{${name}:-([^}]*)\\}`, 'm').exec(block);
+      assert.ok(m, `compose passes ${name} to sandbox-supervisor with a default`);
+      return m[1]!;
+    };
+    const cfg = configFromEnv({});
+    assert.equal(passed('SANDBOX_IMAGE'), cfg.image);
+    assert.equal(passed('SANDBOX_NETWORK'), cfg.network);
+    assert.equal(passed('SANDBOX_BRIDGE_NAME'), cfg.bridgeName);
+    assert.equal(Number(passed('SANDBOX_MEMORY_MB')), cfg.memoryMb);
+    assert.equal(Number(passed('SANDBOX_CPUS')), cfg.cpus);
+    // Documented as the way to turn on gVisor (README), so it has to reach the supervisor.
+    assert.equal(passed('SANDBOX_RUNTIME'), cfg.runtime);
+  });
+});

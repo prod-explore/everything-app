@@ -154,7 +154,8 @@ const USER_TIMEZONE = (() => {
 })();
 
 /** Model steps one scheduled run may take (SCHEDULE_MAX_STEPS). */
-const SCHEDULE_MAX_STEPS = Number(process.env['SCHEDULE_MAX_STEPS']) > 0 ? Number(process.env['SCHEDULE_MAX_STEPS']) : 25;
+export const DEFAULT_SCHEDULE_MAX_STEPS = 25;
+const SCHEDULE_MAX_STEPS = Number(process.env['SCHEDULE_MAX_STEPS']) > 0 ? Number(process.env['SCHEDULE_MAX_STEPS']) : DEFAULT_SCHEDULE_MAX_STEPS;
 
 function isValidAuthHeader(header: string | undefined, expectedToken: string): boolean {
   if (!header) return false;

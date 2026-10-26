@@ -54,6 +54,8 @@ services:
       # deploy/egress-guard.sh (EGRESS_BRIDGES must include br-ea-sandbox).
       SANDBOX_NETWORK: ${SANDBOX_NETWORK:-ea-sandbox-egress}
       SANDBOX_BRIDGE_NAME: ${SANDBOX_BRIDGE_NAME:-br-ea-sandbox}
+      # OCI runtime for the sandboxes: empty = Docker's default (runc); runsc = gVisor, once installed on the host.
+      SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-}
       # preview_sandbox: the shared browser container is attached, on demand, to a private no-route-out network together
       # with ONE sandbox, so the agent can look at the dev server it is building. Empty = off.
       PREVIEW_BROWSER_CONTAINER: ${PREVIEW_BROWSER_CONTAINER:-everythingapp-playwright-mcp}
@@ -247,6 +249,12 @@ services:
       GHOST_CONNECTORS: ${GHOST_CONNECTORS-sandbox,obsidian}
       # Usage / audit / replay rows older than this many months are deleted daily (0 = keep everything). Chats are never deleted.
       RETENTION_MONTHS: ${RETENTION_MONTHS:-12}
+      # Tools of the connectors above that run without an approval card (the variable replaces the list; see .env.example).
+      AUTO_APPROVE_TOOLS: ${AUTO_APPROVE_TOOLS:-read_log,get_path,search_notes,browser_open,browser_observe,browser_screenshot,browser_act,browser_tabs,browser_close}
+      # Tool output sent back to the model is cut to head + tail at this many characters.
+      TOOL_OUTPUT_MAX_CHARS: ${TOOL_OUTPUT_MAX_CHARS:-12000}
+      # Model steps one scheduled task run may take.
+      SCHEDULE_MAX_STEPS: ${SCHEDULE_MAX_STEPS:-25}
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
