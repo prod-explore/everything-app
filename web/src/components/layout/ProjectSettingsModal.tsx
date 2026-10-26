@@ -127,7 +127,7 @@ export function ProjectSettingsModal({ projectId, onClose, onChanged, onDeleted 
 
           <section className="rounded-button border border-danger/40 p-3" aria-label="Danger zone">
             <h3 className="mb-1 text-sm font-medium text-danger">Delete project</h3>
-            <p className="mb-2 text-xs text-fg-tertiary">Removes the project with its chats, running agents, sandbox, processes and workspace files. You see the full list before anything is deleted.</p>
+            <p className="mb-2 text-xs text-fg-tertiary">Removes the project with its chats, running agents, scheduled tasks, Gazeta items, sandbox, processes and workspace files. You see the full list before anything is deleted.</p>
             <Button variant="danger" onClick={() => setConfirmDelete(true)}>Delete project…</Button>
           </section>
         </div>

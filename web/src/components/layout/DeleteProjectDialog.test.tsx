@@ -21,6 +21,8 @@ const PREVIEW: ProjectDeletionPreview = {
     },
   ],
   snapshots: 1,
+  schedules: [{ id: 's1', name: 'Nightly test run' }],
+  gazetaItems: [{ id: 'g1', title: 'Which branch should I use?', status: 'pending' }],
 };
 
 /** fetch stub: the preview, then whatever DELETE answers. Records the calls. */
@@ -36,7 +38,7 @@ function server(preview: { status: number; body: unknown }, del: { status: numbe
 }
 
 describe('DeleteProjectDialog', () => {
-  it('lists what the server says will be removed: chats, stopped work, files with sizes, processes', async () => {
+  it('lists what the server says will be removed: chats, stopped work, schedules, Gazeta items, files with sizes, processes', async () => {
     server({ status: 200, body: PREVIEW });
     render(<DeleteProjectDialog projectId="p1" onCancel={vi.fn()} onDeleted={vi.fn()} />);
     expect(await screen.findByRole('dialog', { name: 'Delete “Shop”?' })).toBeInTheDocument();
@@ -44,6 +46,8 @@ describe('DeleteProjectDialog', () => {
     expect(screen.getByText('12 messages')).toBeInTheDocument();
     expect(screen.getByText(/2 agent transcripts, 1 report snapshot go with them/)).toBeInTheDocument();
     expect(screen.getByText('test-runner')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Scheduled tasks (1)' })).getByText('Nightly test run')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Gazeta items (1)' })).getByText('Which branch should I use?')).toBeInTheDocument();
     const files = within(screen.getByRole('list', { name: 'Workspace files' }));
     expect(files.getByText('node_modules/')).toBeInTheDocument();
     expect(files.getByText('3.0 MB')).toBeInTheDocument();

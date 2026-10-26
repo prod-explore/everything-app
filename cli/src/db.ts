@@ -1074,8 +1074,8 @@ export function updateProject(
 }
 
 /**
- * Removes a project's records: its conversations (messages, agent transcripts and runs cascade), the wake-ups set in
- * them, its grants, its pins and the report snapshots taken in its chats. Returns the snapshots so the caller can
+ * Removes a project's records: its conversations (messages, agent transcripts and runs cascade), its scheduled tasks
+ * and the wake-ups set in its chats, its Gazeta items, its grants, its pins and the report snapshots taken in its chats. Returns the snapshots so the caller can
  * delete their files, or null when there is no such project. The sandbox is the caller's job (see DELETE
  * /api/projects/:id): it lives in the supervisor, not in this database.
  */
@@ -1085,7 +1085,8 @@ export function deleteProject(db: Database.Database, id: string): { snapshots: A
     const inProject = `SELECT id FROM conversations WHERE project_id = ?`;
     const snapshots = db.prepare(`SELECT id, filename FROM artifacts WHERE conversation_id IN (${inProject})`).all(id) as Array<{ id: string; filename: string }>;
     db.prepare(`DELETE FROM artifacts WHERE conversation_id IN (${inProject})`).run(id);
-    db.prepare(`DELETE FROM schedules WHERE conversation_id IN (${inProject})`).run(id);
+    db.prepare(`DELETE FROM schedules WHERE project_id = ? OR conversation_id IN (${inProject})`).run(id, id);
+    db.prepare(`DELETE FROM gazeta_items WHERE project_id = ? OR conversation_id IN (${inProject})`).run(id, id);
     db.prepare(`DELETE FROM workspace_pins WHERE owner = ? OR owner IN (${inProject})`).run(id, id);
     db.prepare(`DELETE FROM approval_grants WHERE project_id = ? OR conversation_id IN (${inProject})`).run(id, id);
     db.prepare(`DELETE FROM conversations WHERE project_id = ?`).run(id);

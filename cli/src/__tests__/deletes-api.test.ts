@@ -6,7 +6,7 @@ import { buildApp, type BuiltApp } from '../server.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { addPin, appendMessage, createApprovalGrant, createArtifact, listApprovalGrants, listPins, openDb, runMigrations } from '../db.js';
+import { addPin, appendMessage, createApprovalGrant, createArtifact, createGazetaItem, listApprovalGrants, listPins, openDb, runMigrations } from '../db.js';
 import { createRun } from '../runs.js';
 import { ProviderRouter } from '../providers/router.js';
 import type { SandboxInventory, SandboxLifecycle } from '../supervisor-client.js';
@@ -84,7 +84,10 @@ describe('deleting messages, conversations and projects', () => {
     assert.equal((await req(port, 'GET', `/api/conversations/${id}`)).status, 404);
   });
 
-  /** A project with a chat that has history, a report snapshot on disk, a grant, a pin and a stale agent run. */
+  /**
+   * A project with a chat that has history, a report snapshot on disk, a grant, a pin, a stale agent run, a scheduled task,
+   * a wake-up set in the chat, and Gazeta items of the project and of the chat.
+   */
   async function seedProject(name: string) {
     const projectId = (await req(port, 'POST', '/api/projects', { name })).json.id as string;
     const convId = (await req(port, 'POST', '/api/conversations', { title: `${name} chat`, projectId })).json.id as string;
@@ -96,6 +99,10 @@ describe('deleting messages, conversations and projects', () => {
     createApprovalGrant(db, { toolLabel: 'cmd:ls', scope: 'chat', subjectType: null, subjectId: null, conversationId: convId, projectId: null, expiresAt: null });
     addPin(db, projectId, '/workspace/a.ts');
     const run = createRun(db, { projectId, conversationId: convId, model: 'm', goal: 'g', label: 'worker', depth: 1 });
+    const task = (db.prepare(`INSERT INTO schedules (name, prompt, cron, project_id) VALUES ('Nightly tests', 'p', '0 3 * * *', ?) RETURNING id`).get(projectId) as { id: string }).id;
+    const wakeup = (db.prepare(`INSERT INTO schedules (name, prompt, cron, conversation_id) VALUES ('Check the build', 'p', '0 9 * * *', ?) RETURNING id`).get(convId) as { id: string }).id;
+    const report = createGazetaItem(db, { type: 'report', title: 'Nightly report', projectId });
+    const question = createGazetaItem(db, { type: 'question', title: 'Which branch?', conversationId: convId });
     sandbox.sandboxes.set(projectId, {
       containers: 1,
       running: true,
@@ -104,14 +111,17 @@ describe('deleting messages, conversations and projects', () => {
     });
     // A chat moved in from outside keeps its own sandbox; it goes with the project too.
     sandbox.sandboxes.set(convId, { containers: 1, running: false, workspace: { entries: [{ name: 'notes.md', type: 'file', bytes: 10 }], totalBytes: 10 }, processes: [] });
-    return { projectId, convId, file, runId: run.id };
+    return { projectId, convId, file, runId: run.id, task, wakeup, report, question };
   }
 
-  it('the deletion preview lists exactly what will be removed', async () => {
-    const { projectId, convId, runId } = await seedProject('Preview');
+  it('the deletion preview lists exactly what will be removed, scheduled tasks and Gazeta items included', async () => {
+    const { projectId, convId, runId, task, wakeup, report, question } = await seedProject('Preview');
     const r = await req(port, 'GET', `/api/projects/${projectId}/deletion-preview`);
     assert.equal(r.status, 200);
-    assert.deepEqual(r.json, {
+    const byId = (x: { id: string }, y: { id: string }) => x.id.localeCompare(y.id);
+    const { gazetaItems, ...rest } = r.json;
+    assert.deepEqual([...gazetaItems].sort(byId), [{ id: report, title: 'Nightly report', status: 'pending' }, { id: question, title: 'Which branch?', status: 'pending' }].sort(byId));
+    assert.deepEqual(rest, {
       project: { id: projectId, name: 'Preview' },
       conversations: [{ id: convId, title: 'Preview chat', messageCount: 1 }],
       agentTranscripts: 0,
@@ -121,13 +131,14 @@ describe('deleting messages, conversations and projects', () => {
         { owner: convId, conversationTitle: 'Preview chat', ...sandbox.sandboxes.get(convId) },
       ],
       snapshots: 1,
+      schedules: [{ id: wakeup, name: 'Check the build' }, { id: task, name: 'Nightly tests' }],
     });
     assert.deepEqual(sandbox.destroyed, [], 'a preview removes nothing');
     assert.equal((await req(port, 'GET', '/api/projects/nope/deletion-preview')).status, 404);
   });
 
-  it('deleting a project removes its sandboxes, chats, runs, grants, pins and snapshot files; there is no keep option', async () => {
-    const { projectId, convId, file, runId } = await seedProject('Gone');
+  it('deleting a project removes its sandboxes, chats, runs, grants, pins, scheduled tasks, Gazeta items and snapshot files; there is no keep option', async () => {
+    const { projectId, convId, file, runId, task, wakeup, report, question } = await seedProject('Gone');
     sandbox.destroyed.length = 0;
     assert.equal((await req(port, 'DELETE', `/api/projects/${projectId}?conversations=keep`)).status, 200);
     assert.deepEqual(sandbox.destroyed, [projectId, convId]);
@@ -137,6 +148,8 @@ describe('deleting messages, conversations and projects', () => {
     assert.deepEqual(listApprovalGrants(db).filter(g => g.projectId === projectId || g.conversationId === convId), []);
     assert.deepEqual(listPins(db, projectId), []);
     assert.equal(fs.existsSync(file), false, 'the snapshot file is gone');
+    for (const id of [task, wakeup]) assert.equal(db.prepare('SELECT 1 FROM schedules WHERE id = ?').get(id), undefined, 'scheduled task gone');
+    for (const id of [report, question]) assert.equal(db.prepare('SELECT 1 FROM gazeta_items WHERE id = ?').get(id), undefined, 'Gazeta item gone');
   });
 
   it('keeps the project intact when its sandbox cannot be removed', async () => {

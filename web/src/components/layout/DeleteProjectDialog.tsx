@@ -20,9 +20,9 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 const listClass = 'max-h-48 divide-y divide-border overflow-y-auto rounded-button border border-border text-xs';
 
 /**
- * Confirmation for deleting a project. It shows the server's dry run — the chats, the work that is stopped, every
- * sandbox with its workspace files (with sizes) and running processes — and deletes only after that loaded, so the
- * user confirms exactly what goes. Nothing is kept.
+ * Confirmation for deleting a project. It shows the server's dry run — the chats, the work that is stopped, scheduled
+ * tasks, Gazeta items, every sandbox with its workspace files (with sizes) and running processes — and deletes only
+ * after that loaded, so the user confirms exactly what goes. Nothing is kept.
  */
 export function DeleteProjectDialog({ projectId, onCancel, onDeleted }: { projectId: string; onCancel: () => void; onDeleted: () => void }) {
   const [preview, setPreview] = useState<ProjectDeletionPreview | null>(null);
@@ -102,6 +102,28 @@ export function DeleteProjectDialog({ projectId, onCancel, onDeleted }: { projec
                     <span className="min-w-0 flex-1 truncate text-fg">{r.label}</span>
                   </li>
                 ))}
+              </ul>
+            </Section>
+          )}
+
+          {preview.schedules.length > 0 && (
+            <Section title={`Scheduled tasks (${preview.schedules.length})`}>
+              <ul className={listClass}>
+                {preview.schedules.map(s => <li key={s.id} className="truncate px-3 py-1.5 text-fg">{s.name}</li>)}
+              </ul>
+            </Section>
+          )}
+
+          {preview.gazetaItems.length > 0 && (
+            <Section title={`Gazeta items (${preview.gazetaItems.length})`}>
+              <ul className={listClass}>
+                {preview.gazetaItems.slice(0, LIST_LIMIT).map(g => (
+                  <li key={g.id} className="flex gap-2 px-3 py-1.5">
+                    <span className="min-w-0 flex-1 truncate text-fg">{g.title}</span>
+                    <span className="shrink-0 text-fg-tertiary">{g.status}</span>
+                  </li>
+                ))}
+                {preview.gazetaItems.length > LIST_LIMIT && <li className="px-3 py-1.5 text-fg-tertiary">and {preview.gazetaItems.length - LIST_LIMIT} more</li>}
               </ul>
             </Section>
           )}

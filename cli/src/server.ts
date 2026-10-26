@@ -934,6 +934,11 @@ ${formatHumanResponse(response)}` };
       })),
       sandboxes,
       snapshots: (db.prepare(`SELECT COUNT(*) as n FROM artifacts WHERE conversation_id IN (SELECT id FROM conversations WHERE project_id = ?)`).get(project.id) as { n: number }).n,
+      // Scheduled tasks of the project and wake-ups set in its chats.
+      schedules: db.prepare(`SELECT id, name FROM schedules WHERE project_id = ? OR conversation_id IN (SELECT id FROM conversations WHERE project_id = ?) ORDER BY name`)
+        .all(project.id, project.id),
+      gazetaItems: db.prepare(`SELECT id, title, status FROM gazeta_items WHERE project_id = ? OR conversation_id IN (SELECT id FROM conversations WHERE project_id = ?) ORDER BY created_at DESC`)
+        .all(project.id, project.id),
     });
   });
 
@@ -945,7 +950,7 @@ ${formatHumanResponse(response)}` };
   /**
    * Deletes a project and everything that belongs to it, so nothing is left that the UI no longer shows: running turns
    * and agents are stopped, its sandboxes (containers, the processes in them, the workspace volume) are removed, then
-   * its records (chats, transcripts, runs, grants, pins, report snapshots and their files). The sandbox goes first: if
+   * its records (chats, transcripts, runs, grants, pins, scheduled tasks, Gazeta items, report snapshots and their files). The sandbox goes first: if
    * the supervisor cannot remove it, the project stays as it was and the deletion can be retried.
    */
   app.delete('/api/projects/:id', async (req, res) => {

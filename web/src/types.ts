@@ -251,6 +251,10 @@ export interface ProjectDeletionPreview {
   }>;
   /** Report snapshots taken in the project's chats. */
   snapshots: number;
+  /** Scheduled tasks of the project, and wake-ups set in its chats. */
+  schedules: Array<{ id: string; name: string }>;
+  /** Gazeta items (questions, approvals, reports) of the project. */
+  gazetaItems: Array<{ id: string; title: string; status: string }>;
 }
 
 export interface ProjectListItem {
