@@ -2,10 +2,11 @@
  * Command policy engine: shell commands are approved per command, not per tool (an "always" on run_bash would let
  * every command through).
  *
- * A command is split into its sub-commands (`a && b | c; $(d)`), each one is classified
- * allow / ask / deny against the project policy and the persisted prefix grants, and the whole
- * command is only as permissive as its least permissive part. An allow on `ls` therefore never
- * lets `ls && rm -rf ~` through.
+ * A command is split into its sub-commands (`a && b | c; $(d)`, `bash -c "…"`, function bodies, `find -exec`), each one
+ * is classified allow / ask / deny against the project policy and the persisted prefix grants, and the whole command is
+ * only as permissive as its least permissive part. An allow on `ls` therefore never lets `ls && rm -rf ~` through.
+ * Rules are matched against the words the shell will actually run: quotes, escapes, `$IFS`, binary paths, variable
+ * assignments and wrappers such as `sudo -u x`, `env -S`, `nice -n 5` or `timeout 5` are taken off first.
  *
  * This is a gate on what runs inside the sandbox — the sandbox itself is still the boundary.
  */
@@ -207,34 +208,63 @@ export function notReadOnly(sub: string, prefixed = false): string | null {
  * `sort "-o" f` and `sort -\o f` are seen as `sort -o f`.
  */
 export function shellWords(sub: string): string[] {
-  const out: string[] = [];
+  return wordsOf(sub).map(w => w.text);
+}
+
+interface Word { text: string; start: number }
+
+const ANSI_SIMPLE: Record<string, string> = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', v: '\v' };
+
+/** One escape inside `$'…'` starting after the backslash: its text and how many characters it used (`\x72` is `r`). */
+function ansiEscape(src: string, at: number): [string, number] {
+  const c = src[at]!;
+  if (c in ANSI_SIMPLE) return [ANSI_SIMPLE[c]!, 1];
+  const code = (re: RegExp, base: number): [string, number] | null => {
+    const m = re.exec(src.slice(at));
+    return m ? [String.fromCodePoint(parseInt(m[1]!, base)), m[0].length] : null;
+  };
+  return code(/^x([0-9A-Fa-f]{1,2})/, 16) ?? code(/^u([0-9A-Fa-f]{1,4})/, 16) ?? code(/^U([0-9A-Fa-f]{1,8})/, 16) ?? code(/^([0-7]{1,3})/, 8) ?? [c, 1];
+}
+
+function wordsOf(src: string): Word[] {
+  const out: Word[] = [];
   let cur = '';
-  let inWord = false;
-  for (let i = 0; i < sub.length; i++) {
-    const c = sub[i]!;
+  let start = -1;
+  const begin = (i: number) => { if (start === -1) start = i; };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]!;
     if (c === "'") {
-      const end = sub.indexOf("'", i + 1);
-      const stop = end === -1 ? sub.length : end;
-      cur += sub.slice(i + 1, stop); i = stop; inWord = true; continue;
+      begin(i);
+      const end = src.indexOf("'", i + 1);
+      const stop = end === -1 ? src.length : end;
+      cur += src.slice(i + 1, stop); i = stop; continue;
     }
-    if (c === '$' && sub[i + 1] === "'") {
+    if (c === '$' && src[i + 1] === "'") {
+      begin(i);
       let j = i + 2;
-      while (j < sub.length && sub[j] !== "'") { cur += sub[j] === '\\' && j + 1 < sub.length ? sub[++j] : sub[j]; j++; }
-      i = j; inWord = true; continue;
+      while (j < src.length && src[j] !== "'") {
+        if (src[j] === '\\' && j + 1 < src.length) {
+          const [text, used] = ansiEscape(src, j + 1);
+          cur += text; j += 1 + used; continue;
+        }
+        cur += src[j]; j++;
+      }
+      i = j; continue;
     }
     if (c === '"') {
+      begin(i);
       let j = i + 1;
-      while (j < sub.length && sub[j] !== '"') {
-        if (sub[j] === '\\' && /["\\$`]/.test(sub[j + 1] ?? '')) j++;
-        cur += sub[j]; j++;
+      while (j < src.length && src[j] !== '"') {
+        if (src[j] === '\\' && /["\\$`]/.test(src[j + 1] ?? '')) j++;
+        cur += src[j]; j++;
       }
-      i = j; inWord = true; continue;
+      i = j; continue;
     }
-    if (c === '\\' && i + 1 < sub.length) { cur += sub[++i]; inWord = true; continue; }
-    if (/\s/.test(c)) { if (inWord) out.push(cur); cur = ''; inWord = false; continue; }
-    cur += c; inWord = true;
+    if (c === '\\' && i + 1 < src.length) { begin(i); cur += src[++i]; continue; }
+    if (/\s/.test(c)) { if (start !== -1) out.push({ text: cur, start }); cur = ''; start = -1; continue; }
+    begin(i); cur += c;
   }
-  if (inWord) out.push(cur);
+  if (start !== -1) out.push({ text: cur, start });
   return out;
 }
 
@@ -267,8 +297,11 @@ const DOCKER_REMOVE = /^(rm|rmi|kill|prune)$/;
  * on the same prefix (given for a harmless use, like `git checkout main`) does not cover it either.
  */
 export function isDestructive(sub: string): boolean {
-  const words = shellWords(sub);
-  const cmd = (words[0] ?? '').replace(/^.*\//, '');
+  return destructiveWords(unwrap(sub).words);
+}
+
+function destructiveWords(words: string[]): boolean {
+  const cmd = words[0] ?? '';
   const args = words.slice(1);
   switch (cmd) {
     case 'rm': case 'rmdir': case 'unlink': case 'shred': case 'truncate': case 'dd':
@@ -295,7 +328,7 @@ export function isDestructive(sub: string): boolean {
 
 /** Always blocked, regardless of mode or grants. */
 const DENY_PATTERNS: RegExp[] = [
-  /^rm\s+(-[\w-]+\s+)*(\/|\/\*|~|~\/|\$HOME)(\s|$)/,
+  /^rm\s+(-[\w-]+\s+)*(\/+\.?\*?|~\/?|\$HOME\/?|\$\{HOME\}\/?)(\s|$)/,
   /^(mkfs|mkfs\.\w+|fdisk|parted|wipefs)\b/,
   /^dd\b.*\bof=\/dev\//,
   /^(shutdown|reboot|halt|poweroff)\b/,
@@ -330,22 +363,166 @@ export function splitShellCommand(command: string): string[] {
   return splitDetailed(command).map(s => s.command);
 }
 
-/** A sub-command, and whether variable assignments or a wrapper (`sudo`, `env`, `nohup`…) were stripped from its front. */
-interface SplitPart { command: string; prefixed: boolean }
+/**
+ * A sub-command: `command` as shown (from the real command on, original quoting), `words` as the shell will run it
+ * (quotes removed, wrappers and assignments stripped, binary path dropped), and whether assignments or a wrapper were
+ * stripped (`prefixed`).
+ */
+interface SplitPart { command: string; words: string[]; prefixed: boolean }
 
 function splitDetailed(command: string, depth = 0): SplitPart[] {
   const out: string[] = [];
   splitInto(command, out, 0);
-  return out.map(normalize).filter(p => p.command !== '').flatMap((part): SplitPart[] => {
-    const sub = part.command;
-    // `bash -c "…"`, `sh -c '…'`, `eval "…"`: the quoted string is itself a command line.
-    const m = /^(?:(?:ba|z|da|k)?sh(?:\s+-\w+)*\s+-\w*c|eval)\s+(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|(.+))/.exec(sub);
-    if (!m) return [part];
-    if (depth > 4) return [{ command: `${TOO_DEEP} ${sub}`, prefixed: part.prefixed }];
-    // Inside double quotes the shell removes backslashes before " \ $ ` — do the same so a nested `bash -c \"…\"` is read as the command it is.
-    const inner = m[1] !== undefined ? m[1].replace(/\\(["\\$`])/g, '$1') : (m[2] ?? m[3] ?? '');
-    return [{ command: sub.split(' ')[0]!, prefixed: part.prefixed }, ...splitDetailed(inner, depth + 1).map(p => ({ ...p, prefixed: p.prefixed || part.prefixed }))];
+  return out.flatMap((raw): SplitPart[] => {
+    const part = unwrap(raw);
+    if (part.words.length === 0) return [];
+    // `bash -c "…"`, `sh -c '…'`, `eval "…"`: the string is itself a command line.
+    const script = shellScript(part.words);
+    if (script === null) return [part, ...findExecs(part)];
+    if (depth > 4) return [{ command: `${TOO_DEEP} ${part.command}`, words: [TOO_DEEP], prefixed: part.prefixed }];
+    return [
+      { command: part.words[0]!, words: [part.words[0]!], prefixed: part.prefixed },
+      ...splitDetailed(script, depth + 1).map(p => ({ ...p, prefixed: p.prefixed || part.prefixed })),
+    ];
   });
+}
+
+/** `find … -exec cmd {} ;` runs cmd for every match: each such command is a sub-command of its own. */
+function findExecs(part: SplitPart): SplitPart[] {
+  if (part.words[0] !== 'find') return [];
+  const out: SplitPart[] = [];
+  for (let i = 1; i < part.words.length; i++) {
+    if (!/^-(exec|execdir|ok|okdir)$/.test(part.words[i]!)) continue;
+    const end = part.words.findIndex((w, k) => k > i && (w === ';' || w === '+'));
+    const words = part.words.slice(i + 1, end === -1 ? undefined : end);
+    if (words.length) out.push({ ...unwrap(words.map(w => (/[\s'"\\$`;&|<>()]/.test(w) ? `'${w.replace(/'/g, `'\\''`)}'` : w)).join(' ')), prefixed: part.prefixed });
+    i = end === -1 ? part.words.length : end;
+  }
+  return out;
+}
+
+/**
+ * Commands that run the rest of their arguments as a command. `values`: short options taking a value; `long`: long ones;
+ * `operands`: plain words before the command (`timeout 5 cmd`); `split`: the option whose value is itself a command line
+ * (`env -S 'cmd args'`).
+ */
+interface Wrapper { values?: string; long?: string[]; operands?: number; split?: { short: string; long: string } }
+
+const WRAPPERS: Record<string, Wrapper> = {
+  sudo: { values: 'ughpCDRTUrt', long: ['user', 'group', 'host', 'prompt', 'close-from', 'chdir', 'chroot', 'command-timeout', 'other-user', 'role', 'type'] },
+  doas: { values: 'uC' },
+  env: { values: 'uC', long: ['unset', 'chdir'], split: { short: 'S', long: 'split-string' } },
+  nice: { values: 'n', long: ['adjustment'] },
+  ionice: { values: 'cnpPu', long: ['class', 'classdata', 'pid', 'pgid', 'uid'] },
+  timeout: { values: 'sk', long: ['signal', 'kill-after'], operands: 1 },
+  stdbuf: { values: 'ioe', long: ['input', 'output', 'error'] },
+  time: { values: 'fo', long: ['format', 'output'] },
+  xargs: { values: 'IadEeLlnPs', long: ['arg-file', 'delimiter', 'eof', 'replace', 'max-lines', 'max-args', 'max-procs', 'max-chars', 'process-slot-var'] },
+  watch: { values: 'nq', long: ['interval', 'equexit'] },
+  exec: { values: 'a' },
+  nohup: {},
+  setsid: {},
+  command: {},
+  builtin: {},
+};
+
+/** Words that only start a compound command; the command follows them. */
+const LEADING_KEYWORDS = new Set(['if', 'then', 'do', 'else', 'elif', 'while', 'until', '!', 'coproc', '{']);
+const CLOSING_KEYWORDS = new Set(['fi', 'done', 'esac', 'then', 'do', 'else']);
+/** `$IFS` splits words like a space does (`rm${IFS}-rf${IFS}/`). */
+const IFS_REF = /\$\{IFS\}|\$IFS(?![A-Za-z0-9_])/g;
+
+/** Strips assignments, wrappers (with their options) and leading keywords off one sub-command. */
+function unwrap(raw: string): SplitPart {
+  const src = raw.replace(IFS_REF, ' ');
+  const w = wordsOf(src);
+  const rest = (i: number) => (i < w.length ? ` ${src.slice(w[i]!.start)}` : '');
+  let i = 0;
+  let prefixed = false;
+  while (i < w.length) {
+    const text = w[i]!.text;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(text)) { prefixed = true; i++; continue; }
+    if (LEADING_KEYWORDS.has(text)) { i++; continue; }
+    // A function definition runs its body: `f() { body; }`, `function f { body; }`.
+    if (/^[A-Za-z_][\w-]*\(\)\{?$/.test(text) || text === '()') { i++; continue; }
+    if (text === 'function' && i + 1 < w.length) { i += 2; continue; }
+    // `case x in pattern) cmd;;` runs cmd.
+    if (text === 'case') { const at = w.findIndex((x, k) => k > i && x.text === 'in'); i = at === -1 ? w.length : at + 1; continue; }
+    if (/^\(?[^()]*\)$/.test(text) && i + 1 < w.length) { i++; continue; }
+    const name = text.replace(/^.*\//, '');
+    const spec = WRAPPERS[name];
+    // `command -v x` looks a name up; it does not run it.
+    if (!spec || (name === 'command' && /^-[A-Za-z]*[vV]/.test(w[i + 1]?.text ?? ''))) break;
+    const at = i;
+    const prefixedBefore = prefixed;
+    prefixed = true;
+    i++;
+    while (i < w.length) {
+      const opt = w[i]!.text;
+      if (opt === '--') { i++; break; }
+      if (!opt.startsWith('-') || opt === '-') break;
+      i++;
+      if (opt.startsWith('--')) {
+        const eq = opt.indexOf('=');
+        const optName = opt.slice(2, eq === -1 ? undefined : eq);
+        if (optName === spec.split?.long) {
+          const script = eq === -1 ? (w[i++]?.text ?? '') : opt.slice(eq + 1);
+          return withPrefix(unwrap(script + rest(i)));
+        }
+        if (eq === -1 && spec.long?.includes(optName)) i++;
+        continue;
+      }
+      const letters = opt.slice(1);
+      for (let k = 0; k < letters.length; k++) {
+        const c = letters[k]!;
+        if (c === spec.split?.short) {
+          const script = letters.slice(k + 1) || (w[i++]?.text ?? '');
+          return withPrefix(unwrap(script + rest(i)));
+        }
+        // A value option ends the cluster: its value is the rest of the word, or the next word.
+        if (spec.values?.includes(c)) { if (k === letters.length - 1) i++; break; }
+      }
+    }
+    i += Math.min(spec.operands ?? 0, w.length - i);
+    // Nothing left to run: the wrapper is the command itself (`env` prints the environment).
+    if (i >= w.length) { i = at; prefixed = prefixedBefore; break; }
+  }
+  const left = w.slice(i);
+  if (left.length === 0 || (left.length === 1 && CLOSING_KEYWORDS.has(left[0]!.text))) return { command: '', words: [], prefixed };
+  const words = left.map(x => x.text);
+  words[0] = words[0]!.replace(/^.*\//, ''); // /usr/bin/git → git
+  return { command: src.slice(left[0]!.start).replace(/\s+/g, ' ').trim(), words, prefixed };
+
+  function withPrefix(p: SplitPart): SplitPart {
+    return { ...p, prefixed: true };
+  }
+}
+
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash']);
+/** bash options that take the next word as their value. */
+const SHELL_VALUE_OPTIONS = /^(?:[-+][A-Za-z]*[oO]|--rcfile|--init-file)$/;
+
+/** The command line a shell, `eval`, `trap` or `su -c` runs (`bash -c "…"`), or null when this is not such a call. */
+function shellScript(words: string[]): string | null {
+  if (words[0] === 'eval') return words.slice(1).join(' ');
+  // `trap 'cmd' EXIT` runs cmd later, in this shell.
+  if (words[0] === 'trap') return words[1] !== undefined && !words[1].startsWith('-') ? words[1] : null;
+  if (words[0] === 'su') {
+    const at = words.findIndex(w => /^-[A-Za-z]*c$/.test(w) || w === '--command');
+    if (at !== -1) return words[at + 1] ?? '';
+    const eq = words.find(w => w.startsWith('--command='));
+    return eq ? eq.slice('--command='.length) : null;
+  }
+  if (!SHELLS.has(words[0]!)) return null;
+  let runsString = false;
+  let i = 1;
+  while (i < words.length && /^[-+]./.test(words[i]!)) {
+    const opt = words[i++]!;
+    if (opt === '--') break;
+    if (/^-[A-Za-z]*c/.test(opt)) runsString = true;
+    if (SHELL_VALUE_OPTIONS.test(opt)) i++;
+  }
+  return runsString ? (words[i] ?? '') : null;
 }
 
 function splitInto(src: string, out: string[], depth: number): void {
@@ -441,19 +618,6 @@ function matchParen(src: string, open: number): number {
   return src.length;
 }
 
-/** Trim, collapse whitespace, drop leading `VAR=value` assignments and wrappers like `sudo`/`env`/`time`. */
-function normalize(sub: string): SplitPart {
-  let s = sub.replace(/\s+/g, ' ').trim().replace(/^(then|do|else|elif|if|while|until|!)\s+/, '');
-  const start = s;
-  for (;;) {
-    const before = s;
-    s = s.replace(/^[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|\S*)\s*/, '');
-    s = s.replace(/^(sudo|env|time|nohup|nice|command|exec|builtin)(\s+-\S+)*\s+/, '');
-    if (s === before) break;
-  }
-  return { command: s.replace(/^(then|do|else|elif|if|while|until|!)\s+/, '').replace(/^(fi|done|esac|then|do|else)$/, ''), prefixed: s !== start };
-}
-
 // ─── Classification ─────────────────────────────────────────────────────────
 
 /** The prefix a grant for this sub-command would cover: `git commit`, `npm install`, `python3 script.py`→`python3`. */
@@ -524,9 +688,9 @@ export function evaluateCommand(command: string, policy: CommandPolicy, granted:
   const parts = splitDetailed(command);
   if (parts.length === 0) return { decision: 'ask', subcommands: [] };
 
-  const subcommands = parts.map(({ command: sub, prefixed }): SubcommandVerdict => {
-    const verdict = classify(sub, prefixed);
-    return isDestructive(sub) && verdict.decision !== 'deny' ? { ...verdict, destructive: true } : verdict;
+  const subcommands = parts.map((part): SubcommandVerdict => {
+    const verdict = classify(part);
+    return destructiveWords(part.words) && verdict.decision !== 'deny' ? { ...verdict, destructive: true } : verdict;
   });
 
   const decision: CommandDecision = subcommands.some(s => s.decision === 'deny')
@@ -534,24 +698,24 @@ export function evaluateCommand(command: string, policy: CommandPolicy, granted:
     : subcommands.every(s => s.decision === 'allow') ? 'allow' : 'ask';
   return { decision, subcommands };
 
-  function classify(sub: string, prefixed: boolean): SubcommandVerdict {
-    const prefix = grantPrefix(sub);
-    // Also look at the command as the shell will run it: quotes and backslashes removed, binary path stripped (`'rm' -rf "/"`, `/bin/rm -rf /`).
-    const plain = sub.replace(/["'\\]/g, '').replace(/^\S*\//, '');
-    if (DENY_PATTERNS.some(re => re.test(sub) || re.test(plain)) || policy.deny.some(d => matchesPrefix(sub, d) || matchesPrefix(plain, d))) {
+  function classify({ command: sub, words, prefixed }: SplitPart): SubcommandVerdict {
+    // Rules are matched against the command as the shell will run it (`'rm' -rf "/"`, `/bin/rm`, `sudo -u x rm`, `"git" push`).
+    const run = words.join(' ');
+    const prefix = grantPrefix(run);
+    if (DENY_PATTERNS.some(re => re.test(sub) || re.test(run)) || policy.deny.some(d => matchesPrefix(sub, d) || matchesPrefix(run, d))) {
       return { command: sub, prefix, decision: 'deny', reason: 'blocked by policy' };
     }
-    if (sub.startsWith(TOO_DEEP)) {
+    if (words[0] === TOO_DEEP) {
       return { command: sub, prefix, decision: 'ask', reason: 'nested too deeply to analyse' };
     }
-    if (sub.includes('__SUBST__') && prefix === '__SUBST__') {
-      return { command: sub, prefix, decision: 'ask', reason: 'command name comes from a substitution' };
+    if (words[0] === '__SUBST__' || words[0]!.includes('$')) {
+      return { command: sub, prefix, decision: 'ask', reason: 'command name comes from a substitution or a variable' };
     }
     // A boundary crossing always asks — even with a grant, in every mode.
-    const boundary = crossesBoundary(sub, policy);
+    const boundary = crossesBoundary(run, policy);
     if (boundary) return { command: sub, prefix, decision: 'ask', reason: boundary };
-    if (granted(prefix, { chatOnly: isDestructive(sub) })) return { command: sub, prefix, decision: 'allow', reason: 'granted' };
-    if (policy.allow.some(a => matchesPrefix(sub, a))) return { command: sub, prefix, decision: 'allow', reason: 'project allowlist' };
+    if (granted(prefix, { chatOnly: destructiveWords(words) })) return { command: sub, prefix, decision: 'allow', reason: 'granted' };
+    if (policy.allow.some(a => matchesPrefix(run, a))) return { command: sub, prefix, decision: 'allow', reason: 'project allowlist' };
     if (policy.mode === 'auto') return { command: sub, prefix, decision: 'allow', reason: 'auto mode (inside sandbox)' };
     if (policy.mode === 'strict') return { command: sub, prefix, decision: 'ask', reason: 'strict mode' };
     const why = notReadOnly(sub, prefixed);
