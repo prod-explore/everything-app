@@ -9,6 +9,8 @@ import type {
   Conversation,
   ConversationStateInfo,
   ConversationSummary,
+  DeletionPreview,
+  DeletionTarget,
   ReasoningEffort,
   GazetaDelivery,
   GazetaItem,
@@ -19,7 +21,6 @@ import type {
   ModelLocality,
   ModelOption,
   PendingApproval,
-  ProjectDeletionPreview,
   ProjectListItem,
   ProjectRow,
   ProviderId,
@@ -131,6 +132,7 @@ export function updateConversation(
   return request(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
 }
 
+/** Deletes a chat with everything in it: agent transcripts, running work, its own sandbox, scheduled wake-ups, Gazeta items. */
 export function deleteConversation(id: string): Promise<{ ok: true }> {
   return request(`/api/conversations/${id}`, { method: 'DELETE' });
 }
@@ -525,9 +527,11 @@ export function updateProject(id: string, patch: { name?: string; description?: 
   return request(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
 }
 
-/** What deleting the project would remove (a dry run on the server). */
-export function getProjectDeletionPreview(id: string): Promise<ProjectDeletionPreview> {
-  return request(`/api/projects/${id}/deletion-preview`);
+const deletionPath = (t: DeletionTarget) => (t.kind === 'project' ? `/api/projects/${t.id}` : `/api/conversations/${t.id}`);
+
+/** What deleting a project or a chat would remove (a dry run on the server). */
+export function getDeletionPreview(target: DeletionTarget): Promise<DeletionPreview> {
+  return request(`${deletionPath(target)}/deletion-preview`);
 }
 
 /** Deletes a project with everything in it: chats, running work, sandbox containers, processes and workspace files. */

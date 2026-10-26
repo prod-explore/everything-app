@@ -30,7 +30,7 @@ export { HttpError, WORKSPACE };
  * One sandbox per *owner* — a project, or a standalone chat when it has none.
  *
  * - The workspace is a named Docker volume mounted at /workspace. It lives exactly as long as the project:
- *   only an explicit destroy (project deletion → DELETE /sandboxes/:owner/volume) removes it.
+ *   only an explicit destroy (the project or chat was deleted → DELETE /sandboxes/:owner/volume) removes it.
  * - Idle sandboxes are STOPPED, not removed. A container that has been stopped for longer than
  *   `containerTtlMs` (default 7 days) is garbage-collected; the volume stays and the next claim builds a
  *   fresh container around it. (The root filesystem is read-only, so nothing of value lives in the container.)
@@ -425,7 +425,7 @@ export class SandboxManager {
   }
 
   /**
-   * Project deletion: remove the container(s) AND the workspace volume. The only code path that deletes
+   * The project or chat was deleted: remove the container(s) AND the workspace volume. The only code path that deletes
    * a volume.
    */
   async destroy(ownerId: string): Promise<{ containersRemoved: number; volumeRemoved: boolean }> {

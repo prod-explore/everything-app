@@ -4,7 +4,7 @@ import { getProject, listApprovalGrants, revokeApprovalGrant, updateProject } fr
 import type { ApprovalGrantRow, CommandMode } from '../../types';
 import { Button } from '../shared/Button';
 import { Modal } from '../shared/Modal';
-import { DeleteProjectDialog } from './DeleteProjectDialog';
+import { DeletionDialog } from './DeletionDialog';
 
 const MODES: { id: CommandMode; label: string; hint: string }[] = [
   { id: 'strict', label: 'Strict', hint: 'Ask before every command (except prefixes you granted).' },
@@ -132,7 +132,7 @@ export function ProjectSettingsModal({ projectId, onClose, onChanged, onDeleted 
           </section>
         </div>
       )}
-      {confirmDelete && <DeleteProjectDialog projectId={projectId} onCancel={() => setConfirmDelete(false)} onDeleted={onDeleted} />}
+      {confirmDelete && <DeletionDialog target={{ kind: 'project', id: projectId }} onCancel={() => setConfirmDelete(false)} onDeleted={onDeleted} />}
     </Modal>
   );
 }

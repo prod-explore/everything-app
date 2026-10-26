@@ -522,16 +522,6 @@ export function updateConversation(
   return result.changes > 0;
 }
 
-export function deleteConversation(db: Database.Database, id: string): boolean {
-  const result = db.prepare(`DELETE FROM conversations WHERE id = ?`).run(id);
-  if (result.changes > 0) {
-    db.prepare(`DELETE FROM workspace_pins WHERE owner = ?`).run(id);
-    // A wake-up the agent set for this chat has nothing left to wake.
-    db.prepare(`DELETE FROM schedules WHERE conversation_id = ?`).run(id);
-  }
-  return result.changes > 0;
-}
-
 // ─── Messages ────────────────────────────────────────────────────────────────
 
 export interface MessageParam {
@@ -1073,28 +1063,77 @@ export function updateProject(
   return result.changes > 0;
 }
 
+// ─── Deleting a project or a chat ─────────────────────────────────────────────
+
+/** What is deleted: a project with everything in it, or one chat (with the transcripts of the agents it started). */
+export type DeletionTarget = { projectId: string } | { conversationId: string };
+
+export interface OwnedRecords {
+  /** The chats and agent transcripts that go, newest first. */
+  conversations: Array<{ id: string; title: string; kind: string; messageCount: number }>;
+  /** Scheduled tasks of the project, and wake-ups set in these chats. */
+  schedules: Array<{ id: string; name: string }>;
+  /** Gazeta items (questions, approvals, reports) of the project or these chats. */
+  gazetaItems: Array<{ id: string; title: string; status: string }>;
+  /** Report snapshots taken in these chats (rows plus files on disk). */
+  snapshots: Array<{ id: string; filename: string }>;
+}
+
+/** The ids of the conversations a deletion takes along, as a JSON array for `IN (SELECT value FROM json_each(?))`. */
+function ownedConversationIds(db: Database.Database, target: DeletionTarget): string[] {
+  const roots = 'projectId' in target
+    ? (db.prepare(`SELECT id FROM conversations WHERE project_id = ?`).all(target.projectId) as Array<{ id: string }>).map(r => r.id)
+    : [target.conversationId];
+  // Agent transcripts belong to the chat whose turn started the agents.
+  const transcripts = db.prepare(`SELECT transcript_conversation_id as id FROM runs WHERE transcript_conversation_id IS NOT NULL AND conversation_id IN (SELECT value FROM json_each(?))`)
+    .all(JSON.stringify(roots)) as Array<{ id: string }>;
+  return [...new Set([...roots, ...transcripts.map(t => t.id)])];
+}
+
+/** Everything a deletion of `target` would remove from the database. null when the project or chat does not exist. */
+export function ownedRecords(db: Database.Database, target: DeletionTarget): OwnedRecords | null {
+  const exists = 'projectId' in target
+    ? db.prepare(`SELECT 1 FROM projects WHERE id = ?`).get(target.projectId)
+    : db.prepare(`SELECT 1 FROM conversations WHERE id = ?`).get(target.conversationId);
+  if (!exists) return null;
+  const ids = JSON.stringify(ownedConversationIds(db, target));
+  const projectId = 'projectId' in target ? target.projectId : null;
+  return {
+    conversations: db.prepare(`
+      SELECT c.id, c.title, c.kind, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as messageCount
+      FROM conversations c WHERE c.id IN (SELECT value FROM json_each(?)) ORDER BY c.updated_at DESC
+    `).all(ids) as OwnedRecords['conversations'],
+    schedules: db.prepare(`SELECT id, name FROM schedules WHERE project_id = ? OR conversation_id IN (SELECT value FROM json_each(?)) ORDER BY name`)
+      .all(projectId, ids) as OwnedRecords['schedules'],
+    gazetaItems: db.prepare(`SELECT id, title, status FROM gazeta_items WHERE project_id = ? OR conversation_id IN (SELECT value FROM json_each(?)) ORDER BY created_at DESC`)
+      .all(projectId, ids) as OwnedRecords['gazetaItems'],
+    snapshots: db.prepare(`SELECT id, filename FROM artifacts WHERE conversation_id IN (SELECT value FROM json_each(?))`).all(ids) as OwnedRecords['snapshots'],
+  };
+}
+
 /**
- * Removes a project's records: its conversations (messages, agent transcripts and runs cascade), its scheduled tasks
- * and the wake-ups set in its chats, its Gazeta items, its grants, its pins and the report snapshots taken in its chats. Returns the snapshots so the caller can
- * delete their files, or null when there is no such project. The sandbox is the caller's job (see DELETE
- * /api/projects/:id): it lives in the supervisor, not in this database.
+ * Deletes a project or a chat with every record that belongs to it — conversations and agent transcripts (messages
+ * cascade), runs, grants, pins, scheduled tasks, Gazeta items and report snapshots — so nothing is left that the UI no
+ * longer shows. Returns what was removed (the caller deletes the snapshot files), or null when it did not exist. The
+ * sandbox lives in the supervisor; removing it is the caller's job, before this.
  */
-export function deleteProject(db: Database.Database, id: string): { snapshots: Array<{ id: string; filename: string }> } | null {
-  const run = db.transaction(() => {
-    if (!db.prepare(`SELECT 1 FROM projects WHERE id = ?`).get(id)) return null;
-    const inProject = `SELECT id FROM conversations WHERE project_id = ?`;
-    const snapshots = db.prepare(`SELECT id, filename FROM artifacts WHERE conversation_id IN (${inProject})`).all(id) as Array<{ id: string; filename: string }>;
-    db.prepare(`DELETE FROM artifacts WHERE conversation_id IN (${inProject})`).run(id);
-    db.prepare(`DELETE FROM schedules WHERE project_id = ? OR conversation_id IN (${inProject})`).run(id, id);
-    db.prepare(`DELETE FROM gazeta_items WHERE project_id = ? OR conversation_id IN (${inProject})`).run(id, id);
-    db.prepare(`DELETE FROM workspace_pins WHERE owner = ? OR owner IN (${inProject})`).run(id, id);
-    db.prepare(`DELETE FROM approval_grants WHERE project_id = ? OR conversation_id IN (${inProject})`).run(id, id);
-    db.prepare(`DELETE FROM conversations WHERE project_id = ?`).run(id);
-    db.prepare(`DELETE FROM runs WHERE project_id = ?`).run(id);
-    db.prepare(`DELETE FROM projects WHERE id = ?`).run(id);
-    return { snapshots };
-  });
-  return run();
+export function deleteOwned(db: Database.Database, target: DeletionTarget): OwnedRecords | null {
+  return db.transaction(() => {
+    const owned = ownedRecords(db, target);
+    if (!owned) return null;
+    const ids = JSON.stringify(owned.conversations.map(c => c.id));
+    const projectId = 'projectId' in target ? target.projectId : null;
+    const inIds = `(SELECT value FROM json_each(?))`;
+    db.prepare(`DELETE FROM artifacts WHERE conversation_id IN ${inIds}`).run(ids);
+    db.prepare(`DELETE FROM schedules WHERE project_id = ? OR conversation_id IN ${inIds}`).run(projectId, ids);
+    db.prepare(`DELETE FROM gazeta_items WHERE project_id = ? OR conversation_id IN ${inIds}`).run(projectId, ids);
+    db.prepare(`DELETE FROM workspace_pins WHERE owner = ? OR owner IN ${inIds}`).run(projectId, ids);
+    db.prepare(`DELETE FROM approval_grants WHERE project_id = ? OR conversation_id IN ${inIds}`).run(projectId, ids);
+    db.prepare(`DELETE FROM runs WHERE project_id = ? OR conversation_id IN ${inIds} OR transcript_conversation_id IN ${inIds}`).run(projectId, ids, ids);
+    db.prepare(`DELETE FROM conversations WHERE id IN ${inIds}`).run(ids);
+    if (projectId) db.prepare(`DELETE FROM projects WHERE id = ?`).run(projectId);
+    return owned;
+  })();
 }
 
 export function listProjectConversations(db: Database.Database, projectId: string): ConversationListItem[] {

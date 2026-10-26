@@ -5,6 +5,7 @@ import { ChatView } from './components/chat/ChatView';
 import { ConversationSearch } from './components/ConversationSearch';
 const GazetaView = lazy(() => import('./components/gazeta/GazetaView').then(m => ({ default: m.GazetaView })));
 import { NewProjectModal } from './components/layout/NewProjectModal';
+import { DeletionDialog } from './components/layout/DeletionDialog';
 import { ProjectSettingsModal } from './components/layout/ProjectSettingsModal';
 import { RightRail } from './components/layout/RightRail';
 import type { SidebarView } from './components/layout/Sidebar';
@@ -200,10 +201,8 @@ function MainApp() {
     }
   }
 
-  async function handleDelete(id: string) {
-    await deleteConversation(id);
-    void refreshProjects();
-  }
+  /** Deleting a chat goes through the same confirmation as a project: the dialog lists what goes, then removes it. */
+  const [deleteChatId, setDeleteChatId] = useState<string | null>(null);
 
   /** After a project is deleted: close its modal, drop the selection, and move off a chat that no longer exists. */
   async function handleProjectDeleted(id: string) {
@@ -381,7 +380,7 @@ function MainApp() {
       onRename={renameConversation}
       onMoveToProject={handleMoveToProject}
       onNewProjectFromChat={handleNewProjectFromChat}
-      onDelete={handleDelete}
+      onDelete={setDeleteChatId}
       onCreateProject={() => setNewProjectOpen(true)}
       sidebarView={sidebarView}
       onSidebarViewChange={setSidebarView}
@@ -500,6 +499,14 @@ function MainApp() {
           onClose={() => setEditProjectId(null)}
           onChanged={() => void refreshProjects()}
           onDeleted={() => void handleProjectDeleted(editProjectId)}
+        />
+      )}
+      {deleteChatId && (
+        <DeletionDialog
+          target={{ kind: 'chat', id: deleteChatId }}
+          remove={() => deleteConversation(deleteChatId)}
+          onCancel={() => setDeleteChatId(null)}
+          onDeleted={() => { setDeleteChatId(null); void refreshProjects(); }}
         />
       )}
       {newProjectOpen && <NewProjectModal onSubmit={submitNewProject} onClose={() => setNewProjectOpen(false)} />}

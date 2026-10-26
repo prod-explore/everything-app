@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb, runMigrations, createConversation, appendMessage, deleteConversation } from '../db.js';
+import { openDb, runMigrations, createConversation, appendMessage, deleteOwned } from '../db.js';
 import { searchMessages, toFtsQuery, exportMarkdown } from '../search.js';
 
 describe('FTS5 message search', () => {
@@ -17,7 +17,7 @@ describe('FTS5 message search', () => {
     assert.match(hits[0]!.snippet, /⟦nginx⟧/);
     assert.equal(searchMessages(db, 'uzyj proxy').length, 1, 'prefix + diacritics-insensitive');
     assert.equal(searchMessages(db, 'zzzunique').length, 0, 'tool inputs are not indexed');
-    deleteConversation(db, a);
+    deleteOwned(db, { conversationId: a });
     assert.equal(searchMessages(db, 'nginx').length, 0, 'deleted chats leave the index');
   });
 

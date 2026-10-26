@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { deleteProject, getProjectDeletionPreview } from '../../api';
+import { deleteConversation, deleteProject, getDeletionPreview } from '../../api';
 import { formatSize } from '../../lib/format';
-import type { ProjectDeletionPreview } from '../../types';
+import type { DeletionPreview, DeletionTarget } from '../../types';
 import { Button } from '../shared/Button';
 import { Modal } from '../shared/Modal';
 
@@ -19,31 +19,46 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 const listClass = 'max-h-48 divide-y divide-border overflow-y-auto rounded-button border border-border text-xs';
 
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+function sandboxTitle(preview: DeletionPreview, s: DeletionPreview['sandboxes'][number]): string {
+  if (s.conversationTitle) return `Sandbox of the chat “${s.conversationTitle}”`;
+  return preview.target.kind === 'project' ? 'Project sandbox' : 'Sandbox of this chat';
+}
+
 /**
- * Confirmation for deleting a project. It shows the server's dry run — the chats, the work that is stopped, scheduled
- * tasks, Gazeta items, every sandbox with its workspace files (with sizes) and running processes — and deletes only
- * after that loaded, so the user confirms exactly what goes. Nothing is kept.
+ * Confirmation for deleting a project or a chat. It shows the server's dry run — the chats, the work that is stopped,
+ * scheduled tasks, Gazeta items, every sandbox with its workspace files (with sizes) and running processes — and deletes
+ * only after that loaded, so the user confirms exactly what goes. Nothing is kept. `remove` replaces the plain API call
+ * (e.g. a hook that also refreshes a list).
  */
-export function DeleteProjectDialog({ projectId, onCancel, onDeleted }: { projectId: string; onCancel: () => void; onDeleted: () => void }) {
-  const [preview, setPreview] = useState<ProjectDeletionPreview | null>(null);
+export function DeletionDialog({ target, onCancel, onDeleted, remove }: {
+  target: DeletionTarget;
+  onCancel: () => void;
+  onDeleted: () => void;
+  remove?: () => Promise<unknown>;
+}) {
+  const [preview, setPreview] = useState<DeletionPreview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const { kind, id } = target;
+  const noun = kind === 'project' ? 'project' : 'chat';
 
   useEffect(() => {
     let cancelled = false;
-    getProjectDeletionPreview(projectId).then(
+    getDeletionPreview({ kind, id }).then(
       p => { if (!cancelled) setPreview(p); },
       (e: Error) => { if (!cancelled) setLoadError(e.message); },
     );
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [kind, id]);
 
   async function confirm() {
     setDeleting(true);
     setDeleteError(null);
     try {
-      await deleteProject(projectId);
+      await (remove ? remove() : kind === 'project' ? deleteProject(id) : deleteConversation(id));
       onDeleted();
     } catch (e) {
       setDeleteError((e as Error).message);
@@ -51,22 +66,23 @@ export function DeleteProjectDialog({ projectId, onCancel, onDeleted }: { projec
     }
   }
 
-  const files = preview?.sandboxes.flatMap(s => (s.workspace ? [s.workspace.totalBytes] : [])).reduce((a, b) => a + b, 0) ?? 0;
+  const files = preview?.sandboxes.reduce((n, s) => n + (s.workspace?.totalBytes ?? 0), 0) ?? 0;
   const processes = preview?.sandboxes.reduce((n, s) => n + s.processes.length, 0) ?? 0;
+  const title = preview ? `Delete “${preview.target.name || 'Untitled'}”?` : `Delete ${noun}?`;
 
   return (
-    <Modal title={preview ? `Delete “${preview.project.name}”?` : 'Delete project?'} onClose={deleting ? () => undefined : onCancel} wide>
-      {!preview && !loadError && <p className="text-sm text-fg-tertiary">Checking what the project contains…</p>}
+    <Modal title={title} onClose={deleting ? () => undefined : onCancel} wide>
+      {!preview && !loadError && <p className="text-sm text-fg-tertiary">Checking what the {noun} contains…</p>}
       {loadError && (
         <p className="text-sm text-danger" role="alert">
-          Couldn't find out what would be removed, so the project can't be deleted right now: {loadError}
+          Couldn't find out what would be removed, so the {noun} can't be deleted right now: {loadError}
         </p>
       )}
       {preview && (
         <div className="space-y-4">
           <p className="text-sm text-fg-secondary">
             This removes everything below for good. {files > 0 && <>Workspace files: <strong>{formatSize(files)}</strong>. </>}
-            {processes > 0 && <>{processes} running {processes === 1 ? 'process' : 'processes'} will be killed.</>}
+            {processes > 0 && <>{plural(processes, 'running process', 'running processes')} will be killed.</>}
           </p>
 
           <Section title={`Chats (${preview.conversations.length})`}>
@@ -77,7 +93,7 @@ export function DeleteProjectDialog({ projectId, onCancel, onDeleted }: { projec
                 {preview.conversations.slice(0, LIST_LIMIT).map(c => (
                   <li key={c.id} className="flex gap-2 px-3 py-1.5">
                     <span className="min-w-0 flex-1 truncate text-fg">{c.title || 'Untitled'}</span>
-                    <span className="shrink-0 text-fg-tertiary">{c.messageCount} {c.messageCount === 1 ? 'message' : 'messages'}</span>
+                    <span className="shrink-0 text-fg-tertiary">{plural(c.messageCount, 'message', 'messages')}</span>
                   </li>
                 ))}
                 {preview.conversations.length > LIST_LIMIT && <li className="px-3 py-1.5 text-fg-tertiary">and {preview.conversations.length - LIST_LIMIT} more</li>}
@@ -86,8 +102,8 @@ export function DeleteProjectDialog({ projectId, onCancel, onDeleted }: { projec
             {(preview.agentTranscripts > 0 || preview.snapshots > 0) && (
               <p className="mt-1 text-xs text-fg-tertiary">
                 {[
-                  preview.agentTranscripts > 0 && `${preview.agentTranscripts} agent ${preview.agentTranscripts === 1 ? 'transcript' : 'transcripts'}`,
-                  preview.snapshots > 0 && `${preview.snapshots} report ${preview.snapshots === 1 ? 'snapshot' : 'snapshots'}`,
+                  preview.agentTranscripts > 0 && plural(preview.agentTranscripts, 'agent transcript', 'agent transcripts'),
+                  preview.snapshots > 0 && plural(preview.snapshots, 'report snapshot', 'report snapshots'),
                 ].filter(Boolean).join(', ')} go with them.
               </p>
             )}
@@ -130,13 +146,13 @@ export function DeleteProjectDialog({ projectId, onCancel, onDeleted }: { projec
 
           {preview.sandboxes.length === 0 ? (
             <Section title="Sandbox">
-              <p className="text-xs text-fg-tertiary">The project has no sandbox yet.</p>
+              <p className="text-xs text-fg-tertiary">The {noun} has no sandbox.</p>
             </Section>
           ) : (
             preview.sandboxes.map(s => (
-              <Section key={s.owner} title={s.conversationTitle ? `Sandbox of the chat “${s.conversationTitle}”` : 'Project sandbox'}>
+              <Section key={s.owner} title={sandboxTitle(preview, s)}>
                 <p className="mb-1 text-xs text-fg-tertiary">
-                  {s.containers} {s.containers === 1 ? 'container' : 'containers'} ({s.running ? 'running' : 'stopped'})
+                  {plural(s.containers, 'container', 'containers')} ({s.running ? 'running' : 'stopped'})
                   {s.workspace ? `, workspace ${formatSize(s.workspace.totalBytes)}` : ', no workspace'}
                 </p>
                 {s.workspace && s.workspace.entries.length > 0 && (
@@ -173,7 +189,7 @@ export function DeleteProjectDialog({ projectId, onCancel, onDeleted }: { projec
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="ghost" onClick={onCancel} disabled={deleting}>Cancel</Button>
         <Button variant="danger" onClick={() => void confirm()} disabled={!preview || deleting}>
-          {deleting ? 'Deleting…' : 'Delete project'}
+          {deleting ? 'Deleting…' : `Delete ${noun}`}
         </Button>
       </div>
     </Modal>

@@ -1,7 +1,7 @@
 /**
- * The orchestrator's view of the sandbox-supervisor: byte-level reads of project workspaces (Explorer,
- * report pins), checkpoints, and removing a deleted project's sandbox. The host never executes anything on agent files — the supervisor
- * reads via the Docker archive API and runs git only inside the sandbox.
+ * The orchestrator's view of the sandbox-supervisor: byte-level reads of project workspaces (Explorer, report pins),
+ * checkpoints, and removing the sandbox of a deleted project or chat. The host never executes anything on agent files —
+ * the supervisor reads via the Docker archive API and runs git only inside the sandbox.
  */
 
 export interface WorkspaceEntry {
@@ -27,7 +27,7 @@ export interface SandboxInventory {
   processes: Array<{ pid: number; command: string }>;
 }
 
-/** The sandbox lifecycle calls project deletion needs; tests inject a fake. */
+/** The sandbox lifecycle calls deleting a project or chat needs; tests inject a fake. */
 export interface SandboxLifecycle {
   inventory(owner: string): Promise<SandboxInventory>;
   /** Removes the owner's containers (killing everything in them) and its workspace volume. */

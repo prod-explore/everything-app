@@ -9,6 +9,7 @@ import { ProviderRouter } from '../providers/router.js';
 import type { McpConnection } from '../mcp-client.js';
 import { MAX_WAKE_CHAIN, MAX_WAKEUPS_PER_CHAT, listSchedules, setNextRun } from '../schedules.js';
 import { createTaskTool, schedulingPrompt, wakeupTool } from '../schedule-tools.js';
+import type { SandboxLifecycle } from '../supervisor-client.js';
 
 const NOW = new Date('2026-10-23T12:00:00.000Z');
 const ctx = { toolUseId: 't1' };
@@ -22,6 +23,12 @@ function fresh() {
 const deps = (db: ReturnType<typeof fresh>, over: Partial<Parameters<typeof wakeupTool>[0]> = {}) => ({
   db, convId: 'chat-1', projectId: null, timezone: 'Europe/Warsaw', onChange: () => {}, now: () => NOW, ...over,
 });
+
+/** The supervisor holds no sandbox for anyone here. */
+const noSandboxes: SandboxLifecycle = {
+  inventory: async () => ({ containers: 0, running: false, workspace: null, processes: [] }),
+  destroy: async () => ({ containersRemoved: 0, volumeRemoved: false }),
+};
 
 describe('schedule_wakeup', () => {
   it('sets a one-time wake-up of this chat, in N minutes', async () => {
@@ -185,7 +192,7 @@ describe('the agent schedules from an ordinary chat', () => {
     const router = new ProviderRouter({ db, env: {}, llmOverride: client as never });
     router.catalog.create({ slug: 't', label: 'Test', baseUrl: 'https://t.example/v1', keyOptional: true });
     router.catalog.addManual('t', 'free-1', { tags: ['free'] });
-    built = await buildApp({ db, connections: [] as McpConnection[], router, authToken: TOKEN, config: { model: '@t/free-1', autoApproveTools: [] }, scheduler: { autostart: false } });
+    built = await buildApp({ db, connections: [] as McpConnection[], router, authToken: TOKEN, sandboxLifecycle: noSandboxes, config: { model: '@t/free-1', autoApproveTools: [] }, scheduler: { autostart: false } });
     server = built.app.listen(0);
     await new Promise<void>(r => server.once('listening', () => r()));
     port = (server.address() as AddressInfo).port;

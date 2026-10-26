@@ -233,14 +233,20 @@ export interface ProjectRow {
   updatedAt: string;
 }
 
-/** GET /api/projects/:id/deletion-preview — everything DELETE /api/projects/:id removes. */
-export interface ProjectDeletionPreview {
-  project: { id: string; name: string };
+/** What can be deleted together with everything in it. */
+export interface DeletionTarget {
+  kind: 'project' | 'chat';
+  id: string;
+}
+
+/** GET /api/projects/:id/deletion-preview and /api/conversations/:id/deletion-preview — everything the DELETE removes. */
+export interface DeletionPreview {
+  target: DeletionTarget & { name: string };
   conversations: Array<{ id: string; title: string; messageCount: number }>;
   agentTranscripts: number;
   /** Chat turns and agents that are stopped. */
   running: Array<{ runId: string; kind: 'chat' | 'agent'; label: string }>;
-  /** The project's sandbox, plus any a chat brought along (then `conversationTitle` names it). */
+  /** The target's sandbox, plus any a chat brought along (then `conversationTitle` names it). */
   sandboxes: Array<{
     owner: string;
     conversationTitle?: string;
@@ -249,11 +255,11 @@ export interface ProjectDeletionPreview {
     workspace: { entries: Array<{ name: string; type: 'file' | 'directory' | 'symlink' | 'other'; bytes: number }>; totalBytes: number } | null;
     processes: Array<{ pid: number; command: string }>;
   }>;
-  /** Report snapshots taken in the project's chats. */
+  /** Report snapshots taken in these chats. */
   snapshots: number;
-  /** Scheduled tasks of the project, and wake-ups set in its chats. */
+  /** Scheduled tasks of the project, and wake-ups set in these chats. */
   schedules: Array<{ id: string; name: string }>;
-  /** Gazeta items (questions, approvals, reports) of the project. */
+  /** Gazeta items (questions, approvals, reports) that belong to it. */
   gazetaItems: Array<{ id: string; title: string; status: string }>;
 }
 

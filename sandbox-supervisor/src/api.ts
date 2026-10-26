@@ -5,7 +5,7 @@ import { TerminalManager } from './terminals.js';
 
 /**
  * HTTP API of the sandbox-supervisor. sandbox-mcp uses it for commands, terminals and checkpoints; the orchestrator
- * for the workspace explorer, checkpoints, browser previews and project deletion (inventory, then removal).
+ * for the workspace explorer, checkpoints, browser previews and deleting a project or chat (inventory, then removal).
  */
 
 const MAX_TIMEOUT_MS = 30 * 60_000;
@@ -242,7 +242,7 @@ export function createSupervisorApp(sandboxes: SandboxManager, defaultTimeoutMs 
     }),
   );
 
-  // DELETE /sandboxes/:owner/volume — project deletion: removes the container AND the workspace volume.
+  // DELETE /sandboxes/:owner/volume — the owner (project or chat) was deleted: removes the containers AND the workspace volume.
   owners.delete(
     '/volume',
     wrap(async (req, res) => {

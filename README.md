@@ -34,8 +34,8 @@ All screenshots were taken against the scripted mock model in `tools/mock-llm` (
   [Providers, models and slots](docs/providers.md).
 - **A sandbox per project.** One container per project (or per standalone chat) with a persistent `/workspace`: a shell,
   git, terminals, a file explorer, a Source Control panel, and a checkpoint before every turn that you can roll back to.
-  Deleting a project lists exactly what goes (chats, running agents, scheduled tasks, Gazeta items, processes, workspace
-  files with sizes) and then removes all of it, sandbox included.
+  Deleting a project or a chat lists exactly what goes (chats, running agents, scheduled tasks, Gazeta items, processes,
+  workspace files with sizes) and then removes all of it, sandbox included.
 - **Approvals as cards.** Shell commands are judged one sub-command at a time; anything not allowed by a rule or an earlier
   grant shows a card: allow once, for this chat, for this project, or always, and the card says which commands a grant
   covers (every `git commit …`). Destructive commands (`rm`, `git reset`, `git push`, `kill`…) can only be allowed once

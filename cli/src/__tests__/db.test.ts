@@ -11,7 +11,7 @@ import {
   listConversations,
   getConversation,
   updateConversation,
-  deleteConversation,
+  deleteOwned,
   getMessages,
   getMessagesTimed,
   appendMessage,
@@ -123,11 +123,11 @@ describe('db.ts integration', () => {
     assert.equal(updateConversation(db, 'does-not-exist', { title: 'x' }), false);
   });
 
-  it('deleteConversation removes it and reports false for an unknown id', () => {
+  it('deleteOwned removes a chat and reports null for an unknown id', () => {
     const { id } = createConversation(db, { title: 'to delete' });
-    assert.equal(deleteConversation(db, id), true);
+    assert.ok(deleteOwned(db, { conversationId: id }));
     assert.equal(getConversation(db, id), null);
-    assert.equal(deleteConversation(db, id), false);
+    assert.equal(deleteOwned(db, { conversationId: id }), null);
   });
 
   it('settings: seeded defaults exist, and setSetting overwrites cleanly', () => {

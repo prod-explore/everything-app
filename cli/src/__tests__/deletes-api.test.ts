@@ -31,13 +31,14 @@ function fakeSandboxes(existing: Record<string, SandboxInventory> = {}) {
   const sandboxes = new Map(Object.entries(existing));
   const destroyed: string[] = [];
   let failing = false;
+  const failure = () => new Error('disk full');
   const lifecycle: SandboxLifecycle = {
     async inventory(owner) {
-      if (failing) throw new Error('supervisor down');
+      if (failing) throw failure();
       return sandboxes.get(owner) ?? { containers: 0, running: false, workspace: null, processes: [] };
     },
     async destroy(owner) {
-      if (failing) throw new Error('supervisor down');
+      if (failing) throw failure();
       destroyed.push(owner);
       const had = sandboxes.get(owner);
       sandboxes.delete(owner);
@@ -85,46 +86,56 @@ describe('deleting messages, conversations and projects', () => {
   });
 
   /**
-   * A project with a chat that has history, a report snapshot on disk, a grant, a pin, a stale agent run, a scheduled task,
-   * a wake-up set in the chat, and Gazeta items of the project and of the chat.
+   * A chat with history, a report snapshot on disk, a chat grant, a pin, an agent run with its transcript, a wake-up, a
+   * Gazeta item and a sandbox of its own (`projectId` set: inside that project).
    */
-  async function seedProject(name: string) {
-    const projectId = (await req(port, 'POST', '/api/projects', { name })).json.id as string;
-    const convId = (await req(port, 'POST', '/api/conversations', { title: `${name} chat`, projectId })).json.id as string;
+  function seedChat(convId: string, projectId: string | null) {
     appendMessage(db, convId, 'user', 'hello');
     const snapshot = createArtifact(db, { conversationId: convId, filename: 'report.md', mimeType: 'text/markdown', sizeBytes: 5, source: 'report-pin' });
     const file = path.join(artifactsDir, `${snapshot.id}_report.md`);
     fs.writeFileSync(file, 'hello');
-    createApprovalGrant(db, { toolLabel: 'cmd:npm test', scope: 'project', subjectType: null, subjectId: null, conversationId: null, projectId, expiresAt: null });
     createApprovalGrant(db, { toolLabel: 'cmd:ls', scope: 'chat', subjectType: null, subjectId: null, conversationId: convId, projectId: null, expiresAt: null });
-    addPin(db, projectId, '/workspace/a.ts');
-    const run = createRun(db, { projectId, conversationId: convId, model: 'm', goal: 'g', label: 'worker', depth: 1 });
-    const task = (db.prepare(`INSERT INTO schedules (name, prompt, cron, project_id) VALUES ('Nightly tests', 'p', '0 3 * * *', ?) RETURNING id`).get(projectId) as { id: string }).id;
+    addPin(db, convId, '/workspace/notes.md');
+    const transcript = (db.prepare(`INSERT INTO conversations (title, kind, project_id) VALUES ('[agent worker] g', 'subagent', ?) RETURNING id`).get(projectId) as { id: string }).id;
+    const run = createRun(db, { projectId, conversationId: convId, transcriptConversationId: transcript, model: 'm', goal: 'g', label: 'worker', depth: 1 });
     const wakeup = (db.prepare(`INSERT INTO schedules (name, prompt, cron, conversation_id) VALUES ('Check the build', 'p', '0 9 * * *', ?) RETURNING id`).get(convId) as { id: string }).id;
-    const report = createGazetaItem(db, { type: 'report', title: 'Nightly report', projectId });
     const question = createGazetaItem(db, { type: 'question', title: 'Which branch?', conversationId: convId });
+    sandbox.sandboxes.set(convId, { containers: 1, running: false, workspace: { entries: [{ name: 'notes.md', type: 'file', bytes: 10 }], totalBytes: 10 }, processes: [] });
+    return { file, transcript, runId: run.id, wakeup, question };
+  }
+
+  /** A project with one seeded chat, a project grant and pin, a scheduled task, a Gazeta item and a running sandbox. */
+  async function seedProject(name: string) {
+    const projectId = (await req(port, 'POST', '/api/projects', { name })).json.id as string;
+    const convId = (await req(port, 'POST', '/api/conversations', { title: `${name} chat`, projectId })).json.id as string;
+    const chat = seedChat(convId, projectId);
+    createApprovalGrant(db, { toolLabel: 'cmd:npm test', scope: 'project', subjectType: null, subjectId: null, conversationId: null, projectId, expiresAt: null });
+    addPin(db, projectId, '/workspace/a.ts');
+    const task = (db.prepare(`INSERT INTO schedules (name, prompt, cron, project_id) VALUES ('Nightly tests', 'p', '0 3 * * *', ?) RETURNING id`).get(projectId) as { id: string }).id;
+    const report = createGazetaItem(db, { type: 'report', title: 'Nightly report', projectId });
     sandbox.sandboxes.set(projectId, {
       containers: 1,
       running: true,
       workspace: { entries: [{ name: 'node_modules', type: 'directory', bytes: 9000 }, { name: 'index.ts', type: 'file', bytes: 120 }], totalBytes: 9120 },
       processes: [{ pid: 40, command: 'node server.js' }],
     });
-    // A chat moved in from outside keeps its own sandbox; it goes with the project too.
-    sandbox.sandboxes.set(convId, { containers: 1, running: false, workspace: { entries: [{ name: 'notes.md', type: 'file', bytes: 10 }], totalBytes: 10 }, processes: [] });
-    return { projectId, convId, file, runId: run.id, task, wakeup, report, question };
+    return { projectId, convId, task, report, ...chat };
   }
 
-  it('the deletion preview lists exactly what will be removed, scheduled tasks and Gazeta items included', async () => {
-    const { projectId, convId, runId, task, wakeup, report, question } = await seedProject('Preview');
+  const gone = (table: string, id: string) => assert.equal(db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(id), undefined, `${table} ${id} is gone`);
+
+  it('the project deletion preview lists exactly what will be removed, schedules and Gazeta items included', async () => {
+    const { projectId, convId, runId, task, report, wakeup, question } = await seedProject('Preview');
+    sandbox.destroyed.length = 0;
     const r = await req(port, 'GET', `/api/projects/${projectId}/deletion-preview`);
     assert.equal(r.status, 200);
     const byId = (x: { id: string }, y: { id: string }) => x.id.localeCompare(y.id);
     const { gazetaItems, ...rest } = r.json;
     assert.deepEqual([...gazetaItems].sort(byId), [{ id: report, title: 'Nightly report', status: 'pending' }, { id: question, title: 'Which branch?', status: 'pending' }].sort(byId));
     assert.deepEqual(rest, {
-      project: { id: projectId, name: 'Preview' },
+      target: { kind: 'project', id: projectId, name: 'Preview' },
       conversations: [{ id: convId, title: 'Preview chat', messageCount: 1 }],
-      agentTranscripts: 0,
+      agentTranscripts: 1,
       running: [{ runId, kind: 'agent', label: 'worker' }],
       sandboxes: [
         { owner: projectId, ...sandbox.sandboxes.get(projectId) },
@@ -137,29 +148,53 @@ describe('deleting messages, conversations and projects', () => {
     assert.equal((await req(port, 'GET', '/api/projects/nope/deletion-preview')).status, 404);
   });
 
-  it('deleting a project removes its sandboxes, chats, runs, grants, pins, scheduled tasks, Gazeta items and snapshot files; there is no keep option', async () => {
-    const { projectId, convId, file, runId, task, wakeup, report, question } = await seedProject('Gone');
+  it('deleting a project removes its sandboxes, chats, transcripts, runs, grants, pins, schedules, Gazeta items and snapshot files', async () => {
+    const { projectId, convId, file, runId, transcript, task, report, wakeup, question } = await seedProject('Gone');
     sandbox.destroyed.length = 0;
     assert.equal((await req(port, 'DELETE', `/api/projects/${projectId}?conversations=keep`)).status, 200);
-    assert.deepEqual(sandbox.destroyed, [projectId, convId]);
+    assert.deepEqual(sandbox.destroyed.sort(), [projectId, convId, transcript].sort());
     assert.equal((await req(port, 'GET', `/api/conversations/${convId}`)).status, 404);
     assert.equal((await req(port, 'GET', `/api/projects/${projectId}`)).status, 404);
-    assert.equal(db.prepare('SELECT 1 FROM runs WHERE id = ?').get(runId), undefined);
+    for (const [table, id] of [['runs', runId], ['conversations', transcript], ['schedules', task], ['schedules', wakeup], ['gazeta_items', report], ['gazeta_items', question]] as const) gone(table, id);
     assert.deepEqual(listApprovalGrants(db).filter(g => g.projectId === projectId || g.conversationId === convId), []);
-    assert.deepEqual(listPins(db, projectId), []);
+    assert.deepEqual([...listPins(db, projectId), ...listPins(db, convId)], []);
     assert.equal(fs.existsSync(file), false, 'the snapshot file is gone');
-    for (const id of [task, wakeup]) assert.equal(db.prepare('SELECT 1 FROM schedules WHERE id = ?').get(id), undefined, 'scheduled task gone');
-    for (const id of [report, question]) assert.equal(db.prepare('SELECT 1 FROM gazeta_items WHERE id = ?').get(id), undefined, 'Gazeta item gone');
   });
 
-  it('keeps the project intact when its sandbox cannot be removed', async () => {
+  it('deleting a chat removes its own sandbox and everything of it, and leaves its project alone', async () => {
+    const { projectId, convId: keptChat } = await seedProject('Home');
+    const convId = (await req(port, 'POST', '/api/conversations', { title: 'Scratch' })).json.id as string;
+    const { file, runId, transcript, wakeup, question } = seedChat(convId, null);
+    const preview = await req(port, 'GET', `/api/conversations/${convId}/deletion-preview`);
+    assert.equal(preview.status, 200);
+    assert.deepEqual(preview.json.target, { kind: 'chat', id: convId, name: 'Scratch' });
+    assert.deepEqual(preview.json.conversations, [{ id: convId, title: 'Scratch', messageCount: 1 }]);
+    assert.equal(preview.json.agentTranscripts, 1);
+    assert.deepEqual(preview.json.sandboxes, [{ owner: convId, ...sandbox.sandboxes.get(convId) }]);
+    assert.deepEqual(preview.json.schedules, [{ id: wakeup, name: 'Check the build' }]);
+    assert.deepEqual(preview.json.gazetaItems, [{ id: question, title: 'Which branch?', status: 'pending' }]);
+
+    sandbox.destroyed.length = 0;
+    assert.equal((await req(port, 'DELETE', `/api/conversations/${convId}`)).status, 200);
+    assert.deepEqual(sandbox.destroyed.sort(), [convId, transcript].sort());
+    for (const [table, id] of [['conversations', convId], ['conversations', transcript], ['runs', runId], ['schedules', wakeup], ['gazeta_items', question]] as const) gone(table, id);
+    assert.deepEqual(listApprovalGrants(db).filter(g => g.conversationId === convId), []);
+    assert.deepEqual(listPins(db, convId), []);
+    assert.equal(fs.existsSync(file), false);
+    // The project and its other chat are untouched.
+    assert.equal((await req(port, 'GET', `/api/projects/${projectId}`)).status, 200);
+    assert.equal((await req(port, 'GET', `/api/conversations/${keptChat}`)).status, 200);
+    assert.ok(sandbox.sandboxes.has(projectId));
+  });
+
+  it('keeps everything when the sandbox service fails, with a message that says so', async () => {
     const { projectId, convId, file } = await seedProject('Kept');
     sandbox.fail(true);
     try {
       const r = await req(port, 'DELETE', `/api/projects/${projectId}`);
       assert.equal(r.status, 502);
-      assert.match(r.json.error, /not deleted.*supervisor down/);
-      assert.equal((await req(port, 'GET', `/api/projects/${projectId}/deletion-preview`)).status, 502);
+      assert.match(r.json.error, /nothing was deleted: disk full/);
+      assert.equal((await req(port, 'DELETE', `/api/conversations/${convId}`)).status, 502);
     } finally {
       sandbox.fail(false);
     }

@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { addPin, createConversation, createProject, deleteConversation, deleteProject, listPins, openDb, removePin, runMigrations } from '../db.js';
+import { addPin, createConversation, createProject, deleteOwned, listPins, openDb, removePin, runMigrations } from '../db.js';
 import { fileTools } from '../file-tools.js';
 import { buildApp } from '../server.js';
 
@@ -18,10 +18,10 @@ describe('workspace pins', () => {
     assert.deepEqual(listPins(db, project.id).map(p => [p.path, p.note]), [['/workspace/a.md', 'first']]);
     assert.equal(removePin(db, project.id, '/workspace/a.md'), true);
     assert.equal(removePin(db, project.id, '/workspace/a.md'), false);
-    assert.equal(deleteConversation(db, chat), true);
+    assert.ok(deleteOwned(db, { conversationId: chat }));
     assert.deepEqual(listPins(db, chat), []);
     addPin(db, project.id, '/workspace/c.md');
-    assert.deepEqual(deleteProject(db, project.id), { snapshots: [] });
+    assert.ok(deleteOwned(db, { projectId: project.id }));
     assert.deepEqual(listPins(db, project.id), []);
   });
 

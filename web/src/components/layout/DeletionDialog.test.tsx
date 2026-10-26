@@ -1,13 +1,13 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ProjectDeletionPreview } from '../../types';
-import { DeleteProjectDialog } from './DeleteProjectDialog';
+import type { DeletionPreview } from '../../types';
+import { DeletionDialog } from './DeletionDialog';
 
 afterEach(() => vi.unstubAllGlobals());
 
-const PREVIEW: ProjectDeletionPreview = {
-  project: { id: 'p1', name: 'Shop' },
+const PREVIEW: DeletionPreview = {
+  target: { kind: 'project', id: 'p1', name: 'Shop' },
   conversations: [{ id: 'c1', title: 'Checkout bug', messageCount: 12 }],
   agentTranscripts: 2,
   running: [{ runId: 'r1', kind: 'agent', label: 'test-runner' }],
@@ -25,6 +25,18 @@ const PREVIEW: ProjectDeletionPreview = {
   gazetaItems: [{ id: 'g1', title: 'Which branch should I use?', status: 'pending' }],
 };
 
+const CHAT_PREVIEW: DeletionPreview = {
+  ...PREVIEW,
+  target: { kind: 'chat', id: 'c9', name: 'Scratch' },
+  conversations: [{ id: 'c9', title: 'Scratch', messageCount: 3 }],
+  agentTranscripts: 0,
+  running: [],
+  sandboxes: [{ ...PREVIEW.sandboxes[0]!, owner: 'c9', processes: [] }],
+  snapshots: 0,
+  schedules: [],
+  gazetaItems: [],
+};
+
 /** fetch stub: the preview, then whatever DELETE answers. Records the calls. */
 function server(preview: { status: number; body: unknown }, del: { status: number; body: unknown } = { status: 200, body: { ok: true } }) {
   const calls: Array<{ url: string; method: string }> = [];
@@ -37,10 +49,10 @@ function server(preview: { status: number; body: unknown }, del: { status: numbe
   return calls;
 }
 
-describe('DeleteProjectDialog', () => {
+describe('DeletionDialog: project', () => {
   it('lists what the server says will be removed: chats, stopped work, schedules, Gazeta items, files with sizes, processes', async () => {
     server({ status: 200, body: PREVIEW });
-    render(<DeleteProjectDialog projectId="p1" onCancel={vi.fn()} onDeleted={vi.fn()} />);
+    render(<DeletionDialog target={{ kind: 'project', id: 'p1' }} onCancel={vi.fn()} onDeleted={vi.fn()} />);
     expect(await screen.findByRole('dialog', { name: 'Delete “Shop”?' })).toBeInTheDocument();
     expect(screen.getByText('Checkout bug')).toBeInTheDocument();
     expect(screen.getByText('12 messages')).toBeInTheDocument();
@@ -61,7 +73,7 @@ describe('DeleteProjectDialog', () => {
   it('deletes only on confirmation, without any keep option in the request', async () => {
     const calls = server({ status: 200, body: PREVIEW });
     const onDeleted = vi.fn();
-    render(<DeleteProjectDialog projectId="p1" onCancel={vi.fn()} onDeleted={onDeleted} />);
+    render(<DeletionDialog target={{ kind: 'project', id: 'p1' }} onCancel={vi.fn()} onDeleted={onDeleted} />);
     await screen.findByText('Checkout bug');
     expect(calls.filter(c => c.method === 'DELETE')).toEqual([]);
     await userEvent.click(screen.getByRole('button', { name: 'Delete project' }));
@@ -71,19 +83,34 @@ describe('DeleteProjectDialog', () => {
 
   it('cannot delete when the preview failed', async () => {
     server({ status: 502, body: { error: 'supervisor down' } });
-    render(<DeleteProjectDialog projectId="p1" onCancel={vi.fn()} onDeleted={vi.fn()} />);
+    render(<DeletionDialog target={{ kind: 'project', id: 'p1' }} onCancel={vi.fn()} onDeleted={vi.fn()} />);
     expect(await screen.findByRole('alert')).toHaveTextContent(/can't be deleted right now: supervisor down/);
     expect(screen.getByRole('button', { name: 'Delete project' })).toBeDisabled();
   });
 
   it('shows why a deletion failed and keeps the dialog open', async () => {
-    server({ status: 200, body: PREVIEW }, { status: 502, body: { error: 'The project was not deleted: its sandbox could not be removed' } });
+    server({ status: 200, body: PREVIEW }, { status: 502, body: { error: 'The sandbox service could not handle this project\'s sandbox, so nothing was deleted: disk full' } });
     const onDeleted = vi.fn();
-    render(<DeleteProjectDialog projectId="p1" onCancel={vi.fn()} onDeleted={onDeleted} />);
+    render(<DeletionDialog target={{ kind: 'project', id: 'p1' }} onCancel={vi.fn()} onDeleted={onDeleted} />);
     await screen.findByText('Checkout bug');
     await userEvent.click(screen.getByRole('button', { name: 'Delete project' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/sandbox could not be removed/);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/nothing was deleted: disk full/);
     expect(onDeleted).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Delete project' })).toBeEnabled();
+  });
+});
+
+describe('DeletionDialog: chat', () => {
+  it('lists the chat and its own sandbox, and deletes through the given remove()', async () => {
+    const calls = server({ status: 200, body: CHAT_PREVIEW });
+    const remove = vi.fn().mockResolvedValue(undefined);
+    const onDeleted = vi.fn();
+    render(<DeletionDialog target={{ kind: 'chat', id: 'c9' }} remove={remove} onCancel={vi.fn()} onDeleted={onDeleted} />);
+    expect(await screen.findByRole('dialog', { name: 'Delete “Scratch”?' })).toBeInTheDocument();
+    expect(calls).toEqual([{ url: '/api/conversations/c9/deletion-preview', method: 'GET' }]);
+    expect(screen.getByRole('region', { name: 'Sandbox of this chat' })).toHaveTextContent('workspace 3.0 MB');
+    await userEvent.click(screen.getByRole('button', { name: 'Delete chat' }));
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(onDeleted).toHaveBeenCalledTimes(1);
   });
 });
