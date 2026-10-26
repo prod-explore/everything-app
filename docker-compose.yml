@@ -134,7 +134,7 @@ services:
       # SSRF guard: the browser may only reach the PUBLIC internet. Comma-separated private
       # hostnames/IPs to allow on purpose (default none), e.g. a NAS you want the agent to read.
       BROWSER_ALLOW_PRIVATE_HOSTS: ${BROWSER_ALLOW_PRIVATE_HOSTS:-}
-      # Browser policy (operator layer; the cli's per-project `_policy` can only tighten it).
+      # Browser policy (operator layer; the `_policy` the cli sends from policy.json can only tighten it).
       # Comma-separated globs like *.example.com. Empty allowlist = any public domain.
       BROWSER_DOMAIN_ALLOW: ${BROWSER_DOMAIN_ALLOW:-}
       BROWSER_DOMAIN_DENY: ${BROWSER_DOMAIN_DENY:-}

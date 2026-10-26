@@ -100,8 +100,8 @@ export interface AgentManagerDeps {
   limits?: AgentLimits;
   /** Usage of every worker API call → the usage ledger. */
   recordUsage: (u: { conversationId: string | null; provider: ProviderId; model: string; usage: Llm.Usage }) => void;
-  /** The project's browser policy for worker browser calls. */
-  browserPolicyOf?: (projectId: string | null) => ConversationBrowserPolicy | undefined;
+  /** The browser policy (from policy.json) for worker browser calls. */
+  browserPolicy?: () => ConversationBrowserPolicy | undefined;
   /** Extra virtual tools every worker gets (e.g. request_human_input wired to Gazeta with the run's label). */
   workerExtraTools?: (run: RunRow, signal: AbortSignal) => VirtualTool[];
   /** Names of virtual tools (e.g. the text-file tools) a run may hand down to its workers through spawn_agent `tools`. */
@@ -325,7 +325,7 @@ export class AgentManager {
           projectId: run.projectId ?? undefined,
           drainInbox: () => drainRunMessages(db, run.id).map(m => `[message from ${m.fromLabel}]\n${m.body}`),
           onStep: () => heartbeatRun(db, run.id),
-          browserPolicy: this.deps.browserPolicyOf?.(run.projectId),
+          browserPolicy: this.deps.browserPolicy?.(),
           userUrlsTrusted: false,
           webAccess: this.deps.webGrantedHosts ? { grantedHosts: () => this.deps.webGrantedHosts!(run) } : undefined,
           confirm: async (label, args, opts) => {

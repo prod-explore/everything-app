@@ -113,7 +113,7 @@ export interface ConversationDeps {
    * appended to the latest user turn (so the alternation of roles stays valid). Each string is one message.
    */
   drainInbox?: () => string[];
-  /** Project browser policy, injected as `_policy` into every browser tool call (never taken from the model). */
+  /** Browser policy from policy.json, injected as `_policy` into every browser tool call (never taken from the model). */
   browserPolicy?: { domainAllow?: string[]; domainDeny?: string[]; js?: 'disabled' | 'review' | 'allowed' };
   /**
    * Per-domain web access (web_fetch and the browser). When set, `browser_open` and `web_fetch` ask the user once per

@@ -415,7 +415,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   interruptOrphanedRuns(db);
   const agents = new AgentManager({
     db, router, registry, approval: approvalGate, sse,
-    browserPolicyOf: projectId => browserPolicyOf(projectId),
+    browserPolicy,
     recordUsage: ({ conversationId, provider, model, usage }) => {
       ledger.record({ conversationId, provider, model, usage });
     },
@@ -432,19 +432,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   /** Active root run per conversation — async Gazeta answers are delivered into it while a turn runs. */
   const activeRootRun = new Map<string, string>();
 
-  /** Project browser policy → playwright-mcp `_policy`; it can only tighten the operator's env policy. */
-  function browserPolicyOf(projectId: string | null | undefined): { domainAllow?: string[]; domainDeny?: string[]; js?: 'disabled' | 'review' | 'allowed' } | undefined {
-    const file = policyStore.get().browser;
-    const raw = projectId ? getProject(db, projectId)?.policy?.['browser'] : undefined;
-    const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-    const list = (v: unknown) => (Array.isArray(v) ? v.filter(isString).map(x => x.trim()).filter(Boolean) : []);
-    // Per-project browser settings (only older projects carry them; the UI does not write them): the deny lists add up,
-    // a project allowlist replaces the file's, and JS takes the stricter of the two.
-    const domainDeny = [...new Set([...file.domainDeny, ...list(b['domainDeny'])])];
-    const domainAllow = list(b['domainAllow']).length ? list(b['domainAllow']) : file.domainAllow;
-    const order = { allowed: 0, review: 1, disabled: 2 } as const;
-    const pj = b['js'] === 'disabled' || b['js'] === 'review' || b['js'] === 'allowed' ? b['js'] : 'allowed';
-    const js = order[pj] > order[file.js] ? pj : file.js;
+  /**
+   * Browser policy → playwright-mcp `_policy`. It comes from policy.json only (docs/adr/0002): projects have no browser
+   * settings, and a `browser` key left in an older project's policy is ignored. playwright-mcp merges it under the
+   * operator's env policy, which it can only tighten.
+   */
+  function browserPolicy(): { domainAllow?: string[]; domainDeny?: string[]; js?: 'disabled' | 'review' | 'allowed' } | undefined {
+    const { domainAllow, domainDeny, js } = policyStore.get().browser;
     const out = { ...(domainAllow.length ? { domainAllow } : {}), ...(domainDeny.length ? { domainDeny } : {}), ...(js !== 'allowed' ? { js } : {}) };
     return Object.keys(out).length ? out : undefined;
   }
@@ -1276,7 +1270,7 @@ ${m.body}`),
             signal: controller.signal,
             conversationId: convId,
             projectId: conv.projectId ?? undefined,
-            browserPolicy: browserPolicyOf(conv.projectId),
+            browserPolicy: browserPolicy(),
             webAccess: conv.ghost ? undefined : { grantedHosts: webHostsFor(convId, conv.projectId, effectiveModel), ownHost: previewHostFor(conv.projectId ?? convId) },
             confirm: async (label, args, opts) => {
               const decision = await approvalGate.confirmDetailed(convId, label, args, controller.signal, {

@@ -4,8 +4,14 @@ import type * as Llm from '../llm-types.js';
 import { runTurn, browserInjectionSignal } from '../llm-loop.js';
 import { ToolRegistry } from '../tool-registry.js';
 import type { McpConnectionLike } from '../mcp-client.js';
-import { openDb, runMigrations } from '../db.js';
+import { createProject, openDb, runMigrations, updateProject } from '../db.js';
 import { WebApprovalGate } from '../web-approval.js';
+import { buildApp } from '../server.js';
+import * as http from 'node:http';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import type { AddressInfo } from 'node:net';
 
 const usage = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: null, cache_read_input_tokens: null, server_tool_use: null, service_tier: null, cache_creation: null };
 const message = (content: unknown[], stop: string) =>
@@ -87,5 +93,54 @@ describe('browser tools in the loop', () => {
     assert.ok(p);
     assert.equal(p.dangerous, true);
     assert.equal(p.warning, 'page looked like an injection');
+  });
+});
+
+describe('browser policy source', () => {
+  it('comes from policy.json only; a browser key left in an older project policy has no effect', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ea-browser-policy-'));
+    const policyFile = path.join(dir, 'policy.json');
+    fs.writeFileSync(policyFile, JSON.stringify({ browser: { domainAllow: ['docs.example'], domainDeny: ['ads.example'], js: 'review' } }));
+    const db = openDb(':memory:');
+    runMigrations(db);
+    const project = createProject(db, { name: 'legacy' });
+    // What older versions stored per project: an allowlist that used to REPLACE the file's, a looser JS setting, an extra deny.
+    updateProject(db, project.id, { policy: { browser: { domainAllow: ['anything.example'], domainDeny: ['other.example'], js: 'allowed' } } });
+
+    const policies: unknown[] = [];
+    const conn: McpConnectionLike = {
+      name: 'pw',
+      async listTools() { return [{ name: 'browser_observe', description: '', inputSchema: { type: 'object' } }]; },
+      async callTool(_name, args) { policies.push((args as Record<string, unknown>)['_policy']); return { text: 'ok', isError: false }; },
+    };
+    let n = 0;
+    const llm = { messages: { async create() { return n++ === 0 ? message([{ type: 'tool_use', id: 'a', name: 'pw__browser_observe', input: {} }], 'tool_use') : message([{ type: 'text', text: 'done' }], 'end_turn'); }, batches: {} } };
+    const built = await buildApp({ db, connections: [conn] as never, llm: llm as never, authToken: 't', policyFile, config: { model: '@test/model-a', autoApproveTools: ['browser_observe'] } });
+    const server = built.app.listen(0);
+    const port = (server.address() as AddressInfo).port;
+    const call = (method: string, p: string, body?: unknown) => new Promise<any>((resolve, reject) => {
+      const payload = body === undefined ? undefined : JSON.stringify(body);
+      const r = http.request({ host: '127.0.0.1', port, method, path: p, headers: { 'content-type': 'application/json', authorization: 'Bearer t' } }, res => {
+        const chunks: Buffer[] = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString() || '{}')));
+      });
+      r.on('error', reject);
+      r.end(payload);
+    });
+    try {
+      const { id } = await call('POST', '/api/conversations', { projectId: project.id });
+      await call('POST', `/api/conversations/${id}/message`, { text: 'look' });
+      for (let i = 0; i < 200 && policies.length === 0; i++) await new Promise(r => setTimeout(r, 10));
+      assert.equal(policies.length, 1);
+      // domainGrant (hosts granted in the chat) is added by the loop; the policy fields must be the file's, untouched.
+      const { domainAllow, domainDeny, js } = policies[0] as Record<string, unknown>;
+      assert.deepEqual({ domainAllow, domainDeny, js }, { domainAllow: ['docs.example'], domainDeny: ['ads.example'], js: 'review' });
+    } finally {
+      built.stop();
+      server.close();
+      db.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
