@@ -231,6 +231,21 @@ describe('destructive commands: approvable once or for this chat only', () => {
     }
   });
 
+  it('covers deleting, truncating and overwriting files, find -delete/-exec, and removing or stopping containers and clusters', () => {
+    for (const cmd of [
+      'dd if=/dev/zero of=disk.img bs=1M count=1', 'truncate -s 0 app.log', 'shred -u secret.txt', 'find . -type f -delete', 'find . -name "*.tmp" -exec rm {} \\;',
+      'find . -execdir mv {} x \\;', 'find . -ok rm {} \\;',
+      'docker system prune -af', 'docker volume prune -f', 'docker image prune -a', 'docker container prune', 'docker builder prune', 'docker network prune',
+      'docker volume rm data', 'docker image rm app', 'docker stop web', 'docker container stop web', 'docker compose down -v', 'docker-compose down', 'podman rm -f web', 'podman system prune',
+      'kubectl delete pod web-1', 'kubectl delete namespace prod', 'kubectl drain node-1', 'helm uninstall app', 'crontab -r',
+    ]) {
+      assert.equal(isDestructive(cmd), true, cmd);
+    }
+    for (const cmd of ['docker ps', 'docker image ls', 'docker volume ls', 'docker compose up -d', 'docker compose logs', 'podman ps', 'kubectl get pods', 'helm list', 'crontab -l', 'find . -name "*.ts"']) {
+      assert.equal(isDestructive(cmd), false, cmd);
+    }
+  });
+
   it('marks destructive sub-commands in the verdict', () => {
     const v = evaluateCommand('git add . && git push', policy({}), none);
     assert.deepEqual(v.subcommands.map(s => [s.prefix, s.destructive ?? false]), [['git add', false], ['git push', true]]);

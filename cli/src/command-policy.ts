@@ -289,7 +289,8 @@ const GIT_DESTRUCTIVE: Record<string, (args: string[]) => boolean> = {
   reflog: args => args[0] === 'delete' || args[0] === 'expire',
 };
 
-const DOCKER_REMOVE = /^(rm|rmi|kill|prune)$/;
+/** Container verbs that remove or stop: `docker rm`, `docker image prune`, `podman stop`… */
+const DOCKER_REMOVE = /^(rm|rmi|kill|stop|prune)$/;
 
 /**
  * Commands that destroy work or stop things: deleting files, discarding changes, rewriting or pushing history, killing
@@ -314,13 +315,20 @@ function destructiveWords(words: string[]): boolean {
       const verb = args[0];
       return verb !== undefined && (GIT_DESTRUCTIVE[verb]?.(args.slice(1)) ?? false);
     }
-    case 'docker': {
-      // `docker rm x`, `docker container rm x`, `docker system prune`, `docker volume rm v`…
+    case 'docker': case 'podman': {
+      // `docker rm x`, `docker container rm x`, `docker system prune`, `docker volume rm v`, `docker compose down`…
       const [a, b] = args;
+      if (a === 'compose') return b === 'down' || b === 'rm' || b === 'kill' || b === 'stop';
       return DOCKER_REMOVE.test(a ?? '') || (/^(container|image|volume|network|system|builder)$/.test(a ?? '') && DOCKER_REMOVE.test(b ?? ''));
     }
+    case 'docker-compose':
+      return /^(down|rm|kill|stop)$/.test(args[0] ?? '');
     case 'kubectl':
-      return args[0] === 'delete';
+      return args[0] === 'delete' || args[0] === 'drain';
+    case 'helm':
+      return args[0] === 'uninstall' || args[0] === 'delete';
+    case 'crontab':
+      return args.some(a => /^-[a-z]*r/.test(a));
     default:
       return false;
   }
