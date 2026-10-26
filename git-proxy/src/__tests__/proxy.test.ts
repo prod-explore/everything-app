@@ -62,8 +62,26 @@ describe('admin API', () => {
     assert.equal(del.status, 204);
     assert.equal(h.tokens.verify(token), null);
 
+    const status = await request(`${h.proxy}/admin/status`, { headers: auth });
+    assert.equal(status.status, 200);
+    assert.equal(JSON.parse(status.body.toString()).status, 'ok');
+  });
+
+  it('the open /health says only that the process is up; the token count needs the admin token', async () => {
+    h = await harness();
+    const minted = await request(`${h.proxy}/admin/tokens`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId: 'p1', repos: [{ owner: 'acme', repo: 'app' }] }),
+    });
+    assert.equal(minted.status, 201);
     const health = await request(`${h.proxy}/health`);
     assert.equal(health.status, 200);
+    assert.deepEqual(JSON.parse(health.body.toString()), { status: 'ok' });
+    assert.doesNotMatch(health.body.toString(), /\d|tokens|p1/);
+    assert.equal((await request(`${h.proxy}/admin/status`)).status, 401);
+    const status = await request(`${h.proxy}/admin/status`, { headers: { authorization: `Bearer ${ADMIN}` } });
+    assert.deepEqual(JSON.parse(status.body.toString()), { status: 'ok', tokens: 1 });
   });
 });
 

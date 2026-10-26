@@ -53,7 +53,8 @@ POST /admin/tokens
 
 DELETE /admin/tokens/<token>          → 204 (404 if unknown)
 DELETE /admin/tokens?projectId=p_123  → 200 {"revoked":2}   (revoke every token of a project)
-GET    /health                        → 200 {"ok":true,"tokens":3}
+GET    /admin/status                  → 200 {"status":"ok","tokens":3}
+GET    /health                        → 200 {"status":"ok"}   (no auth: liveness for the health check, nothing else)
 ```
 
 - `pushMode`: `ask` (default) always asks for approval. `allow` pushes without asking, **except** for ref

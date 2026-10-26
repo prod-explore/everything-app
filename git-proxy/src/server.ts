@@ -168,6 +168,10 @@ export function createGitProxy(cfg: ProxyConfig): http.Server {
       sendJson(res, 200, { revoked });
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/admin/status') {
+      sendJson(res, 200, { status: 'ok', tokens: cfg.tokens.size });
+      return;
+    }
     const m = /^\/admin\/tokens\/([^/]+)$/.exec(url.pathname);
     if (req.method === 'DELETE' && m) {
       const ok = cfg.tokens.revoke(decodeURIComponent(m[1]!));
@@ -413,8 +417,10 @@ export function createGitProxy(cfg: ProxyConfig): http.Server {
     const url = new URL(req.url ?? '/', 'http://git-proxy.local');
     const audit: Record<string, unknown> = { method: req.method, path: url.pathname };
 
+    // Liveness for the container health check, open to anyone who can reach the port: only "the process is up".
+    // Anything else (how many tokens are live) is in GET /admin/status, behind the admin token.
     if (url.pathname === '/health') {
-      sendJson(res, 200, { ok: true, tokens: cfg.tokens.size });
+      sendJson(res, 200, { status: 'ok' });
       return;
     }
 
