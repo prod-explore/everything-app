@@ -41,7 +41,8 @@ export interface SandboxWarning {
   diskBytes?: number;
 }
 
-export interface HealthResult {
+/** GET /status of the supervisor (authenticated). */
+export interface SupervisorStatus {
   status: string;
   maxRunning: number;
   running: number;
@@ -126,9 +127,10 @@ export class SupervisorClient {
     return this.post(`/sandboxes/${encodeURIComponent(ownerId)}/rollback`, { checkpointId });
   }
 
-  async health(): Promise<HealthResult> {
-    const res = await fetch(`${this.baseUrl}/health`);
-    if (!res.ok) throw new Error(`Supervisor /health failed (${res.status})`);
-    return res.json() as Promise<HealthResult>;
+  /** Running sandboxes, capacity and watchdog warnings. */
+  async status(): Promise<SupervisorStatus> {
+    const res = await fetch(`${this.baseUrl}/status`, { headers: this.auth() });
+    if (!res.ok) throw new Error(`Supervisor /status failed (${res.status})`);
+    return res.json() as Promise<SupervisorStatus>;
   }
 }

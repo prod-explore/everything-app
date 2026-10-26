@@ -128,8 +128,7 @@ export function createApp(config: Config, supervisor: SupervisorClient): express
   app.get('/mcp/health', async (req, res) => {
     if (!requireAuth(config, req, res)) return;
     try {
-      const supervisorHealth = await supervisor.health();
-      res.json({ status: 'ok', supervisor: supervisorHealth });
+      res.json({ status: 'ok', supervisor: await supervisor.status() });
     } catch (err) {
       res.status(502).json({ status: 'error', error: String(err) });
     }

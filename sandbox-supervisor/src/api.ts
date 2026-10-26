@@ -21,7 +21,8 @@ function bearerMatches(header: string | undefined, secret: string): boolean {
 
 export interface SupervisorAppOptions {
   /**
-   * Shared secret (SUPERVISOR_TOKEN). When set, every route except GET /health needs `Authorization: Bearer <token>`.
+   * Shared secret (SUPERVISOR_TOKEN). When set, every route except GET /health (liveness, says nothing else) needs
+   * `Authorization: Bearer <token>`.
    * The API can run commands in, read files of and delete the volumes of every managed sandbox, so anything that can
    * reach the port (the shared network, the host's loopback) must prove it is the orchestrator or sandbox-mcp.
    */
@@ -249,7 +250,14 @@ export function createSupervisorApp(sandboxes: SandboxManager, defaultTimeoutMs 
     }),
   );
 
+  // GET /health — liveness for the container health check, open to anyone who can reach the port: only "the process is
+  // up". Owner ids, container ids, counts and warnings are in GET /status, behind the token.
   app.get('/health', (_req, res) => {
+    res.json({ status: 'ok' });
+  });
+
+  // GET /status — running sandboxes, capacity, watchdog warnings.
+  app.get('/status', (_req, res) => {
     res.json({ status: 'ok', ...sandboxes.status() });
   });
 

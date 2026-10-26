@@ -15,7 +15,7 @@ An audit of phase E (2026-10-13) found weaknesses around the code rather than in
 ## Decision
 
 1. **Secrets are checked at startup** (`secret-check.ts`, one copy per package because each package is built on its own in Docker): placeholders, values shorter than 24 characters and values with fewer than 8 distinct characters are refused. `ALLOW_WEAK_SECRETS=true` downgrades the refusal to a warning for local development. `.env.example` now has empty values, so compose's `:?` check also fails loudly. `KEY_VAULT_SECRET` keeps its own rule (it derives an encryption key and cannot be rotated without re-entering provider keys).
-2. **`SUPERVISOR_TOKEN`**: the supervisor requires `Authorization: Bearer` on every route except `GET /health`; sandbox-mcp and the orchestrator send it. Compose requires it for all three.
+2. **`SUPERVISOR_TOKEN`**: the supervisor requires `Authorization: Bearer` on every route except `GET /health`, which only answers `{"status":"ok"}` (sandbox details are in the authenticated `GET /status`); sandbox-mcp and the orchestrator send it. Compose requires it for all three.
 3. **No credentials in URLs**: SSE and the live-view WebSocket accept the session cookie or a Bearer header only.
 4. **Constant-time key comparison** in sandbox-mcp and playwright-mcp.
 5. **Subagents get `read_file` / `edit_file` / `write_file` by delegation**: the parent names them in `spawn_agent` `tools` like any other tool, and can only delegate what it has (chats without a sandbox have none). Same audit trail as the main assistant.

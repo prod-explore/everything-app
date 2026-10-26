@@ -39,8 +39,24 @@ describe('supervisor bearer auth', () => {
     assert.equal((await claim({ authorization: `Bearer ${TOKEN}` })).status, 200);
   });
 
-  it('keeps /health open for container health checks', async () => {
-    assert.equal((await fetch(`${base}/health`)).status, 200);
+  it('keeps /health open for container health checks, and it says nothing but that the process is up', async () => {
+    // Something to leak: a running sandbox with an owner, a container and a terminal.
+    assert.equal((await claim({ authorization: `Bearer ${TOKEN}` })).status, 200);
+    const res = await fetch(`${base}/health`);
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.deepEqual(JSON.parse(body), { status: 'ok' });
+    // No owner or container ids, counts, versions or paths, in the body or the headers.
+    assert.doesNotMatch(body, /p1|\d|\//);
+    assert.equal(res.headers.get('x-powered-by'), null);
+  });
+
+  it('keeps the sandbox details behind the token (GET /status)', async () => {
+    assert.equal((await fetch(`${base}/status`)).status, 401);
+    const res = await fetch(`${base}/status`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    assert.equal(res.status, 200);
+    const status = await res.json() as { sandboxes: Array<{ ownerId: string }> };
+    assert.deepEqual(status.sandboxes.map(s => s.ownerId), ['p1']);
   });
 });
 

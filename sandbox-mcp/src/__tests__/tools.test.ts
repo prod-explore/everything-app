@@ -89,6 +89,23 @@ describe('checkpoint tools', () => {
     assert.match(text, /\(no label\)/);
   });
 
+  it('SupervisorClient reads the sandbox status from the authenticated /status, not the open /health', async () => {
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      seen.push(`${req.method} ${req.url} ${req.headers.authorization ?? ''}`);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ status: 'ok', maxRunning: 2, running: 1, warnings: [], sandboxes: [] }));
+    }).listen(0);
+    try {
+      const client = new SupervisorClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, 'tok');
+      assert.equal((await client.status()).running, 1);
+      assert.deepEqual(seen, ['GET /status Bearer tok']);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
   it('SupervisorClient calls the per-owner checkpoint endpoints', async () => {
     const seen: string[] = [];
     const server = createServer((req, res) => {

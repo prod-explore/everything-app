@@ -269,7 +269,7 @@ describe('CPU watchdog', () => {
     return { m, f, advance: (ms: number) => (now += ms) };
   };
 
-  it('hot + agent idle → warning event (in /health status), then stop if it continues', async () => {
+  it('hot + agent idle → warning event (in GET /status), then stop if it continues', async () => {
     const { m, f, advance } = setup();
     const { containerId } = await m.claim('p');
     f.cpu.set(containerId, 99);

@@ -65,8 +65,8 @@ describe('supervisor HTTP API', () => {
     assert.equal((await post(`/exec/${json.containerId}`, { command: 'true' })).status, 404);
   });
 
-  it('health reports sandboxes', async () => {
-    const h = await (await fetch(`${base}/health`)).json();
+  it('status reports sandboxes', async () => {
+    const h = await (await fetch(`${base}/status`)).json();
     assert.equal(h.status, 'ok');
     assert.ok(h.sandboxes.length >= 1);
     assert.ok(Array.isArray(h.warnings));
