@@ -98,6 +98,58 @@ describe('evaluateCommand', () => {
   });
 });
 
+describe('allowlist mode: read-only commands are judged with their flags', () => {
+  const al = policy({ mode: 'allowlist' });
+  const decide = (cmd: string) => evaluateCommand(cmd, al, none).decision;
+
+  it('git branch lists without asking, but asks to create, rename, copy or delete', () => {
+    for (const cmd of ['git branch', 'git branch -a', 'git branch -vv', 'git branch -r --sort=-committerdate', 'git branch --list "feat/*"', 'git branch --contains HEAD', 'git branch --show-current']) {
+      assert.equal(decide(cmd), 'allow', cmd);
+    }
+    for (const cmd of [
+      'git branch feature', 'git branch -D main', 'git branch -d old', 'git branch -m a b', 'git branch -M a', 'git branch -c a b', 'git branch -C a b',
+      'git branch --delete x', 'git branch --move a b', 'git branch --copy a b', 'git branch --force x HEAD~1', 'git branch -f x',
+      'git branch --del x', 'git branch -avD x', 'git branch -u origin/x', 'git branch --set-upstream-to=origin/x', 'git branch --edit-description',
+    ]) {
+      assert.equal(decide(cmd), 'ask', cmd);
+    }
+  });
+
+  it('asks for options that write files or run programs', () => {
+    for (const cmd of [
+      'sort -o out.txt in.txt', 'sort -uo out.txt in.txt', 'sort --output=out.txt in.txt', 'sort --out=x in', 'sort --compress-program=sh in',
+      'git diff --output=patch.diff', 'git diff --out=p', 'git diff --ext-diff', 'git log --output=x', 'git show --output x HEAD',
+      'tree -o listing.txt', 'tree -R -H . ', 'rg --pre ./script.sh foo', 'file -C -m magic', 'date -s "2020-01-01"', 'date --set=now',
+      'uniq in.txt out.txt',
+    ]) {
+      assert.equal(decide(cmd), 'ask', cmd);
+    }
+    for (const cmd of ['sort in.txt', 'sort -u -k2 in.txt', 'git diff --stat', 'git log --oneline -5', 'tree -L 2', 'rg foo src', 'uniq -c in.txt', 'uniq -f 1 in.txt', 'date +%s']) {
+      assert.equal(decide(cmd), 'allow', cmd);
+    }
+  });
+
+  it('a redirection to a file is a write', () => {
+    for (const cmd of ['echo x > a.txt', 'cat a >> b', 'ls &> out', 'git log 2>err.log', 'printf x >| f', 'cat a>b']) assert.equal(decide(cmd), 'ask', cmd);
+    for (const cmd of ['ls > /dev/null', 'git status 2>&1', 'cat a 2>/dev/null', 'echo ">" x', "grep '>' f"]) assert.equal(decide(cmd), 'allow', cmd);
+  });
+
+  it('variables or a wrapper in front take away the read-only status', () => {
+    for (const cmd of ['GIT_EXTERNAL_DIFF=./x.sh git diff', 'PAGER="sh -c id" git log', 'LD_PRELOAD=./evil.so ls', 'nohup ls', 'nice cat a', 'env ls']) {
+      assert.equal(decide(cmd), 'ask', cmd);
+    }
+  });
+
+  it('exact-only entries take nothing extra', () => {
+    for (const cmd of ['git remote -v add origin https://x.example', 'node --version -e "require(1)"', 'python3 --version -c 1', 'env -S"rm -rf x"']) assert.equal(decide(cmd), 'ask', cmd);
+    for (const cmd of ['git remote -v', 'node --version', 'env']) assert.equal(decide(cmd), 'allow', cmd);
+  });
+
+  it('quoting or escaping an option does not hide it', () => {
+    for (const cmd of ['sort "-o" out in', "sort '-o' out in", 'sort -\\o out in', 'git branch "-D" x', "git diff '--output=x'"]) assert.equal(decide(cmd), 'ask', cmd);
+  });
+});
+
 describe('parseCommandPolicy / extractCommand', () => {
   it('defaults to strict and sanitizes input', () => {
     assert.deepEqual(parseCommandPolicy(undefined), { mode: 'strict', allow: [], deny: [], domains: [] });

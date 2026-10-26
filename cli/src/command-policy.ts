@@ -16,7 +16,7 @@ export type CommandDecision = 'allow' | 'ask' | 'deny';
 export interface CommandPolicy {
   /** strict: ask for every command (unless granted); auto: ask only when crossing a boundary; allowlist: allow prefixes, ask the rest. */
   mode: CommandMode;
-  /** Extra allowed prefixes (on top of SAFE_PREFIXES in allowlist mode). */
+  /** Extra allowed prefixes (on top of the read-only commands in allowlist mode). */
   allow: string[];
   /** Always-blocked prefixes / patterns (on top of DENY_PATTERNS). */
   deny: string[];
@@ -26,13 +26,217 @@ export interface CommandPolicy {
 
 export const DEFAULT_COMMAND_POLICY: CommandPolicy = { mode: 'strict', allow: [], deny: [], domains: [] };
 
-/** Read-only, side-effect-free prefixes — allowed without asking in allowlist mode. */
-export const SAFE_PREFIXES = [
-  'ls', 'pwd', 'cat', 'head', 'tail', 'wc', 'echo', 'printf', 'grep', 'rg', 'which', 'whoami', 'date',
-  'tree', 'stat', 'file', 'du', 'df', 'env', 'printenv', 'sort', 'uniq', 'diff', 'true', 'false', 'test',
-  'git status', 'git diff', 'git log', 'git show', 'git branch', 'git remote -v', 'git rev-parse', 'git blame',
-  'node --version', 'npm --version', 'npm ls', 'python --version', 'python3 --version',
-];
+// ─── Read-only commands (allowlist mode) ────────────────────────────────────
+
+/**
+ * Checks the arguments of a read-only command; returns why this use is NOT read-only, or null. `args` are the shell
+ * words after the command words, quotes removed.
+ */
+type ArgCheck = (args: string[]) => string | null;
+
+/** Options that make an otherwise read-only command write, run something or change state. */
+interface OptionSet {
+  /** Long option names without the dashes. Unambiguous abbreviations (`--out` for `--output`) count too. */
+  long?: string[];
+  /** Short option letters; matched anywhere in a cluster (`-uo file`), which may over-ask but never under-asks. */
+  short?: string;
+}
+
+const anyArgs: ArgCheck = () => null;
+const noArgs: ArgCheck = args => (args.length ? `takes no arguments here (${args.join(' ')})` : null);
+
+/** The long option a word names, if any: `--output=x` → `output`. */
+const longName = (w: string): string | null => (/^--[^-=]/.test(w) ? w.slice(2).split('=')[0]! : null);
+/** Short option letters of a cluster: `-uo` → `uo`. */
+const shortLetters = (w: string): string => (/^-[^-]/.test(w) ? w.slice(1) : '');
+
+/** Index of the first `--` (end of options), or the length. */
+const optionsEnd = (args: string[]) => (args.indexOf('--') === -1 ? args.length : args.indexOf('--'));
+
+function hasOption(args: string[], set: OptionSet): string | null {
+  for (const w of args.slice(0, optionsEnd(args))) {
+    const name = longName(w);
+    // getopt_long and git accept any unambiguous prefix of a long option, so `--out` is `--output`.
+    const hit = name !== null && set.long?.find(l => l.startsWith(name));
+    if (hit) return `--${hit}`;
+    const letter = [...shortLetters(w)].find(c => set.short?.includes(c));
+    if (letter) return `-${letter}`;
+  }
+  return null;
+}
+
+/** Read-only unless one of these options is used. */
+const without = (set: OptionSet, why: string): ArgCheck => args => {
+  const opt = hasOption(args, set);
+  return opt ? `${opt} ${why}` : null;
+};
+
+/** Operands (non-option words), skipping the values of options that take one as the next word. */
+function operands(args: string[], valueOptions: OptionSet = {}): string[] {
+  const out: string[] = [];
+  const end = optionsEnd(args);
+  for (let i = 0; i < args.length; i++) {
+    const w = args[i]!;
+    if (i >= end) { if (i > end) out.push(w); continue; }
+    if (w === '-' || !w.startsWith('-')) { out.push(w); continue; }
+    const name = longName(w);
+    if (name !== null) { if (!w.includes('=') && valueOptions.long?.includes(name)) i++; continue; }
+    const letters = shortLetters(w);
+    // A value option ends its cluster; its value is the rest of the word or, if that is empty, the next word.
+    const at = [...letters].findIndex(c => valueOptions.short?.includes(c));
+    if (at !== -1 && at === letters.length - 1) i++;
+  }
+  return out;
+}
+
+/** `git branch` lists branches only with these options; anything else (or a branch name) creates, renames or deletes. */
+const GIT_BRANCH_LIST: Required<OptionSet> & { value: string[] } = {
+  long: ['all', 'remotes', 'list', 'verbose', 'show-current', 'contains', 'no-contains', 'merged', 'no-merged', 'points-at',
+    'sort', 'format', 'color', 'no-color', 'column', 'no-column', 'ignore-case', 'omit-empty', 'abbrev', 'no-abbrev'],
+  short: 'arlvi',
+  /** Take a value as the next word. */
+  value: ['contains', 'no-contains', 'merged', 'no-merged', 'points-at', 'sort', 'format'],
+};
+
+const gitBranchListOnly: ArgCheck = args => {
+  let listing = false;
+  for (let i = 0; i < args.length; i++) {
+    const w = args[i]!;
+    const name = longName(w);
+    if (name !== null) {
+      // Exact names only: an abbreviation could just as well be --delete, --move or --copy.
+      if (!GIT_BRANCH_LIST.long.includes(name)) return `${w.split('=')[0]} changes branches`;
+      if (name === 'list') listing = true;
+      if (!w.includes('=') && GIT_BRANCH_LIST.value.includes(name) && i + 1 < args.length) i++;
+      continue;
+    }
+    if (w.startsWith('-') && w.length > 1) {
+      const bad = [...shortLetters(w)].find(c => !GIT_BRANCH_LIST.short.includes(c));
+      if (bad) return `-${bad} changes branches`;
+      if (shortLetters(w).includes('l')) listing = true;
+      continue;
+    }
+    // A plain word is a pattern under --list, and otherwise the name of a branch to create.
+    if (!listing) return `"${w}" would create a branch`;
+  }
+  return null;
+};
+
+/**
+ * Commands that only read, and how their arguments are checked — allowed without asking in allowlist mode. The check
+ * matters as much as the name: `sort -o`, `git diff --output`, `tree -o` write files, `rg --pre` runs a program,
+ * `git branch x` creates a branch.
+ */
+const READ_ONLY: Record<string, ArgCheck> = {
+  ls: anyArgs,
+  pwd: anyArgs,
+  cat: anyArgs,
+  head: anyArgs,
+  tail: anyArgs,
+  wc: anyArgs,
+  echo: anyArgs,
+  printf: anyArgs,
+  grep: anyArgs,
+  rg: without({ long: ['pre'] }, 'runs a program on every file'),
+  which: anyArgs,
+  whoami: anyArgs,
+  date: without({ long: ['set'], short: 's' }, 'sets the clock'),
+  tree: without({ short: 'oR' }, 'writes output files'),
+  stat: anyArgs,
+  file: without({ long: ['compile'], short: 'C' }, 'writes a compiled magic file'),
+  du: anyArgs,
+  df: anyArgs,
+  // With an operand, `env` runs it as a command; the operand form is unwrapped and judged on its own before this.
+  env: args => (args.every(a => a === '-0' || a === '--null') ? null : 'env runs a command'),
+  printenv: anyArgs,
+  sort: without({ long: ['output', 'compress-program'], short: 'o' }, 'writes a file or runs a program'),
+  // `uniq IN OUT` writes OUT.
+  uniq: args => (operands(args, { long: ['skip-fields', 'skip-chars', 'check-chars'], short: 'fsw' }).length > 1 ? 'a second operand is an output file' : null),
+  diff: anyArgs,
+  true: anyArgs,
+  false: anyArgs,
+  test: anyArgs,
+  'git status': anyArgs,
+  'git diff': without({ long: ['output', 'ext-diff'] }, 'writes a file or runs an external diff'),
+  'git log': without({ long: ['output', 'ext-diff'] }, 'writes a file or runs an external diff'),
+  'git show': without({ long: ['output', 'ext-diff'] }, 'writes a file or runs an external diff'),
+  'git branch': gitBranchListOnly,
+  // `git remote -v add …` is still `git remote add`.
+  'git remote -v': noArgs,
+  'git rev-parse': anyArgs,
+  'git blame': anyArgs,
+  // `--version` with anything after it may run that instead.
+  'node --version': noArgs,
+  'npm --version': noArgs,
+  'npm ls': anyArgs,
+  'python --version': noArgs,
+  'python3 --version': noArgs,
+};
+
+/** Output redirections to anything but /dev/null or another descriptor (`> f`, `>> f`, `&> f`, `2>f`, `>| f`). */
+function writesByRedirection(sub: string): string | null {
+  // Quoted text cannot redirect; drop it before looking.
+  const bare = sub.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''");
+  for (const m of bare.matchAll(/(?:^|[^<>&\\])(?:\d*|&)>>?\|?\s*(\S*)/g)) {
+    const target = m[1]!;
+    if (target.startsWith('&') || /^\/dev\/(null|stdout|stderr)$/.test(target)) continue;
+    return `writes to ${target || 'a file'}`;
+  }
+  return null;
+}
+
+/**
+ * Why `sub` is not a read-only command, or null when it is. `prefixed`: it ran behind variable assignments or a wrapper
+ * (`PAGER=… git log`, `GIT_EXTERNAL_DIFF=… git diff`, `nohup …`), which can make any of them run or write something.
+ */
+export function notReadOnly(sub: string, prefixed = false): string | null {
+  const words = shellWords(sub);
+  if (words.length === 0) return 'empty command';
+  words[0] = words[0]!.replace(/^.*\//, '');
+  const key = Object.keys(READ_ONLY)
+    .filter(k => { const kw = k.split(' '); return kw.every((w, i) => words[i] === w); })
+    .sort((a, b) => b.length - a.length)[0];
+  if (!key) return 'not a read-only command';
+  if (prefixed) return 'runs with changed variables or under a wrapper';
+  return writesByRedirection(sub) ?? READ_ONLY[key]!(words.slice(key.split(' ').length));
+}
+
+/**
+ * The words of a command as the shell passes them: split on unquoted whitespace, quotes removed, backslash escapes
+ * resolved. Substitutions are left as text (they are classified separately). Enough to read options reliably, so
+ * `sort "-o" f` and `sort -\o f` are seen as `sort -o f`.
+ */
+export function shellWords(sub: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inWord = false;
+  for (let i = 0; i < sub.length; i++) {
+    const c = sub[i]!;
+    if (c === "'") {
+      const end = sub.indexOf("'", i + 1);
+      const stop = end === -1 ? sub.length : end;
+      cur += sub.slice(i + 1, stop); i = stop; inWord = true; continue;
+    }
+    if (c === '$' && sub[i + 1] === "'") {
+      let j = i + 2;
+      while (j < sub.length && sub[j] !== "'") { cur += sub[j] === '\\' && j + 1 < sub.length ? sub[++j] : sub[j]; j++; }
+      i = j; inWord = true; continue;
+    }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < sub.length && sub[j] !== '"') {
+        if (sub[j] === '\\' && /["\\$`]/.test(sub[j + 1] ?? '')) j++;
+        cur += sub[j]; j++;
+      }
+      i = j; inWord = true; continue;
+    }
+    if (c === '\\' && i + 1 < sub.length) { cur += sub[++i]; inWord = true; continue; }
+    if (/\s/.test(c)) { if (inWord) out.push(cur); cur = ''; inWord = false; continue; }
+    cur += c; inWord = true;
+  }
+  if (inWord) out.push(cur);
+  return out;
+}
 
 /** Always blocked, regardless of mode or grants. */
 const DENY_PATTERNS: RegExp[] = [
@@ -67,17 +271,25 @@ export function parseCommandPolicy(raw: unknown): CommandPolicy {
  * are literal; double quotes still expand `$(…)`). Not a full bash parser — the goal is that no
  * executable part of the string escapes classification; an over-split only costs an extra prompt.
  */
-export function splitShellCommand(command: string, depth = 0): string[] {
+export function splitShellCommand(command: string): string[] {
+  return splitDetailed(command).map(s => s.command);
+}
+
+/** A sub-command, and whether variable assignments or a wrapper (`sudo`, `env`, `nohup`…) were stripped from its front. */
+interface SplitPart { command: string; prefixed: boolean }
+
+function splitDetailed(command: string, depth = 0): SplitPart[] {
   const out: string[] = [];
   splitInto(command, out, 0);
-  return out.map(normalize).filter(s => s !== '').flatMap(sub => {
+  return out.map(normalize).filter(p => p.command !== '').flatMap((part): SplitPart[] => {
+    const sub = part.command;
     // `bash -c "…"`, `sh -c '…'`, `eval "…"`: the quoted string is itself a command line.
     const m = /^(?:(?:ba|z|da|k)?sh(?:\s+-\w+)*\s+-\w*c|eval)\s+(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|(.+))/.exec(sub);
-    if (!m) return [sub];
-    if (depth > 4) return [`${TOO_DEEP} ${sub}`];
+    if (!m) return [part];
+    if (depth > 4) return [{ command: `${TOO_DEEP} ${sub}`, prefixed: part.prefixed }];
     // Inside double quotes the shell removes backslashes before " \ $ ` — do the same so a nested `bash -c \"…\"` is read as the command it is.
     const inner = m[1] !== undefined ? m[1].replace(/\\(["\\$`])/g, '$1') : (m[2] ?? m[3] ?? '');
-    return [sub.split(' ')[0]!, ...splitShellCommand(inner, depth + 1)];
+    return [{ command: sub.split(' ')[0]!, prefixed: part.prefixed }, ...splitDetailed(inner, depth + 1).map(p => ({ ...p, prefixed: p.prefixed || part.prefixed }))];
   });
 }
 
@@ -175,15 +387,16 @@ function matchParen(src: string, open: number): number {
 }
 
 /** Trim, collapse whitespace, drop leading `VAR=value` assignments and wrappers like `sudo`/`env`/`time`. */
-function normalize(sub: string): string {
-  let s = sub.replace(/\s+/g, ' ').trim();
+function normalize(sub: string): SplitPart {
+  let s = sub.replace(/\s+/g, ' ').trim().replace(/^(then|do|else|elif|if|while|until|!)\s+/, '');
+  const start = s;
   for (;;) {
     const before = s;
     s = s.replace(/^[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|\S*)\s*/, '');
     s = s.replace(/^(sudo|env|time|nohup|nice|command|exec|builtin)(\s+-\S+)*\s+/, '');
     if (s === before) break;
   }
-  return s.replace(/^(then|do|else|elif|if|while|until|!)\s+/, '').replace(/^(fi|done|esac|then|do|else)$/, '');
+  return { command: s.replace(/^(then|do|else|elif|if|while|until|!)\s+/, '').replace(/^(fi|done|esac|then|do|else)$/, ''), prefixed: s !== start };
 }
 
 // ─── Classification ─────────────────────────────────────────────────────────
@@ -251,10 +464,10 @@ export interface CommandVerdict {
  * prefix in the current context (chat/project/always, model/skill scoped).
  */
 export function evaluateCommand(command: string, policy: CommandPolicy, granted: (prefix: string) => boolean): CommandVerdict {
-  const subs = splitShellCommand(command);
-  if (subs.length === 0) return { decision: 'ask', subcommands: [] };
+  const parts = splitDetailed(command);
+  if (parts.length === 0) return { decision: 'ask', subcommands: [] };
 
-  const subcommands = subs.map((sub): SubcommandVerdict => {
+  const subcommands = parts.map(({ command: sub, prefixed }): SubcommandVerdict => {
     const prefix = grantPrefix(sub);
     // Also look at the command as the shell will run it: quotes and backslashes removed, binary path stripped (`'rm' -rf "/"`, `/bin/rm -rf /`).
     const plain = sub.replace(/["'\\]/g, '').replace(/^\S*\//, '');
@@ -273,10 +486,10 @@ export function evaluateCommand(command: string, policy: CommandPolicy, granted:
     if (granted(prefix)) return { command: sub, prefix, decision: 'allow', reason: 'granted' };
     if (policy.allow.some(a => matchesPrefix(sub, a))) return { command: sub, prefix, decision: 'allow', reason: 'project allowlist' };
     if (policy.mode === 'auto') return { command: sub, prefix, decision: 'allow', reason: 'auto mode (inside sandbox)' };
-    if (policy.mode === 'allowlist' && SAFE_PREFIXES.some(a => matchesPrefix(sub, a))) {
-      return { command: sub, prefix, decision: 'allow', reason: 'safe read-only command' };
-    }
-    return { command: sub, prefix, decision: 'ask', reason: policy.mode === 'strict' ? 'strict mode' : 'not on the allowlist' };
+    if (policy.mode === 'strict') return { command: sub, prefix, decision: 'ask', reason: 'strict mode' };
+    const why = notReadOnly(sub, prefixed);
+    if (why === null) return { command: sub, prefix, decision: 'allow', reason: 'safe read-only command' };
+    return { command: sub, prefix, decision: 'ask', reason: why === 'not a read-only command' ? 'not on the allowlist' : `not read-only: ${why}` };
   });
 
   const decision: CommandDecision = subcommands.some(s => s.decision === 'deny')
