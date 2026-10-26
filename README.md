@@ -7,7 +7,7 @@ shell commands in a Docker sandbox, drive a browser, push to GitHub and work on 
 waits for your approval unless you have allowed it. API keys, the Docker socket and GitHub credentials never enter the
 sandbox.
 
-[[Q1: One or two sentences on status: do you use it daily, on what machine, since when, for how many people?]]
+Status: early; I have just started using it day to day.
 
 ![A chat that started a worker agent; the Agents panel shows its run](docs/img/agents.png)
 
@@ -22,7 +22,6 @@ sandbox.
 | Full-text search across chats | Phone layout (installable as a web app) |
 
 All screenshots were taken against the scripted mock model in `tools/mock-llm` (see the quick start).
-[[Q3: Do you have screenshots of the sandbox, an approval card, the live browser view or Gazeta that show no private data? They show what the mock cannot.]]
 
 </details>
 
@@ -104,7 +103,7 @@ Compose refuses to start while a required secret is empty, and every service ref
 <http://127.0.0.1:3000>, add a provider, and ask for something that needs a shell: the first command shows an approval card.
 
 Instead of building, `deploy/deploy.sh` pulls the images CI publishes for amd64 and arm64, starts them and rolls back a
-service that does not become healthy. [[Q2: Are the ghcr.io/prod-explore/everythingapp-* images public, so that this works without logging in?]]
+service that does not become healthy. The images are public, so this works without logging in.
 
 Before the app is reachable from other machines, read [docs/deployment.md](docs/deployment.md): the reverse proxy
 (`/internal/` must stay private), the egress guard that keeps the browser and sandboxes off your LAN, GitHub access from
