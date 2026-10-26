@@ -1,148 +1,235 @@
 # EverythingApp
 
-[![CI](https://github.com/prod-explore/everything-app/actions/workflows/ci.yml/badge.svg)](https://github.com/prod-explore/everything-app/actions/workflows/ci.yml) ![node](https://img.shields.io/badge/node-22-339933) ![license](https://img.shields.io/badge/license-MIT-blue)
+[![CI](https://github.com/prod-explore/everything-app/actions/workflows/ci.yml/badge.svg)](https://github.com/prod-explore/everything-app/actions/workflows/ci.yml)
 
-A **self-hosted, bring-your-own-key AI workspace** for one person: multi-provider chat, a sandboxed code agent that can browse the web and work with Git, multi-agent delegation behind a cost guard, and a human-in-the-loop inbox. It is built on one rule: **the model is never trusted — only the action layer is.** Any OpenAI-compatible endpoint works, risky actions go through an approval gate, and the code agent runs in a locked-down container that never sees a key.
+A self-hosted AI workspace for one person: chat with any OpenAI-compatible model using your own keys, and let it run
+shell commands in a Docker sandbox, drive a browser, push to GitHub and work on a schedule. Every action with a side effect
+waits for your approval unless you have allowed it. API keys, the Docker socket and GitHub credentials never enter the
+sandbox.
 
-![Chat](docs/img/chat.png)
+[[Q1: One or two sentences on status: do you use it daily, on what machine, since when, for how many people?]]
 
-**Run it in a minute** — Node 22, no Docker, no API key (a mock model stands in for the LLM):
+![A chat that started a worker agent; the Agents panel shows its run](docs/img/agents.png)
 
-```bash
-git clone https://github.com/prod-explore/everything-app && cd everything-app
-(cd cli && npm ci && npm run build) && (cd web && npm ci && npx vite build)
-node tools/mock-llm/server.mjs &                     # fake OpenAI-compatible model on :4010
-cd cli && SERVER_AUTH_TOKEN=$(openssl rand -hex 32) SERVER_PASSWORD=dev KEY_VAULT_SECRET=$(openssl rand -hex 32) node dist/server.js
-```
+<details>
+<summary>More screenshots</summary>
 
-Open <http://localhost:3000>, log in with `dev`, then add the mock provider ([details](#mock-model-no-docker-no-api-key)).
+| | |
+|---|---|
+| ![The agent asks a question with a form and waits for the answer](docs/img/question.png) | ![Settings: one provider, the model slots](docs/img/models.png) |
+| A question from the agent, answered in the chat or later in the inbox | Providers and model slots |
+| ![Search across all chats](docs/img/search.png) | ![The phone layout](docs/img/mobile.png) |
+| Full-text search across chats | Phone layout (installable as a web app) |
 
-<table>
-<tr>
-<td width="50%"><img src="docs/img/question.png" alt="Agent asks a question"><br><sub>Agents ask blocking questions (choices, free text, forms) or park them in the inbox.</sub></td>
-<td width="50%"><img src="docs/img/agents.png" alt="Agents panel"><br><sub>Workers keep their transcript; finished ones stay under <i>Completed</i> and can be resumed.</sub></td>
-</tr>
-<tr>
-<td><img src="docs/img/models.png" alt="Providers and model slots"><br><sub>A provider is a base URL and a key. Chat, helper, agent and escalation models are separate slots.</sub></td>
-<td><img src="docs/img/search.png" alt="Full-text search"><br><sub>SQLite FTS5 search over every message (Ctrl/⌘+K).</sub></td>
-</tr>
-<tr>
-<td><img src="docs/img/slash.png" alt="Slash commands"><br><sub>Slash commands in the composer.</sub></td>
-<td align="center"><img src="docs/img/mobile.png" alt="Mobile layout" width="180"><br><sub>Installable PWA, usable at 390 px.</sub></td>
-</tr>
-</table>
+All screenshots were taken against the scripted mock model in `tools/mock-llm` (see the quick start).
+[[Q3: Do you have screenshots of the sandbox, an approval card, the live browser view or Gazeta that show no private data? They show what the mock cannot.]]
 
-<sub>Screenshots are taken from a seeded local run against a deterministic mock model (`tools/mock-llm`, `tools/screenshots.mjs`), so the replies are canned.</sub>
+</details>
 
 ## What it does
 
-- **Any OpenAI-compatible provider.** A provider is just *base URL + key* — OpenAI, OpenRouter, LM Studio on the LAN, a gateway such as MindGate. There is no vendor SDK and no per-provider code; models are discovered from `GET {base}/models` and can be tagged and overridden. Keys are AES-256-GCM encrypted at rest. Details: [`docs/providers.md`](docs/providers.md).
-- **Model slots and a cost guard.** Separate models for chat, helper (titles, digest), agents and escalation. A chat on a `free` model can only start `free` workers unless paid ones are allowed.
-- **Multi-agent delegation.** `spawn_agent` / `wait_agents` / `send_message` with per-tree budgets, depth and spawn limits and a kill switch. Finished workers keep their transcript and can be resumed.
-- **A sandbox per chat.** A Docker container with no secrets and no `docker.sock` (a project's chats share one). File explorer, a checkpoint before every agent turn and every manual save, rollback, source control and GitHub inside the app.
-- **Web access.** `web_search` (SearXNG or Brave), `web_fetch` (page → markdown, no JavaScript) and a Playwright browser agent (several tabs per chat) with a live view you can take over. A URL the model composed itself needs your approval per domain; private networks are unreachable ([ADR 0012](docs/adr/0012-web-access.md)).
-- **Pictures.** Attached images, and screenshots the browser agent takes, reach models that can see; for a model that cannot, another model describes them first ([ADR 0015](docs/adr/0015-images-and-vision.md)).
-- **Scheduled tasks.** An agent that runs on a cron timetable — or once, or a few times — with nobody watching (“every morning, look for new job offers”) and leaves its result in Gazeta. What needs approval is the same approval card as in a chat, listed in Gazeta; the task either waits for the answer for a set time or goes on without the call. In an ordinary chat the agent can also wake itself up later (`schedule_wakeup`, no approval) or create a scheduled task (with approval) ([ADR 0016](docs/adr/0016-scheduled-tasks.md)).
-- **Human in the loop.** Approval cards, blocking and asynchronous questions (the *Gazeta* inbox), `policy.json` for always-allow / always-block, and webhooks (ntfy, Discord, Slack…) when something waits for you.
-- **Ghost mode.** A chat or project that never leaves the machine: only models marked local, no web or browser tools. Chosen at creation and impossible to change afterwards — enforced by the database ([ADR 0013](docs/adr/0013-ghost-mode.md)).
-- **Long conversations.** A context meter, automatic and manual compaction (older messages become a summary for the model and stay visible), reasoning-effort control, plan proposals the model must get approved, and a task list it keeps.
-- **Everyday polish.** Full-text search, Markdown/JSON export, message branching, quoting a selection, slash commands, skills (reusable instructions with their own tool allow-list, auto-approved only for the turns they are attached to), PWA.
-- **Operable.** Consistent online backups, retention, schema versions and a network-layer egress guard for the browser ([ADR 0014](docs/adr/0014-data-lifecycle.md), [`deploy/`](deploy)).
+- **Any model behind an OpenAI-compatible API.** A provider is a base URL and a key: OpenAI, OpenRouter, a gateway, Ollama,
+  vLLM or LM Studio on your LAN. Models come from the provider's `/models` list, and a chat can switch models at any point
+  because history is stored in one format of the app's own. Models that cannot call tools are not offered.
+  [Providers, models and slots](docs/providers.md).
+- **A sandbox per project.** One container per project (or per standalone chat) with a persistent `/workspace`: a shell,
+  git, terminals, a file explorer, a Source Control panel, and a checkpoint before every turn that you can roll back to.
+- **Approvals as cards.** Shell commands are judged one sub-command at a time; anything not allowed by a rule or an earlier
+  grant shows a card: allow once, for this chat, for this project, or always. Destructive-looking calls always ask.
+- **Web access.** `web_search` (SearXNG or Brave) and `web_fetch`, plus a Chromium the agent drives and you can watch or
+  take over. A new domain asks before the first request to it.
+- **Worker agents.** The assistant can start workers with a subset of its own tools, wait for them and message them,
+  within depth, count, step and token limits.
+- **An inbox (Gazeta).** Questions the agent asks you, reports it posts, approvals that are waiting, and a daily digest.
+  A webhook (ntfy, Discord, Slack) can tell your phone that something is waiting.
+- **Scheduled tasks.** A prompt plus a cron expression or a moment; each run is an ordinary chat and its answer lands in
+  the inbox. The agent can also wake itself up later in the same chat.
+- **Ghost chats.** Chats and projects that only ever talk to models marked as running on your own hardware, without web,
+  browser or third-party connectors. The flag cannot be turned off once set.
+- **Connectors.** Any MCP server, added by URL in Settings.
 
-Single-user by design: one password, no accounts.
+## Try it locally
 
-## Architecture
+This runs the web app as a plain chat (no sandbox, no browser) against a scripted model, so nothing needs an API key or
+Docker. Requires Node.js 22 (`better-sqlite3` compiles from source where no prebuilt binary exists, which needs Python and a
+C++ toolchain).
+
+```sh
+git clone https://github.com/prod-explore/everything-app.git
+cd everything-app
+(cd web && npm ci && npm run build)
+(cd cli && npm ci && npm run build)
+
+# A scripted OpenAI-compatible model on 127.0.0.1:4010. No key, no network.
+node tools/mock-llm/server.mjs &
+
+cd cli
+cat > .env <<EOF
+SERVER_AUTH_TOKEN=$(openssl rand -hex 32)
+SERVER_PASSWORD=pick-a-password
+KEY_VAULT_SECRET=$(openssl rand -hex 32)
+EOF
+npm run server
+```
+
+Open <http://127.0.0.1:3000>, log in with the password, and add a provider in *Settings → Models → + Add provider* with the
+base URL `http://127.0.0.1:4010/v1` and no key. Then try `long`, `todo`, `ask: which database?`, `plan: add a login page`
+or `spawn`; the header of [`tools/mock-llm/server.mjs`](tools/mock-llm/server.mjs) lists every scripted reply. Add a real
+provider the same way when you want real answers.
+
+The server binds to `127.0.0.1` and stores its data in `~/.everythingapp` (`EVERYTHINGAPP_DB_PATH` moves the database).
+[`cli/.env.example`](cli/.env.example) documents every variable.
+
+## Run the full stack
+
+The sandbox, the browser and GitHub access need Docker. On a Linux host with Docker Compose:
+
+```sh
+cp .env.example .env
+for k in MCP_API_KEY PLAYWRIGHT_MCP_API_KEY SUPERVISOR_TOKEN GIT_PROXY_ADMIN_TOKEN SERVER_AUTH_TOKEN KEY_VAULT_SECRET; do
+  sed -i "s/^$k=$/$k=$(openssl rand -hex 32)/" .env
+done
+sed -i "s/^SERVER_PASSWORD=$/SERVER_PASSWORD=pick-a-password/" .env
+sed -i "s/^DOCKER_GID=.*/DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)/" .env
+
+docker build -t everything-sandbox:latest ./sandbox-supervisor/sandbox-image/
+docker compose up -d --build
+```
+
+Compose refuses to start while a required secret is empty, and every service refuses a weak one. Open
+<http://127.0.0.1:3000>, add a provider, and ask for something that needs a shell: the first command shows an approval card.
+
+Instead of building, `deploy/deploy.sh` pulls the images CI publishes for amd64 and arm64, starts them and rolls back a
+service that does not become healthy. [[Q2: Are the ghcr.io/prod-explore/everythingapp-* images public, so that this works without logging in?]]
+
+Before the app is reachable from other machines, read [docs/deployment.md](docs/deployment.md): the reverse proxy
+(`/internal/` must stay private), the egress guard that keeps the browser and sandboxes off your LAN, GitHub access from
+sandboxes, backups and sizing.
+
+## How it works
 
 ```mermaid
 flowchart LR
-  subgraph Browser
-    UI[React 19 PWA<br/>REST · SSE · WebSocket]
+  user([Browser / phone]) -- "HTTPS, session cookie" --> web
+
+  subgraph host [Docker host]
+    web["everythingapp-web<br/>agent loop, approval gate,<br/>SQLite, key vault, UI"]
+    sup["sandbox-supervisor<br/>(only holder of docker.sock)"]
+    smcp[sandbox-mcp]
+    gp["git-proxy<br/>(injects the GitHub credential)"]
+    pw["playwright-mcp<br/>(Chromium)"]
+    sb1[["sandbox: project A"]]
+    sb2[["sandbox: project B"]]
   end
-  subgraph Orchestrator["Orchestrator (Node, Express 5)"]
-    API[HTTP API<br/>session cookie]
-    LOOP[Agent loop<br/>tool registry]
-    GATE[Approval gate<br/>+ policy.json]
-    ROUTER[Provider router<br/>model catalog · key vault · retry]
-    AGENTS[Agent manager<br/>budgets · cost guard]
-    DB[(SQLite · FTS5)]
-  end
-  subgraph Isolated["Isolated Docker networks"]
-    SUP[sandbox-supervisor] --> SBX[(sandbox<br/>container)]
-    PW[playwright-mcp<br/>browser agent]
-    GP[git-proxy<br/>scoped tokens]
-  end
-  UI <--> API
-  API --- DB
-  API --> LOOP --> ROUTER --> LLM{{"LLM providers<br/>OpenAI-compatible: cloud · gateway · local"}}
-  LOOP --> GATE --> TOOLS["Tools: sandbox · browser · web · connectors"]
-  LOOP --> AGENTS --> LOOP
-  TOOLS --> SUP
-  TOOLS --> PW
-  SBX -. git over HTTP, no credentials .-> GP --> GH[(github.com)]
-  GP -- push approval --> GATE
+
+  web -- MCP --> smcp -- HTTP --> sup
+  web -- "files, checkpoints" --> sup
+  sup -- "docker.sock" --> sb1 & sb2
+  web -- "MCP, live view" --> pw
+  sb1 & sb2 -- "git, proxy token" --> gp
+  gp -- "approval, credential" --> web
+  gp --> github[(github.com)]
+  web --> llm[(Model providers)]
+  pw --> internet[(Public internet)]
+  sb1 & sb2 --> internet
 ```
 
-| Package | Role |
-|---|---|
-| [`cli`](cli) | The orchestrator: HTTP API, agent loop, provider router, approval gate, SQLite. Serves the built UI. |
-| [`web`](web) | The React UI ([notes](web/README.md)). |
-| [`sandbox-supervisor`](sandbox-supervisor) | The only component that talks to Docker: container lifecycle, exec, files, volumes. |
-| [`sandbox-mcp`](sandbox-mcp) | The sandbox's tools (shell, git, checkpoints, terminals) as an MCP server in front of the supervisor. |
-| [`playwright-mcp`](playwright-mcp) | Browser agent: domain policy, SSRF guard, deterministic page filtering, live view. |
-| [`git-proxy`](git-proxy) | Holds the GitHub credentials the sandbox never sees: scoped tokens, repo binding, push approval, audit. |
-| [`tools/mock-llm`](tools/mock-llm) | Deterministic fake model used for the quickstart, tests and screenshots. |
+The web service (`cli/`, Express 5 and SQLite) is the orchestrator: it runs the agent loop, asks for approvals, stores
+everything and serves the React UI from `web/`. Tools come from MCP servers. Two of them ship in this repository: the
+sandbox (`sandbox-mcp` in front of `sandbox-supervisor`) and the browser (`playwright-mcp`). The rest of the stack exists so
+that the process holding your keys never runs agent code and the processes running agent code hold no keys.
 
-Design decisions are written down as sixteen short ADRs in [`docs/adr`](docs/adr) (message format, policy as a file, sandbox and Git credentials, sessions, the provider catalog, context management, hardening, web access, ghost mode, data lifecycle, images, scheduled tasks…); two are marked superseded.
+| Directory | What it is |
+|---|---|
+| [`cli/`](cli) | Orchestrator: HTTP API, SSE, agent loop, approval gate, provider adapter, scheduler, MCP client |
+| [`web/`](web) | React 19 UI ([web/README.md](web/README.md)) |
+| [`sandbox-supervisor/`](sandbox-supervisor) | Creates, stops and limits sandbox containers; checkpoints, terminals, file reads |
+| [`sandbox-mcp/`](sandbox-mcp) | MCP tools `run_bash`, `git_op`, `read_log`, `checkpoint_list`, `rollback`, terminals |
+| [`playwright-mcp/`](playwright-mcp) | Browser agent tools, live view, URL guard |
+| [`git-proxy/`](git-proxy) | Git smart-HTTP proxy to github.com ([git-proxy/README.md](git-proxy/README.md)) |
+| [`deploy/`](deploy) | Update with rollback, backup, egress guard, nginx example |
+| [`docs/adr/`](docs/adr) | Architecture decision records |
+
+### Decisions that shaped it
+
+- **One wire format, no vendor SDKs.** Messages are stored as the app's own content blocks; one adapter speaks
+  chat-completions to every provider. Any chat continues on any model. The cost: provider quirks belong in a gateway in front
+  of the provider, and vendor-only features (prompt caching breakpoints, batch APIs, server-side search) are not used.
+  [ADR 0001](docs/adr/0001-canonical-message-format.md), [ADR 0008](docs/adr/0008-unified-provider-catalog.md).
+- **Approve commands, not tools.** An "always" on `run_bash` would let every command through, so the command policy splits
+  a command line into sub-commands (`a && b | $(c)`) and the whole line is only as permitted as its least permitted part.
+  This is a gate in front of the sandbox, not the boundary: the container is. [command-policy.ts](cli/src/command-policy.ts).
+- **Text-file edits need no approval.** `read_file`, `edit_file` and `write_file` only reach the chat's own `/workspace`,
+  never `.git`, and a checkpoint is taken before each turn, so the safety net is the rollback, not a click per edit.
+  [ADR 0010](docs/adr/0010-file-tools-and-connectors.md).
+- **Loosening policy needs file access.** Always-allow and always-block lists live in `policy.json` next to the database
+  (re-read on change), not in the UI, so a prompt-injected agent cannot talk you into a settings change.
+  [ADR 0002](docs/adr/0002-policy-file-not-ui.md).
+- **No model between a web page and the agent.** Page text is sanitised, cut to length, wrapped as untrusted data and scored
+  by a deterministic injection heuristic; a flagged page makes every following side effect ask again. Approval is per
+  domain, and `web_fetch` opens without asking only addresses the user typed or a search returned, so the model cannot send
+  data to an address it composed. [ADR 0012](docs/adr/0012-web-access.md).
+- **Ghost is a database invariant.** A trigger rejects any update of the ghost flag, and "local" must be stated positively
+  (by you or by the provider), never inferred. [ADR 0013](docs/adr/0013-ghost-mode.md).
+- **Unattended runs use the same gate.** A scheduled run can do what you already allowed; anything else is refused or waits
+  in the inbox for a set time. [ADR 0016](docs/adr/0016-scheduled-tasks.md).
 
 ## Security model
 
-The model is treated as an untrusted component. The boundary is the **action layer**, not the prompt.
+What the design claims, and what [SECURITY.md](SECURITY.md) treats as a vulnerability when broken:
 
-1. **Approval gate.** Shell commands, domains the model picked itself, pushes and other side effects become approval cards; grants are scoped (this call / this project / this prefix). Shell commands go through a policy engine (`strict`, `allowlist`, `auto`) and destructive patterns are always blocked. Text-file edits inside the workspace need no approval: a checkpoint is taken first and every edit is audited ([ADR 0010](docs/adr/0010-file-tools-and-connectors.md)).
-2. **No secrets in the sandbox.** The container has no API keys, no `docker.sock`, no database. Git goes through `git-proxy`, which holds the token, mints short-lived scoped tokens and asks a human before any push to a protected branch ([ADR 0003](docs/adr/0003-sandbox-and-git-credentials.md)).
-3. **Untrusted web content, no model in between.** Pages and search results are sanitised by code (invisible Unicode stripped), wrapped as untrusted data and scored by a deterministic injection heuristic; a flagged page makes every later effectful call ask again. Reading a file and sending it to a new site takes a click.
-4. **SSRF guard in two layers.** The URL checks in `cli` and `playwright-mcp` refuse private, link-local and metadata addresses; [`deploy/egress-guard.sh`](deploy/egress-guard.sh) enforces the same at the network layer for the browser's Docker bridge.
-5. **Sessions.** Password login, HttpOnly cookie, no token in `localStorage` or URLs; WebSocket and SSE accept the cookie (or a Bearer header) and reject cross-origin upgrades. Failed logins are throttled.
-6. **Service secrets.** Every service-to-service token must be generated; services refuse to start with a placeholder, a short or a repetitive value ([ADR 0011](docs/adr/0011-hardening.md)). The web, git-proxy and sandbox-mcp containers drop all capabilities and set `no-new-privileges`; published ports bind to `127.0.0.1` unless you change `GIT_PROXY_BIND` on purpose.
-7. **Audit log and policy as a file.** Approvals, grants, pushes and file edits are recorded. Allow/block lists live in a hot-reloaded `policy.json`, not in a UI an agent could be talked into editing ([ADR 0002](docs/adr/0002-policy-file-not-ui.md)).
+- **Sandbox isolation.** Sandboxes run as uid 1000 with all capabilities dropped, `no-new-privileges`, Docker's default
+  seccomp profile, a read-only root filesystem, memory, CPU and process limits, no host mounts and no Docker socket
+  ([docker.ts](sandbox-supervisor/src/docker.ts)). They sit on their own bridge with container-to-container traffic off.
+  gVisor is optional (`SANDBOX_RUNTIME=runsc`).
+- **No secrets in the sandbox.** Provider keys are encrypted with AES-256-GCM in the database, under `KEY_VAULT_SECRET`
+  from the environment. The sandbox gets neither, nor a GitHub credential: git authenticates to git-proxy with a short-lived
+  token bound to the project, and git-proxy adds the real credential on the way to GitHub.
+- **No private network from the agent.** `web_fetch` checks the resolved address at connection time (DNS rebinding cannot
+  switch it), and the browser refuses private, loopback, link-local and metadata addresses. `deploy/egress-guard.sh` enforces
+  the same at the network layer for the browser and the sandboxes.
+- **Authentication everywhere.** The UI uses an HttpOnly, `SameSite=Strict` session cookie (only its hash is stored); the
+  API also takes a bearer token for scripts. Each internal service has its own token, compared in constant time. Services
+  refuse weak secrets at startup, and every port is published on `127.0.0.1` only.
+- **Side effects need a human or a rule.** Tools are default-deny except a short list of read-only and browser tools. The
+  decision, by rule, grant or person, is written to an audit log.
 
-## Running it
+Not covered: an operator who weakens the setup, what a model does within limits a person approved, and a hostile page on a
+domain you allowed, which can still receive data the agent sends it. A sandbox can reach the public internet; commands that
+do so ask first, but once approved they run.
 
-### Mock model (no Docker, no API key)
+## Known limits
 
-The commands are at the top of this page; they run the whole UI against the mock model. After logging in with the password `dev`, open **Settings → Models → + Add provider**: slug `mock`, base URL `http://127.0.0.1:4010/v1`, any key of 8 or more characters. The mock's models appear after the list loads; it reports them as local, so ghost chats work too. Try `ask: which database?`, `report`, `spawn`, `plan: refactor`, `todo`, `long`. The server listens on `127.0.0.1` only (`LISTEN_HOST=0.0.0.0` opens it to the network), the port is `PORT` (3000), and data goes to `~/.everythingapp/` (`EVERYTHINGAPP_DB_PATH` overrides the database path). There is no sandbox or browser in this mode; the full stack below adds them.
-
-### Full stack (sandbox, browser, Git)
-
-```bash
-cp .env.example .env     # set DOCKER_GID and every secret (openssl rand -hex 32):
-                         # KEY_VAULT_SECRET, SERVER_AUTH_TOKEN, MCP_API_KEY,
-                         # PLAYWRIGHT_MCP_API_KEY, SUPERVISOR_TOKEN, GIT_PROXY_ADMIN_TOKEN
-deploy/deploy.sh         # pulls the published images (amd64 and arm64), starts them, checks they are healthy
-```
-
-The images come from the [Images workflow](.github/workflows/images.yml) (GitHub Container Registry, `ghcr.io/prod-explore/everythingapp-*`), so nothing is compiled on the host. To build from source instead: `docker build -t everything-sandbox:latest ./sandbox-supervisor/sandbox-image/ && docker compose up --build`.
-
-**Updating.** `deploy/deploy.sh` is the whole procedure: it remembers the image each service runs, pulls the new ones, restarts the services and waits for their health checks; a service that does not become healthy is put back on its previous image and the script exits non-zero. `deploy/deploy.sh sha-1a2b3c4` deploys (or rolls back to) a given build, `deploy/deploy.sh latest everythingapp-web` only some services. Data lives in volumes and is not touched.
-
-The app listens on `127.0.0.1:3000`. To put it behind HTTPS, copy [`deploy/nginx-everythingapp.conf.example`](deploy/nginx-everythingapp.conf.example) (it also blocks `/internal/*`); if your reverse proxy is a container on its own Docker network, [`deploy/docker-compose.override.example.yml`](deploy/docker-compose.override.example.yml) joins the web container to it. On a Linux host, also install the egress guard that keeps the browser's and the sandboxes' networks away from your LAN (`deploy/egress-guard.sh`, `deploy/ea-egress-guard.service`).
-
-**Backups.** `deploy/backup.sh [dir] [keep]` takes a consistent copy of the database from the running stack (cron it); restoring is `db-backup.js restore <file> --yes` with the server stopped. The copy holds all chats and the encrypted provider keys — keep `KEY_VAULT_SECRET` separately and encrypt the file before it leaves the machine. Usage and audit rows older than `RETENTION_MONTHS` (12) are removed daily.
+- **One user.** One password, no accounts or roles.
+- **Tool-calling models only**, over chat-completions. No prices are tracked, only tokens; spending limits belong to the
+  provider or gateway.
+- **Runs are not resumed.** A restart marks running turns and workers as interrupted. git-proxy keeps its tokens in memory,
+  so a restart revokes them (the orchestrator issues new ones).
+- **GitHub only** for git through the proxy. Signed pushes are refused; force pushes are not always detectable (see
+  [git-proxy/README.md](git-proxy/README.md#limitations-v1)).
+- **Checkpoints skip nested repositories** inside the workspace (git records them as gitlinks).
+- **`web_fetch` reads HTML, JSON and text only**, and runs no JavaScript; the browser covers the rest. Browser profiles are
+  ephemeral, so logins do not persist.
+- **The network guard is IPv4 iptables on Linux.**
+- **A ghost chat is only as local as its labels.** A provider or gateway that marks a cloud model as local defeats it.
+- **Schedules do not run while the app is down.** A slot missed by up to two hours runs late; older ones are skipped.
 
 ## Development
 
-```bash
-cd cli && npm ci && npm test            # node:test, in-memory SQLite, fake providers
-cd git-proxy && npm ci && npm test
-cd sandbox-mcp && npm ci && npm test
-cd sandbox-supervisor && npm ci && npm test
-cd playwright-mcp && npm ci && npm test
-cd web && npm ci && npm run typecheck && npm run lint && npm test && npm run build
+Each directory is its own npm package; there is no workspace tool. CI runs, per package:
+
+```sh
+cd cli && npm ci && npm test              # same for git-proxy, sandbox-mcp, sandbox-supervisor, playwright-mcp
+cd web && npm ci && npx tsc -b && npm run lint && npm test && npx vite build
 ```
 
-In the five Node packages `npm test` compiles with `tsc` first, so it is also the typecheck (`npm run build` writes `dist/`).
+Backend tests use `node:test` with fakes in place of the model, Docker and the browser, so they need no Docker daemon, no
+Chromium download and no API key (CI runs them with `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`). For UI work, run
+`npm run dev` in `web/` (Vite on port 5173, proxying `/api` to `http://localhost:3000`) next to the server from the quick
+start. CI also validates the compose file, runs `npm audit` on runtime dependencies, builds every Docker image and runs
+CodeQL and gitleaks ([workflows](.github/workflows)).
 
-Over 1,190 tests across the six packages (1,193 at the last count: the `# tests` totals of `node --test` in five packages plus the Vitest total in `web`). CI runs all of the above on every push to `main` and on every pull request, validates the compose file, builds every Docker image (the five services and the sandbox image), runs `npm audit --omit=dev --audit-level=high` in all six packages (high and critical fail the build), CodeQL and a secret scan. The web package lints with `oxlint --deny-warnings`. Security reports: [`SECURITY.md`](SECURITY.md).
+`tools/screenshots.mjs` regenerates `docs/img/` against the mock model.
 
 ## License
 
