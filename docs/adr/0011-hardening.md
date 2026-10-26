@@ -19,7 +19,7 @@ An audit of phase E (2026-10-13) found weaknesses around the code rather than in
 3. **No credentials in URLs**: SSE and the live-view WebSocket accept the session cookie or a Bearer header only.
 4. **Constant-time key comparison** in sandbox-mcp and playwright-mcp.
 5. **Subagents get `read_file` / `edit_file` / `write_file` by delegation**: the parent names them in `spawn_agent` `tools` like any other tool, and can only delegate what it has (chats without a sandbox have none). Same audit trail as the main assistant.
-6. **Deployment**: nginx example blocks `/internal/`, forwards WebSocket upgrades and SSE correctly, limits request size and login attempts. Compose services get memory/CPU/pids limits; plain Node services also drop all capabilities and set `no-new-privileges`. Node 22 everywhere; the Playwright image tag is an `ARG` that a test keeps equal to the locked `playwright` version.
+6. **Deployment**: nginx example blocks `/internal/`, forwards WebSocket upgrades and SSE correctly, limits request size and login attempts. Compose services get memory/CPU/pids limits; plain Node services and playwright-mcp (whose Chromium runs with `--no-sandbox`, so the container is the boundary) also drop all capabilities and set `no-new-privileges`. Node 22 everywhere; the Playwright image tag is an `ARG` that a test keeps equal to the locked `playwright` version.
 7. **CI**: read-only token permissions, `npm audit --omit=dev --audit-level=high` per package, a Docker build of every image, CodeQL, gitleaks.
 
 ## Consequences

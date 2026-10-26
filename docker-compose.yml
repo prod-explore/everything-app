@@ -160,6 +160,9 @@ services:
     mem_limit: 2g
     cpus: 2
     pids_limit: 1024
+    # Chromium runs with --no-sandbox (see playwright-mcp/src/browserContext.ts); this container is the boundary instead.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
 
   # git smart-HTTP proxy to github.com. Sandboxes push/pull through it with short-lived proxy

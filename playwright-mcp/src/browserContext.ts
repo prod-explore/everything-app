@@ -47,6 +47,9 @@ export function pushEvent(state: SessionState, ev: string): void {
  */
 export function chromiumLaunchArgs(): string[] {
   return [
+    // Chromium's own sandbox cannot start here: the container runs as a non-root user with every capability dropped
+    // and no-new-privileges (no user namespaces, no setuid helper). Isolation comes from the container itself and the
+    // network egress guard (deploy/egress-guard.sh) instead.
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage', // Docker's default /dev/shm (64 MB) is too small for Chromium
