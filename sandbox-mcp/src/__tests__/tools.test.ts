@@ -3,30 +3,30 @@ import assert from 'node:assert/strict';
 import { ownerOf } from '../tools/types.js';
 import { formatRunResult } from '../tools/runBash.js';
 import { formatCheckpoints } from '../tools/checkpoints.js';
+import { ALLOWED_SUBCOMMANDS, registerGitOp } from '../tools/gitOp.js';
 import { SupervisorClient } from '../supervisor-client.js';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 describe('git_op subcommand whitelist invariants', () => {
-  const ALLOWED = new Set([
-    'clone', 'status', 'diff', 'log', 'add', 'commit',
-    'push', 'pull', 'fetch', 'checkout', 'branch', 'stash', 'show',
-  ]);
+  const allowed = new Set<string>(ALLOWED_SUBCOMMANDS);
 
-  it('rm is NOT in the allowed subcommands', () => {
-    assert.equal(ALLOWED.has('rm'), false);
+  it('never offers subcommands that delete files or push', () => {
+    // push needs a credential and a human approval; it happens in git-proxy, never from the sandbox tool.
+    for (const sub of ['rm', 'clean', 'push', 'reset', 'filter-branch', 'gc', 'config']) assert.equal(allowed.has(sub), false, sub);
   });
 
-  it('clean is NOT in the allowed subcommands', () => {
-    assert.equal(ALLOWED.has('clean'), false);
+  it('offers the everyday subcommands', () => {
+    for (const sub of ['status', 'diff', 'log', 'add', 'commit']) assert.equal(allowed.has(sub), true, sub);
   });
 
-  it('commit IS in the allowed subcommands', () => {
-    assert.equal(ALLOWED.has('commit'), true);
-  });
-
-  it('push IS in the allowed subcommands', () => {
-    assert.equal(ALLOWED.has('push'), true);
+  it('the registered tool schema enforces exactly that list', () => {
+    let schema: Record<string, { safeParse(v: unknown): { success: boolean } }> | undefined;
+    const server = { tool: (_name: string, _description: string, shape: typeof schema) => { schema = shape; } };
+    registerGitOp(server as unknown as Parameters<typeof registerGitOp>[0], {} as Parameters<typeof registerGitOp>[1]);
+    assert.ok(schema);
+    for (const sub of ALLOWED_SUBCOMMANDS) assert.equal(schema['subcommand']!.safeParse(sub).success, true, sub);
+    for (const sub of ['push', 'rm', 'clean', 'status; rm -rf /']) assert.equal(schema['subcommand']!.safeParse(sub).success, false, sub);
   });
 });
 

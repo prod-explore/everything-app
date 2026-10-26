@@ -4,7 +4,7 @@ import { ok, fail, ownerIds, ownerOf, ToolContext } from './types.js';
 
 // The subcommands a coding agent needs. `push` is deliberately excluded: pushing needs a credential and a human approval, and git
 // credentials never enter the sandbox (they stay in git-proxy).
-const ALLOWED_SUBCOMMANDS = [
+export const ALLOWED_SUBCOMMANDS = [
   'clone',
   'status',
   'diff',
