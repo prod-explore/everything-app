@@ -14,6 +14,7 @@ import {
   extractCommand,
   parseCommandPolicy,
   commandGrantLabel,
+  grantable,
   type SubcommandVerdict,
 } from './command-policy.js';
 import { mergeCommandPolicy, type PolicyStore } from './policy-file.js';
@@ -69,7 +70,8 @@ export function looksDangerous(args: Record<string, unknown>): boolean {
  *
  * Note: dangerous calls are always forced to 'once' regardless of what the
  * client sends — granting 'always' for a tool never covers destructive variants
- * of that tool.
+ * of that tool. Destructive shell commands (rm, git reset, git push, kill…) are
+ * capped at 'chat', and only a chat grant covers them.
  */
 export type ApprovalScope = 'once' | 'chat' | 'project' | 'always';
 
@@ -83,6 +85,10 @@ export interface PendingApproval {
   timeoutMs?: number; // undefined = no timeout
   /** Shell tools: the per-sub-command verdicts (what the card shows, and which prefixes a non-once approval grants). */
   commands?: SubcommandVerdict[];
+  /** Shell tools: the command prefixes a "for this chat" / "always" approval covers (`git commit` = every `git commit …`). */
+  covers?: string[];
+  /** 'chat' when a sub-command is destructive: the approval can be remembered for this chat at most. */
+  maxScope?: 'chat';
   /** Why this call must be approved by hand even though a grant/policy might cover it. */
   warning?: string;
   projectId?: string;
@@ -165,8 +171,9 @@ export class WebApprovalGate {
       const projectHasMode = !!projectRaw && typeof projectRaw === 'object' && 'mode' in (projectRaw as object);
       const policy = this.policyFile ? mergeCommandPolicy(this.policyFile.get().commands, projectPolicy, projectHasMode) : projectPolicy;
       const chatSet = this.chatAllowed.get(conversationId);
-      const verdict = evaluateCommand(command, policy, prefix =>
-        !!chatSet?.has(commandGrantLabel(prefix)) || !!findMatchingGrant(this.db, commandGrantLabel(prefix), grantCtx));
+      const verdict = evaluateCommand(command, policy, (prefix, { chatOnly }) =>
+        !!chatSet?.has(commandGrantLabel(prefix)) ||
+        !!findMatchingGrant(this.db, commandGrantLabel(prefix), chatOnly ? { ...grantCtx, scopes: ['chat'] } : grantCtx));
       if (verdict.decision === 'deny') {
         audit('policy_denied');
         const blocked = verdict.subcommands.filter(s => s.decision === 'deny').map(s => s.command);
@@ -193,12 +200,22 @@ export class WebApprovalGate {
     const entry: PendingApproval = {
       id, conversationId, projectId: ctx?.projectId, toolLabel, args, dangerous, createdAt: new Date().toISOString(), timeoutMs, commands, warning: ctx?.forcePrompt,
     };
+    if (commands) {
+      if (!dangerous) entry.covers = this.grantLabels(entry).map(l => l.slice(commandGrantLabel('').length));
+      if (commands.some(c => c.decision === 'ask' && c.destructive)) entry.maxScope = 'chat';
+    }
     const who = ctx?.origin ? `Scheduled task "${ctx.origin}"` : 'A scheduled run';
 
     if (unattended && waitSeconds === 0) {
       // Nobody is there and the run does not wait: refuse now, but leave the request in the list (Gazeta) so "Always" can still help the next run.
       audit('unattended_denied');
-      this.leaveForLater({ ...entry, late: true, note: `${who} did not wait for this and went on without it. Choose "Always" to let it do this on its next runs.` });
+      this.leaveForLater({
+        ...entry,
+        late: true,
+        note: entry.maxScope === 'chat'
+          ? `${who} did not wait for this and went on without it. It is destructive, so it can only be approved while a run waits for it.`
+          : `${who} did not wait for this and went on without it. Choose "Always" to let it do this on its next runs.`,
+      });
       return {
         approved: false,
         reason: 'this scheduled run does not wait for approvals, so the call was refused (the request is in the user\'s Gazeta for next time). Carry on without it and say in your final answer what you could not do',
@@ -290,6 +307,8 @@ export class WebApprovalGate {
   ): boolean {
     const p = this.pending.get(id);
     if (!p) return false;
+    // A destructive command is remembered for this chat at most, whatever the client sent.
+    if (p.entry.maxScope === 'chat' && (scope === 'project' || scope === 'always')) scope = 'chat';
     // The run of a late request is long gone: only a standing grant means anything.
     if (p.entry.late && scope !== 'always') scope = 'once';
     if (approved && !p.entry.dangerous) {
@@ -320,7 +339,7 @@ export class WebApprovalGate {
   grantLabels(req: { toolLabel: string; dangerous: boolean; commands?: SubcommandVerdict[] }): string[] {
     if (req.dangerous) return [];
     return req.commands
-      ? [...new Set(req.commands.filter(c => c.decision === 'ask' && c.prefix && c.prefix !== '__SUBST__').map(c => commandGrantLabel(c.prefix)))]
+      ? [...new Set(req.commands.filter(grantable).map(c => commandGrantLabel(c.prefix)))]
       : [req.toolLabel];
   }
 

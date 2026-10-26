@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, Shield } from 'lucide-react';
 import type { ApprovalScope, PendingApproval } from '../../types';
 import { Button } from '../shared/Button';
+import { GrantCoverage } from './GrantCoverage';
 
 /**
  * Approval modal with 4-scope picker:
@@ -32,15 +33,17 @@ export function ApprovalModal({
   projectId?: string;
 }) {
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
+  // A destructive command can be remembered for this chat at most.
+  const wide = approval.maxScope !== 'chat';
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') { onRespond(false, 'once'); return; }
       if (scopePickerOpen) {
         if (e.key === 'Enter' || e.key === '1') { onRespond(true, 'once'); return; }
-        if ((e.key === 'a' || e.key === 'A' || e.key === '4') && !approval.dangerous) { onRespond(true, 'always'); return; }
+        if ((e.key === 'a' || e.key === 'A' || e.key === '4') && !approval.dangerous && wide) { onRespond(true, 'always'); return; }
         if ((e.key === 'c' || e.key === 'C' || e.key === '2') && !approval.dangerous) { onRespond(true, 'chat'); return; }
-        if ((e.key === 'p' || e.key === 'P' || e.key === '3') && !approval.dangerous && projectId) {
+        if ((e.key === 'p' || e.key === 'P' || e.key === '3') && !approval.dangerous && wide && projectId) {
           onRespond(true, 'project', { projectId });
           return;
         }
@@ -54,7 +57,7 @@ export function ApprovalModal({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onRespond, scopePickerOpen, approval.dangerous, projectId]);
+  }, [onRespond, scopePickerOpen, approval.dangerous, wide, projectId]);
 
   const dangerBorder = approval.dangerous ? 'border-danger' : 'border-border';
   const dangerBg = approval.dangerous ? 'bg-danger/5' : '';
@@ -98,13 +101,7 @@ export function ApprovalModal({
                 </span>
               </div>
             ))}
-            {scopePickerOpen && (
-              <p className="pt-1 text-xs text-fg-tertiary">
-                Remembering this grants the prefixes{' '}
-                {[...new Set(approval.commands.filter(c => c.decision === 'ask').map(c => c.prefix))].map(p => <code key={p} className="mr-1 font-mono text-fg">{p}</code>)}
-                — not the whole shell.
-              </p>
-            )}
+            {scopePickerOpen && <GrantCoverage approval={approval} scopes="Remembering this" />}
           </div>
         ) : (
           <pre className="mb-4 max-h-48 overflow-auto rounded-lg bg-bg p-3 font-mono text-xs text-fg-secondary">
@@ -152,7 +149,7 @@ export function ApprovalModal({
               <span className="font-medium text-fg">Approve for this chat</span>
               <span className="ml-2 text-xs text-fg-tertiary">(2 / C) — rest of this conversation</span>
             </button>
-            {projectId && (
+            {projectId && wide && (
               <button
                 className="w-full rounded-button border border-border bg-bg px-4 py-2 text-left text-sm hover:border-border-hover"
                 onClick={() => onRespond(true, 'project', { projectId })}
@@ -161,13 +158,15 @@ export function ApprovalModal({
                 <span className="ml-2 text-xs text-fg-tertiary">(3 / P) — all chats in project</span>
               </button>
             )}
-            <button
-              className="w-full rounded-button border border-border bg-bg px-4 py-2 text-left text-sm hover:border-border-hover"
-              onClick={() => onRespond(true, 'always')}
-            >
-              <span className="font-medium text-fg">Always approve</span>
-              <span className="ml-2 text-xs text-fg-tertiary">({projectId ? '4' : '3'} / A) — saved permanently</span>
-            </button>
+            {wide && (
+              <button
+                className="w-full rounded-button border border-border bg-bg px-4 py-2 text-left text-sm hover:border-border-hover"
+                onClick={() => onRespond(true, 'always')}
+              >
+                <span className="font-medium text-fg">Always approve</span>
+                <span className="ml-2 text-xs text-fg-tertiary">({projectId ? '4' : '3'} / A) — saved permanently</span>
+              </button>
+            )}
             <Button variant="ghost" className="mt-1 w-full" onClick={() => onRespond(false, 'once')}>
               Deny (Esc)
             </Button>

@@ -1179,12 +1179,13 @@ export function deleteApprovalGrant(db: Database.Database, id: string): boolean 
 export function findMatchingGrant(
   db: Database.Database,
   toolLabel: string,
-  opts?: { conversationId?: string; projectId?: string; modelId?: string; skillId?: string }
+  opts?: { conversationId?: string; projectId?: string; modelId?: string; skillId?: string; scopes?: ApprovalGrantRow['scope'][] }
 ): ApprovalGrantRow | null {
   const grants = listApprovalGrants(db, { toolLabel });
   
   for (const grant of grants) {
     if (grant.expiresAt && new Date(grant.expiresAt) < new Date()) continue;
+    if (opts?.scopes && !opts.scopes.includes(grant.scope)) continue;
     
     let matches = false;
     if (grant.scope === 'always') matches = true;

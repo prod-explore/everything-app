@@ -139,7 +139,11 @@ export interface PendingApproval {
   dangerous: boolean;
   createdAt: string;
   /** Shell tools: per-sub-command verdicts from the project command policy. */
-  commands?: { command: string; prefix: string; decision: 'allow' | 'ask' | 'deny'; reason: string }[];
+  commands?: { command: string; prefix: string; decision: 'allow' | 'ask' | 'deny'; reason: string; destructive?: true }[];
+  /** Shell tools: the command prefixes a remembered approval covers (`git commit` = every `git commit …` command). */
+  covers?: string[];
+  /** 'chat' when the command is destructive: it can be approved once or for this chat, never wider. */
+  maxScope?: 'chat';
   /** Why this call needs a fresh approval (e.g. a page looked like a prompt injection). */
   warning?: string;
   projectId?: string;

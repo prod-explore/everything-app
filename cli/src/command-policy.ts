@@ -238,6 +238,61 @@ export function shellWords(sub: string): string[] {
   return out;
 }
 
+// ─── Destructive commands (grants no wider than one chat) ───────────────────
+
+/** Whether any word of `args` (before `--`) is one of these options; short ones also inside a cluster. */
+const anyOption = (args: string[], set: OptionSet) => hasOption(args, set) !== null;
+
+const GIT_DESTRUCTIVE: Record<string, (args: string[]) => boolean> = {
+  reset: () => true,
+  clean: () => true,
+  push: () => true,
+  restore: () => true,
+  rm: () => true,
+  'filter-branch': () => true,
+  'filter-repo': () => true,
+  // `git checkout -- f`, `git checkout .`, `git checkout -f` throw away changes; switching branches does not.
+  checkout: args => args.includes('--') || args.includes('.') || anyOption(args, { long: ['force', 'overwrite-ignore'], short: 'f' }),
+  stash: args => args[0] === 'drop' || args[0] === 'clear',
+  branch: args => anyOption(args, { long: ['delete', 'force'], short: 'dDf' }),
+  'update-ref': args => anyOption(args, { short: 'd' }),
+  reflog: args => args[0] === 'delete' || args[0] === 'expire',
+};
+
+const DOCKER_REMOVE = /^(rm|rmi|kill|prune)$/;
+
+/**
+ * Commands that destroy work or stop things: deleting files, discarding changes, rewriting or pushing history, killing
+ * processes, removing containers. Approving one is never remembered beyond the chat, and a project-wide or permanent grant
+ * on the same prefix (given for a harmless use, like `git checkout main`) does not cover it either.
+ */
+export function isDestructive(sub: string): boolean {
+  const words = shellWords(sub);
+  const cmd = (words[0] ?? '').replace(/^.*\//, '');
+  const args = words.slice(1);
+  switch (cmd) {
+    case 'rm': case 'rmdir': case 'unlink': case 'shred': case 'truncate': case 'dd':
+    case 'kill': case 'pkill': case 'killall':
+      return true;
+    case 'find':
+      // -exec/-ok run a command this gate never sees on its own.
+      return args.some(a => /^-(delete|exec|execdir|ok|okdir)$/.test(a));
+    case 'git': {
+      const verb = args[0];
+      return verb !== undefined && (GIT_DESTRUCTIVE[verb]?.(args.slice(1)) ?? false);
+    }
+    case 'docker': {
+      // `docker rm x`, `docker container rm x`, `docker system prune`, `docker volume rm v`…
+      const [a, b] = args;
+      return DOCKER_REMOVE.test(a ?? '') || (/^(container|image|volume|network|system|builder)$/.test(a ?? '') && DOCKER_REMOVE.test(b ?? ''));
+    }
+    case 'kubectl':
+      return args[0] === 'delete';
+    default:
+      return false;
+  }
+}
+
 /** Always blocked, regardless of mode or grants. */
 const DENY_PATTERNS: RegExp[] = [
   /^rm\s+(-[\w-]+\s+)*(\/|\/\*|~|~\/|\$HOME)(\s|$)/,
@@ -452,6 +507,8 @@ export interface SubcommandVerdict {
   prefix: string;
   decision: CommandDecision;
   reason: string;
+  /** Destroys work or stops things (see isDestructive): approvable once or for this chat only. */
+  destructive?: true;
 }
 
 export interface CommandVerdict {
@@ -460,14 +517,24 @@ export interface CommandVerdict {
 }
 
 /**
- * Classifies a full command line. `granted(prefix)` reports whether a persisted grant covers a
- * prefix in the current context (chat/project/always, model/skill scoped).
+ * Classifies a full command line. `granted(prefix, opts)` reports whether a persisted grant covers a prefix in the
+ * current context (chat/project/always, model/skill scoped); with `chatOnly` only a grant for this chat counts.
  */
-export function evaluateCommand(command: string, policy: CommandPolicy, granted: (prefix: string) => boolean): CommandVerdict {
+export function evaluateCommand(command: string, policy: CommandPolicy, granted: (prefix: string, opts: { chatOnly: boolean }) => boolean): CommandVerdict {
   const parts = splitDetailed(command);
   if (parts.length === 0) return { decision: 'ask', subcommands: [] };
 
   const subcommands = parts.map(({ command: sub, prefixed }): SubcommandVerdict => {
+    const verdict = classify(sub, prefixed);
+    return isDestructive(sub) && verdict.decision !== 'deny' ? { ...verdict, destructive: true } : verdict;
+  });
+
+  const decision: CommandDecision = subcommands.some(s => s.decision === 'deny')
+    ? 'deny'
+    : subcommands.every(s => s.decision === 'allow') ? 'allow' : 'ask';
+  return { decision, subcommands };
+
+  function classify(sub: string, prefixed: boolean): SubcommandVerdict {
     const prefix = grantPrefix(sub);
     // Also look at the command as the shell will run it: quotes and backslashes removed, binary path stripped (`'rm' -rf "/"`, `/bin/rm -rf /`).
     const plain = sub.replace(/["'\\]/g, '').replace(/^\S*\//, '');
@@ -483,19 +550,19 @@ export function evaluateCommand(command: string, policy: CommandPolicy, granted:
     // A boundary crossing always asks — even with a grant, in every mode.
     const boundary = crossesBoundary(sub, policy);
     if (boundary) return { command: sub, prefix, decision: 'ask', reason: boundary };
-    if (granted(prefix)) return { command: sub, prefix, decision: 'allow', reason: 'granted' };
+    if (granted(prefix, { chatOnly: isDestructive(sub) })) return { command: sub, prefix, decision: 'allow', reason: 'granted' };
     if (policy.allow.some(a => matchesPrefix(sub, a))) return { command: sub, prefix, decision: 'allow', reason: 'project allowlist' };
     if (policy.mode === 'auto') return { command: sub, prefix, decision: 'allow', reason: 'auto mode (inside sandbox)' };
     if (policy.mode === 'strict') return { command: sub, prefix, decision: 'ask', reason: 'strict mode' };
     const why = notReadOnly(sub, prefixed);
     if (why === null) return { command: sub, prefix, decision: 'allow', reason: 'safe read-only command' };
     return { command: sub, prefix, decision: 'ask', reason: why === 'not a read-only command' ? 'not on the allowlist' : `not read-only: ${why}` };
-  });
+  }
+}
 
-  const decision: CommandDecision = subcommands.some(s => s.decision === 'deny')
-    ? 'deny'
-    : subcommands.every(s => s.decision === 'allow') ? 'allow' : 'ask';
-  return { decision, subcommands };
+/** Whether a grant on this sub-command's prefix can be stored at all (not for unanalysable or substituted names). */
+export function grantable(v: Pick<SubcommandVerdict, 'decision' | 'prefix'>): boolean {
+  return v.decision === 'ask' && v.prefix !== '' && v.prefix !== '__SUBST__' && v.prefix !== TOO_DEEP;
 }
 
 /** Tools whose argument is a shell command, and where to find it. */

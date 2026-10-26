@@ -4,6 +4,7 @@ import type { ApprovalScope, PendingApproval } from '../../types';
 import { Button } from '../shared/Button';
 import { toolLabel } from '../../lib/toolLabels';
 import { MarkdownText } from '../chat/MarkdownText';
+import { GrantCoverage } from './GrantCoverage';
 
 type Respond = (id: string, approved: boolean, scope?: ApprovalScope) => Promise<void>;
 
@@ -15,7 +16,7 @@ function Note({ approval }: { approval: PendingApproval }) {
 
 /**
  * A request of a scheduled run that has already gone on without it: "Approve once" and "For this chat" mean nothing any more,
- * only a standing "Always" helps the next run.
+ * only a standing "Always" helps the next run (and a destructive command never gets one).
  */
 function LateActions({ busy, danger, answer }: { busy: boolean; danger: boolean; answer: (approved: boolean, scope: ApprovalScope) => Promise<void> }) {
   return (
@@ -153,7 +154,7 @@ export function ApprovalCard({ approval, respond }: { approval: PendingApproval;
               </span>
               <span className="min-w-0 flex-1">
                 <code className="block whitespace-pre-wrap break-all font-mono text-fg">{c.command}</code>
-                <span className="text-fg-tertiary">{c.reason}</span>
+                <span className="text-fg-tertiary">{c.reason}{c.destructive && <span className="text-danger"> · destructive</span>}</span>
               </span>
             </div>
           ))}
@@ -163,8 +164,9 @@ export function ApprovalCard({ approval, respond }: { approval: PendingApproval;
           {JSON.stringify(approval.args, null, 2)}
         </pre>
       )}
+      {!danger && !approval.late && <GrantCoverage approval={approval} scopes={approval.maxScope === 'chat' ? '“For this chat”' : '“For this chat” or “Always”'} />}
       {approval.late ? (
-        <LateActions busy={busy} danger={danger} answer={answer} />
+        <LateActions busy={busy} danger={danger || approval.maxScope === 'chat'} answer={answer} />
       ) : (
         <div className="flex flex-wrap gap-2">
           <Button variant="ghost" disabled={busy} onClick={() => void answer(false, 'once')}>Deny</Button>
@@ -174,7 +176,7 @@ export function ApprovalCard({ approval, respond }: { approval: PendingApproval;
           {!danger && (
             <>
               <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'chat')}>For this chat</Button>
-              <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'always')}>Always</Button>
+              {approval.maxScope !== 'chat' && <Button variant="ghost" disabled={busy} onClick={() => void answer(true, 'always')}>Always</Button>}
             </>
           )}
         </div>

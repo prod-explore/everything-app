@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import {
   splitShellCommand,
   evaluateCommand,
+  isDestructive,
   grantPrefix,
   matchesPrefix,
   parseCommandPolicy,
   extractCommand,
   type CommandPolicy,
 } from '../command-policy.js';
-import { openDb, runMigrations, createProject, updateProject, listApprovalGrants } from '../db.js';
+import { openDb, runMigrations, createProject, updateProject, listApprovalGrants, createApprovalGrant } from '../db.js';
 import { WebApprovalGate } from '../web-approval.js';
 
 const none = () => false;
@@ -211,5 +212,77 @@ describe('WebApprovalGate + command policy', () => {
     void gate.confirmDetailed('c1', 'sandbox/run_bash', { command: 'ls' }, undefined, { projectId });
     await new Promise(r => setImmediate(r));
     assert.equal(gate.listPending().length, 1);
+  });
+});
+
+describe('destructive commands: approvable once or for this chat only', () => {
+  it('recognises verbs that destroy work or stop things, not their harmless neighbours', () => {
+    for (const cmd of [
+      'rm a.txt', '/bin/rm -r build', 'rmdir x', 'shred f', 'truncate -s 0 f', 'kill 42', 'pkill node', 'killall node', 'dd if=a of=b',
+      'git reset HEAD~1', 'git clean -fd', 'git push origin main', 'git restore .', 'git rm f', 'git checkout -- src/a.ts', 'git checkout .', 'git checkout -f main',
+      'git stash drop', 'git stash clear', 'git branch -D x', 'git branch --delete x', 'git update-ref -d refs/heads/x', 'git reflog expire --all',
+      'docker rm c', 'docker rmi img', 'docker kill c', 'docker container rm c', 'docker volume rm v', 'docker system prune -a', 'kubectl delete pod x',
+      'find . -name "*.log" -delete', 'find . -exec rm {} +',
+    ]) {
+      assert.equal(isDestructive(cmd), true, cmd);
+    }
+    for (const cmd of ['ls', 'git checkout main', 'git checkout -b feature', 'git stash', 'git stash pop', 'git branch', 'git status', 'git commit -m x', 'docker ps', 'docker run x', 'find . -name x', 'npm test']) {
+      assert.equal(isDestructive(cmd), false, cmd);
+    }
+  });
+
+  it('marks destructive sub-commands in the verdict', () => {
+    const v = evaluateCommand('git add . && git push', policy({}), none);
+    assert.deepEqual(v.subcommands.map(s => [s.prefix, s.destructive ?? false]), [['git add', false], ['git push', true]]);
+  });
+
+  function setup() {
+    const db = openDb(':memory:');
+    runMigrations(db);
+    const projectId = createProject(db, { name: 'p' }).id;
+    return { db, gate: new WebApprovalGate(db), projectId };
+  }
+  const tick = () => new Promise(r => setImmediate(r));
+
+  it('the card says what a grant covers, and caps a destructive command at this chat', async () => {
+    const { gate, projectId } = setup();
+    void gate.confirmDetailed('c1', 'sandbox/run_bash', { command: 'git commit -m x && npm test' }, undefined, { projectId });
+    void gate.confirmDetailed('c1', 'sandbox/run_bash', { command: 'git add . && git reset --soft HEAD~1' }, undefined, { projectId });
+    await tick();
+    const [plain, destructive] = gate.listPending();
+    assert.deepEqual(plain!.covers, ['git commit', 'npm test']);
+    assert.equal(plain!.maxScope, undefined);
+    assert.deepEqual(destructive!.covers, ['git add', 'git reset']);
+    assert.equal(destructive!.maxScope, 'chat');
+  });
+
+  it('an "always" or "project" answer on a destructive command is stored for this chat only', async () => {
+    const { db, gate, projectId } = setup();
+    for (const [scope, conv] of [['always', 'c1'], ['project', 'c3']] as const) {
+      const p = gate.confirmDetailed(conv, 'sandbox/run_bash', { command: 'git reset --soft HEAD~1' }, undefined, { projectId });
+      await tick();
+      gate.resolve(gate.listPending()[0]!.id, true, scope, { projectId, conversationId: conv });
+      assert.equal((await p).approved, true);
+    }
+    assert.deepEqual(
+      listApprovalGrants(db).map(g => [g.toolLabel, g.scope, g.conversationId, g.projectId]).sort(),
+      [['cmd:git reset', 'chat', 'c1', null], ['cmd:git reset', 'chat', 'c3', null]],
+    );
+    // The chat grant covers this chat, and nothing else.
+    assert.equal((await gate.confirmDetailed('c1', 'sandbox/run_bash', { command: 'git reset HEAD f' }, undefined, { projectId })).approved, true);
+    void gate.confirmDetailed('c2', 'sandbox/run_bash', { command: 'git reset HEAD f' }, undefined, { projectId });
+    await tick();
+    assert.equal(gate.listPending().length, 1);
+  });
+
+  it('a project or permanent grant given for a harmless use does not cover a destructive one', async () => {
+    const { db, gate, projectId } = setup();
+    createApprovalGrant(db, { toolLabel: 'cmd:git checkout', scope: 'always', subjectType: null, subjectId: null, conversationId: null, projectId: null, expiresAt: null });
+    createApprovalGrant(db, { toolLabel: 'cmd:rm', scope: 'project', subjectType: null, subjectId: null, conversationId: null, projectId, expiresAt: null });
+    assert.equal((await gate.confirmDetailed('c1', 'sandbox/run_bash', { command: 'git checkout main' }, undefined, { projectId })).approved, true);
+    void gate.confirmDetailed('c1', 'sandbox/run_bash', { command: 'git checkout -- .' }, undefined, { projectId });
+    void gate.confirmDetailed('c1', 'sandbox/run_bash', { command: 'rm notes.txt' }, undefined, { projectId });
+    await tick();
+    assert.deepEqual(gate.listPending().map(p => p.commands![0]!.command), ['git checkout -- .', 'rm notes.txt']);
   });
 });

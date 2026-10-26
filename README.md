@@ -37,7 +37,9 @@ All screenshots were taken against the scripted mock model in `tools/mock-llm` (
   Deleting a project lists exactly what goes (chats, running agents, processes, workspace files with sizes) and then
   removes all of it, sandbox included.
 - **Approvals as cards.** Shell commands are judged one sub-command at a time; anything not allowed by a rule or an earlier
-  grant shows a card: allow once, for this chat, for this project, or always. Destructive-looking calls always ask.
+  grant shows a card: allow once, for this chat, for this project, or always, and the card says which commands a grant
+  covers (every `git commit …`). Destructive commands (`rm`, `git reset`, `git push`, `kill`…) can only be allowed once
+  or for this chat, and destructive-looking calls always ask.
 - **Web access.** `web_search` (SearXNG or Brave) and `web_fetch`, plus a Chromium the agent drives and you can watch or
   take over. A new domain asks before the first request to it.
 - **Worker agents.** The assistant can start workers with a subset of its own tools, wait for them and message them,
