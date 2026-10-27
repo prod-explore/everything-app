@@ -12,24 +12,28 @@ import { fail, ok } from './types.js';
 const ACTIONS = ['list', 'switch', 'close'] as const;
 
 export function registerBrowserTabs(server: McpServer, config: PlaywrightConfig, pool: BrowserSessionPool): void {
-  server.tool(
+  server.registerTool(
     'browser_tabs',
-    'List, switch or close the tabs of this conversation\'s browser session. A session can hold several tabs ' +
-      '(open one with browser_open and new_tab: true; a link that opens a new window also becomes a tab). ' +
-      'Actions: "list" shows every tab with its number, address and title; "switch" (tab = its number) makes that ' +
-      'tab the active one and returns its observation — browser_observe and browser_act always work on the active ' +
-      'tab, and refs belong to the tab they were read from, so observe again after switching; "close" (tab = its ' +
-      'number) closes one tab — the last tab cannot be closed this way, use browser_close. Fails if no session is ' +
-      'open yet. ' +
-      UNTRUSTED_CONTENT_NOTICE,
     {
-      action: z.enum(ACTIONS).describe('"list", "switch" or "close".'),
-      tab: z.number().int().positive().optional().describe('The tab number from the list. Required for "switch" and "close".'),
-      _conversation_id: z
-        .string()
-        .optional()
-        .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
-      ...hiddenPolicyArgs,
+      title: 'Manage tabs',
+      description: 'List, switch or close the tabs of this conversation\'s browser session. A session can hold several tabs ' +
+        '(open one with browser_open and new_tab: true; a link that opens a new window also becomes a tab). ' +
+        'Actions: "list" shows every tab with its number, address and title; "switch" (tab = its number) makes that ' +
+        'tab the active one and returns its observation — browser_observe and browser_act always work on the active ' +
+        'tab, and refs belong to the tab they were read from, so observe again after switching; "close" (tab = its ' +
+        'number) closes one tab — the last tab cannot be closed this way, use browser_close. Fails if no session is ' +
+        'open yet. ' +
+        UNTRUSTED_CONTENT_NOTICE,
+      inputSchema: {
+        action: z.enum(ACTIONS).describe('"list", "switch" or "close".'),
+        tab: z.number().int().positive().optional().describe('The tab number from the list. Required for "switch" and "close".'),
+        _conversation_id: z
+          .string()
+          .optional()
+          .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
+        ...hiddenPolicyArgs,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
     async ({ action, tab, _conversation_id, _policy }) => {
       const convId = _conversation_id ?? 'default';

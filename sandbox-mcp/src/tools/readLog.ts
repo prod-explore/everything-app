@@ -3,21 +3,25 @@ import { z } from 'zod';
 import { ok, fail, ownerIds, ownerOf, ToolContext } from './types.js';
 
 export function registerReadLog(server: McpServer, { supervisor }: ToolContext): void {
-  server.tool(
+  server.registerTool(
     'read_log',
-    'Read the append-only action log from the sandbox. ' +
-      'Every command executed via run_bash or git_op is recorded here with a timestamp. ' +
-      'Use this to audit what the agent has done in the current session. ' +
-      'This tool is read-only and does not require approval.',
     {
-      lines: z
-        .number()
-        .int()
-        .positive()
-        .max(500)
-        .optional()
-        .describe('Number of most recent log lines to return. Defaults to 50, max 500.'),
-      ...ownerIds,
+      title: 'Read action log',
+      description: 'Read the append-only action log from the sandbox. ' +
+        'Every command executed via run_bash or git_op is recorded here with a timestamp. ' +
+        'Use this to audit what the agent has done in the current session. ' +
+        'This tool is read-only and does not require approval.',
+      inputSchema: {
+        lines: z
+          .number()
+          .int()
+          .positive()
+          .max(500)
+          .optional()
+          .describe('Number of most recent log lines to return. Defaults to 50, max 500.'),
+        ...ownerIds,
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ lines = 50, ...ids }) => {
       try {

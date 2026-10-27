@@ -13,43 +13,47 @@ const ACTIONS = ['click', 'type', 'select', 'press', 'navigate'] as const;
 type Action = (typeof ACTIONS)[number];
 
 export function registerBrowserAct(server: McpServer, config: PlaywrightConfig, pool: BrowserSessionPool): void {
-  server.tool(
+  server.registerTool(
     'browser_act',
-    'Perform ONE action on this conversation\'s open browser session, then return the resulting ' +
-      'page observation. Actions: "click" a ref, "type" a value into a ref, "select" an option in ' +
-      'a ref (dropdown), "press" a key (e.g. "Enter") either globally or focused on a ref, or ' +
-      '"navigate" to a new URL (value = the URL). `ref` numbers come from the [N] markers in the ' +
-      'last observation you received — always re-observe with browser_observe first if you\'re not ' +
-      'sure the page hasn\'t changed since. `label` is REQUIRED and must be copied from that same ' +
-      'observation line (e.g. the text after the [ref] in `[3] button: "Delete Account"` is ' +
-      '`Delete Account`) — it\'s shown to the human if this action needs their approval, so a vague ' +
-      'or missing label makes that approval prompt useless to them. Downloads and file uploads are ' +
-      'blocked unless the user allowed them; navigations to domains outside the project policy fail. ' +
-      UNTRUSTED_CONTENT_NOTICE,
     {
-      action: z.enum(ACTIONS).describe('Which kind of action to perform.'),
-      ref: z
-        .number()
-        .int()
-        .optional()
-        .describe('The [ref] number from the last observation. Required for click/type/select; optional for press; unused for navigate.'),
-      value: z
-        .string()
-        .optional()
-        .describe('For "type": the text to enter. For "select": the option to choose. For "press": the key name (e.g. "Enter", "Tab"). For "navigate": the URL.'),
-      label: z
-        .string()
-        .min(1)
-        .describe(
-          'Human-readable description of the target, copied from the observation line for this ref ' +
-            '(e.g. "Delete Account" button, "Email address" field). Required for every action — this is ' +
-            'what a human reviewing an approval prompt for this action actually sees.',
-        ),
-      _conversation_id: z
-        .string()
-        .optional()
-        .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
-      ...hiddenPolicyArgs,
+      title: 'Act on page',
+      description: 'Perform ONE action on this conversation\'s open browser session, then return the resulting ' +
+        'page observation. Actions: "click" a ref, "type" a value into a ref, "select" an option in ' +
+        'a ref (dropdown), "press" a key (e.g. "Enter") either globally or focused on a ref, or ' +
+        '"navigate" to a new URL (value = the URL). `ref` numbers come from the [N] markers in the ' +
+        'last observation you received — always re-observe with browser_observe first if you\'re not ' +
+        'sure the page hasn\'t changed since. `label` is REQUIRED and must be copied from that same ' +
+        'observation line (e.g. the text after the [ref] in `[3] button: "Delete Account"` is ' +
+        '`Delete Account`) — it\'s shown to the human if this action needs their approval, so a vague ' +
+        'or missing label makes that approval prompt useless to them. Downloads and file uploads are ' +
+        'blocked unless the user allowed them; navigations to domains outside the project policy fail. ' +
+        UNTRUSTED_CONTENT_NOTICE,
+      inputSchema: {
+        action: z.enum(ACTIONS).describe('Which kind of action to perform.'),
+        ref: z
+          .number()
+          .int()
+          .optional()
+          .describe('The [ref] number from the last observation. Required for click/type/select; optional for press; unused for navigate.'),
+        value: z
+          .string()
+          .optional()
+          .describe('For "type": the text to enter. For "select": the option to choose. For "press": the key name (e.g. "Enter", "Tab"). For "navigate": the URL.'),
+        label: z
+          .string()
+          .min(1)
+          .describe(
+            'Human-readable description of the target, copied from the observation line for this ref ' +
+              '(e.g. "Delete Account" button, "Email address" field). Required for every action — this is ' +
+              'what a human reviewing an approval prompt for this action actually sees.',
+          ),
+        _conversation_id: z
+          .string()
+          .optional()
+          .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
+        ...hiddenPolicyArgs,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ action, ref, value, label, _conversation_id, _policy, _allow_downloads }) => {
       const convId = _conversation_id ?? 'default';

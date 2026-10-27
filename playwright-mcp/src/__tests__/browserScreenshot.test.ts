@@ -30,7 +30,7 @@ function setup(opts: { height?: number; sizeFor?: (quality: number) => number; o
   let handler: Handler | undefined;
   let description = '';
   const server = {
-    tool: (_name: string, desc: string, _schema: unknown, fn: Handler) => { description = desc; handler = fn; },
+    registerTool: (_name: string, config: { description: string }, fn: Handler) => { description = config.description; handler = fn; },
   } as unknown as McpServer;
   registerBrowserScreenshot(server, testConfig(), pool);
   return { call: (args: Record<string, unknown> = {}) => handler!(args), calls, description };

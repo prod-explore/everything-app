@@ -11,8 +11,8 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const supervisor = new SupervisorClient(config.supervisorUrl, config.supervisorToken);
 
-  // Verify supervisor is reachable on startup — fail fast with a clear message
-  // rather than discovering the problem on the first tool call.
+  // Check the supervisor (URL and token) once on startup, so a misconfiguration shows in the log
+  // right away rather than on the first tool call.
   try {
     const status = await supervisor.status();
     console.log(`[sandbox-mcp] supervisor reachable — ${status.running}/${status.maxRunning} sandboxes running`);

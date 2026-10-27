@@ -4,16 +4,20 @@ import type { BrowserSessionPool } from '../sessionPool.js';
 import { ok } from './types.js';
 
 export function registerBrowserClose(server: McpServer, pool: BrowserSessionPool): void {
-  server.tool(
+  server.registerTool(
     'browser_close',
-    'Close this conversation\'s browser session. The profile is ephemeral, so this also discards ' +
-      'its cookies, logins and any allowed downloads. Not required at the end of a task; idle sessions ' +
-      'time out on their own, but call this when you know you\'re done to free the slot sooner.',
     {
-      _conversation_id: z
-        .string()
-        .optional()
-        .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
+      title: 'Close browser session',
+      description: 'Close this conversation\'s browser session. The profile is ephemeral, so this also discards ' +
+        'its cookies, logins and any allowed downloads. Not required at the end of a task; idle sessions ' +
+        'time out on their own, but call this when you know you\'re done to free the slot sooner.',
+      inputSchema: {
+        _conversation_id: z
+          .string()
+          .optional()
+          .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     async ({ _conversation_id }) => {
       const convId = _conversation_id ?? 'default';

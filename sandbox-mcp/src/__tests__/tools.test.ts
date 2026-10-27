@@ -12,7 +12,7 @@ describe('git_op subcommand whitelist invariants', () => {
   const allowed = new Set<string>(ALLOWED_SUBCOMMANDS);
 
   it('never offers subcommands that delete files or push', () => {
-    // push needs a credential and a human approval; it happens in git-proxy, never from the sandbox tool.
+    // Pushing needs a credential and a human approval, so it goes through git-proxy, never through this tool.
     for (const sub of ['rm', 'clean', 'push', 'reset', 'filter-branch', 'gc', 'config']) assert.equal(allowed.has(sub), false, sub);
   });
 
@@ -22,7 +22,7 @@ describe('git_op subcommand whitelist invariants', () => {
 
   it('the registered tool schema enforces exactly that list', () => {
     let schema: Record<string, { safeParse(v: unknown): { success: boolean } }> | undefined;
-    const server = { tool: (_name: string, _description: string, shape: typeof schema) => { schema = shape; } };
+    const server = { registerTool: (_name: string, config: { inputSchema: typeof schema }) => { schema = config.inputSchema; } };
     registerGitOp(server as unknown as Parameters<typeof registerGitOp>[0], {} as Parameters<typeof registerGitOp>[1]);
     assert.ok(schema);
     for (const sub of ALLOWED_SUBCOMMANDS) assert.equal(schema['subcommand']!.safeParse(sub).success, true, sub);

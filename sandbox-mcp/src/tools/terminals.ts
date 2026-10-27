@@ -3,11 +3,15 @@ import { z } from 'zod';
 import { ok, fail, ownerIds, ownerOf, ToolContext } from './types.js';
 
 export function registerTerminalTools(server: McpServer, { supervisor }: ToolContext): void {
-  server.tool(
+  server.registerTool(
     'terminal_list',
-    'List the open terminals of this project sandbox, whether each is busy, and how long it has been idle. ' +
-      'Idle terminals are closed automatically; the workspace files are never affected. Read-only.',
-    { ...ownerIds },
+    {
+      title: 'List terminals',
+      description: 'List the open terminals of this project sandbox, whether each is busy, and how long it has been idle. ' +
+        'Idle terminals are closed automatically; the workspace files are never affected. Read-only.',
+      inputSchema: { ...ownerIds },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
     async args => {
       try {
         const terminals = await supervisor.listTerminals(ownerOf(args));
@@ -23,12 +27,16 @@ export function registerTerminalTools(server: McpServer, { supervisor }: ToolCon
     },
   );
 
-  server.tool(
+  server.registerTool(
     'terminal_close',
-    'Close a terminal and kill everything running in it (background jobs included). Files in /workspace are untouched.',
     {
-      terminal: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/).describe('Name of the terminal to close.'),
-      ...ownerIds,
+      title: 'Close terminal',
+      description: 'Close a terminal and kill everything running in it (background jobs included). Files in /workspace are untouched.',
+      inputSchema: {
+        terminal: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/).describe('Name of the terminal to close.'),
+        ...ownerIds,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     async args => {
       try {

@@ -10,19 +10,23 @@ import { tabNote } from './tabNote.js';
 import { fail } from './types.js';
 
 export function registerBrowserObserve(server: McpServer, config: PlaywrightConfig, pool: BrowserSessionPool): void {
-  server.tool(
+  server.registerTool(
     'browser_observe',
-    'Re-observe the current state of this conversation\'s open browser session — the page as it ' +
-      'is right now, without navigating or acting. Use this after an action might have changed the ' +
-      'page in a way you want to re-check, or if you\'re not sure your last observation is still ' +
-      'accurate. Fails if no session is open yet — call browser_open first. Read-only, no side effects. ' +
-      UNTRUSTED_CONTENT_NOTICE,
     {
-      _conversation_id: z
-        .string()
-        .optional()
-        .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
-      ...hiddenPolicyArgs,
+      title: 'Observe page',
+      description: 'Re-observe the current state of this conversation\'s open browser session — the page as it ' +
+        'is right now, without navigating or acting. Use this after an action might have changed the ' +
+        'page in a way you want to re-check, or if you\'re not sure your last observation is still ' +
+        'accurate. Fails if no session is open yet — call browser_open first. Read-only, no side effects. ' +
+        UNTRUSTED_CONTENT_NOTICE,
+      inputSchema: {
+        _conversation_id: z
+          .string()
+          .optional()
+          .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
+        ...hiddenPolicyArgs,
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ _conversation_id, _policy }) => {
       const convId = _conversation_id ?? 'default';

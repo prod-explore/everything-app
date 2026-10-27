@@ -24,35 +24,39 @@ export function approvedHostFor(url: string, approvedHost: string | undefined): 
 }
 
 export function registerBrowserOpen(server: McpServer, config: PlaywrightConfig, pool: BrowserSessionPool): void {
-  server.tool(
+  server.registerTool(
     'browser_open',
-    'Open (or reuse) this conversation\'s browser session and navigate to a URL. ' +
-      'The session STAYS OPEN across calls — use browser_act to click/type/' +
-      'select on the page afterward, and browser_close when you\'re done with it. ' +
-      'The page opens in the current tab; with new_tab: true it opens in a new tab and the other tabs stay as they ' +
-      'were (switch between them with browser_tabs). ' +
-      'The browser profile is ephemeral: no saved logins or cookies from earlier sessions; if a site ' +
-      'needs a login, ask the user to log in via the live view. The user approves each website ' +
-      '(domain) the first time you open it; a link or redirect to a DIFFERENT domain is blocked until you browser_open that URL, ' +
-      'which asks the user. A domain the operator blocked stays blocked — tell the user instead of retrying. ' +
-      'Returns a deterministic observation: the interactive element list (refs for browser_act) and ' +
-      'the visible page text. ' +
-      UNTRUSTED_CONTENT_NOTICE,
     {
-      url: z.string().url().describe('The URL to navigate to. Must be http or https.'),
-      new_tab: z
-        .boolean()
-        .optional()
-        .describe('Open the URL in a NEW tab (which becomes the active one) instead of replacing the current page, so the page you were on stays open. Default false.'),
-      _conversation_id: z
-        .string()
-        .optional()
-        .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
-      ...hiddenPolicyArgs,
-      _approved_host: z
-        .string()
-        .optional()
-        .describe('Internal: the host the user just approved for this browser session. Set by the orchestrator, never by the model.'),
+      title: 'Open page',
+      description: 'Open (or reuse) this conversation\'s browser session and navigate to a URL. ' +
+        'The session STAYS OPEN across calls — use browser_act to click/type/' +
+        'select on the page afterward, and browser_close when you\'re done with it. ' +
+        'The page opens in the current tab; with new_tab: true it opens in a new tab and the other tabs stay as they ' +
+        'were (switch between them with browser_tabs). ' +
+        'The browser profile is ephemeral: no saved logins or cookies from earlier sessions; if a site ' +
+        'needs a login, ask the user to log in via the live view. The user approves each website ' +
+        '(domain) the first time you open it; a link or redirect to a DIFFERENT domain is blocked until you browser_open that URL, ' +
+        'which asks the user. A domain the operator blocked stays blocked — tell the user instead of retrying. ' +
+        'Returns a deterministic observation: the interactive element list (refs for browser_act) and ' +
+        'the visible page text. ' +
+        UNTRUSTED_CONTENT_NOTICE,
+      inputSchema: {
+        url: z.string().url().describe('The URL to navigate to. Must be http or https.'),
+        new_tab: z
+          .boolean()
+          .optional()
+          .describe('Open the URL in a NEW tab (which becomes the active one) instead of replacing the current page, so the page you were on stays open. Default false.'),
+        _conversation_id: z
+          .string()
+          .optional()
+          .describe('Internal: conversation ID for session isolation. Set by the orchestrator.'),
+        ...hiddenPolicyArgs,
+        _approved_host: z
+          .string()
+          .optional()
+          .describe('Internal: the host the user just approved for this browser session. Set by the orchestrator, never by the model.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ url, new_tab, _conversation_id, _policy, _allow_downloads, _approved_host }) => {
       const convId = _conversation_id ?? 'default';

@@ -14,11 +14,15 @@ export function formatCheckpoints(list: CheckpointInfo[]): string {
  * the agent can list them and, with approval, roll the workspace back to one.
  */
 export function registerCheckpointTools(server: McpServer, { config, supervisor }: ToolContext): void {
-  server.tool(
+  server.registerTool(
     'checkpoint_list',
-    'List the automatic checkpoints of /workspace (one is taken before each agent turn), newest first: id, time and label. ' +
-      'Read-only. Use an id with the rollback tool to undo changes.',
-    { ...ownerIds },
+    {
+      title: 'List checkpoints',
+      description: 'List the automatic checkpoints of /workspace (one is taken before each agent turn), newest first: id, time and label. ' +
+        'Read-only. Use an id with the rollback tool to undo changes.',
+      inputSchema: { ...ownerIds },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
     async args => {
       try {
         return ok(formatCheckpoints(await supervisor.listCheckpoints(ownerOf(args))));
@@ -28,18 +32,22 @@ export function registerCheckpointTools(server: McpServer, { config, supervisor 
     },
   );
 
-  server.tool(
+  server.registerTool(
     'rollback',
-    'Restore /workspace to a checkpoint from checkpoint_list: tracked files are reset to that state and files created since ' +
-      '(that are not git-ignored) are deleted. Ignored files (e.g. node_modules) and any .git directory are left alone. ' +
-      'Later checkpoints stay available, so a rollback can itself be undone. Fails while a command is still running. ' +
-      'Requires approval.',
     {
-      checkpoint_id: z
-        .string()
-        .regex(/^[a-z0-9]{1,16}-[a-f0-9]{4,16}$/)
-        .describe('Checkpoint id from checkpoint_list.'),
-      ...ownerIds,
+      title: 'Roll back workspace',
+      description: 'Restore /workspace to a checkpoint from checkpoint_list: tracked files are reset to that state and files created since ' +
+        '(that are not git-ignored) are deleted. Ignored files (e.g. node_modules) and any .git directory are left alone. ' +
+        'Later checkpoints stay available, so a rollback can itself be undone. Fails while a command is still running. ' +
+        'Requires approval.',
+      inputSchema: {
+        checkpoint_id: z
+          .string()
+          .regex(/^[a-z0-9]{1,16}-[a-f0-9]{4,16}$/)
+          .describe('Checkpoint id from checkpoint_list.'),
+        ...ownerIds,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
     async args => {
       try {

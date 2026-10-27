@@ -22,21 +22,25 @@ export const ALLOWED_SUBCOMMANDS = [
 type GitSubcommand = (typeof ALLOWED_SUBCOMMANDS)[number];
 
 export function registerGitOp(server: McpServer, { config, supervisor }: ToolContext): void {
-  server.tool(
+  server.registerTool(
     'git_op',
-    'Run a whitelisted git command inside the sandboxed container. ' +
-      `Allowed subcommands: ${ALLOWED_SUBCOMMANDS.join(', ')}. ` +
-      'git push is not available here: the sandbox holds no git credentials, so the user pushes from the Source Control panel. ' +
-      'Requires approval before execution.',
     {
-      subcommand: z
-        .enum(ALLOWED_SUBCOMMANDS)
-        .describe('The git subcommand to run.'),
-      args: z
-        .array(z.string())
-        .optional()
-        .describe('Additional arguments (e.g. ["-m", "my commit message"]).'),
-      ...ownerIds,
+      title: 'Run git command',
+      description: 'Run a whitelisted git command inside the sandboxed container. ' +
+        `Allowed subcommands: ${ALLOWED_SUBCOMMANDS.join(', ')}. ` +
+        'git push is not available here: the sandbox holds no git credentials, so the user pushes from the Source Control panel. ' +
+        'Requires approval before execution.',
+      inputSchema: {
+        subcommand: z
+          .enum(ALLOWED_SUBCOMMANDS)
+          .describe('The git subcommand to run.'),
+        args: z
+          .array(z.string())
+          .optional()
+          .describe('Additional arguments (e.g. ["-m", "my commit message"]).'),
+        ...ownerIds,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ subcommand, args = [], ...ids }: { subcommand: GitSubcommand; args?: string[]; _conversation_id?: string; _project_id?: string }) => {
 
