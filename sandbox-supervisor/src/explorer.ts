@@ -226,7 +226,8 @@ export interface WorkspaceSummary {
 /**
  * Sum a directory archive per DIRECT child (recursive sizes), reading only the tar headers; file bodies are drained
  * unread. Unlike the listing there is no scan budget: the result is shown before the files are deleted, so it must be
- * complete, and the workspace quota bounds how much there is to stream.
+ * complete. How much there is to stream is roughly bounded by the workspace quota: a sandbox that keeps writing past
+ * it is stopped.
  */
 export function summarizeDirectoryTar(stream: Readable, abs: string): Promise<WorkspaceSummary> {
   const base = path.posix.basename(abs);

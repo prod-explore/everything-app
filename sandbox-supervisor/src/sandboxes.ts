@@ -29,7 +29,7 @@ export { HttpError, WORKSPACE };
 /**
  * One sandbox per *owner* — a project, or a standalone chat when it has none.
  *
- * - The workspace is a named Docker volume mounted at /workspace. It lives exactly as long as the project:
+ * - The workspace is a named Docker volume mounted at /workspace. It lives exactly as long as its owner:
  *   only an explicit destroy (the project or chat was deleted → DELETE /sandboxes/:owner/volume) removes it.
  * - Idle sandboxes are STOPPED, not removed. A container that has been stopped for longer than
  *   `containerTtlMs` (default 7 days) is garbage-collected; the volume stays and the next claim builds a
@@ -91,7 +91,7 @@ export interface DockerOps extends ArchiveOps {
   shellFactory(id: string): ShellFactory;
 }
 
-/** What destroying an owner's sandbox would remove: the dry run behind the project-deletion dialog. */
+/** What destroying an owner's sandbox would remove: the dry run behind the dialog that deletes a project or chat. */
 export interface SandboxInventory {
   /** Containers of this owner (running or stopped). */
   containers: number;

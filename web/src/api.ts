@@ -534,7 +534,10 @@ export function getDeletionPreview(target: DeletionTarget): Promise<DeletionPrev
   return request(`${deletionPath(target)}/deletion-preview`);
 }
 
-/** Deletes a project with everything in it: chats, running work, sandbox containers, processes and workspace files. */
+/**
+ * Deletes a project with everything in it: chats, running work, scheduled tasks, Gazeta items and its sandbox
+ * (containers, processes, workspace files).
+ */
 export function deleteProject(id: string): Promise<{ ok: boolean }> {
   return request(`/api/projects/${id}`, { method: 'DELETE' });
 }

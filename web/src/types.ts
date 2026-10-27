@@ -138,7 +138,7 @@ export interface PendingApproval {
   args: Record<string, unknown>;
   dangerous: boolean;
   createdAt: string;
-  /** Shell tools: per-sub-command verdicts from the project command policy. */
+  /** Shell tools: per-sub-command verdicts from the command policy. */
   commands?: { command: string; prefix: string; decision: 'allow' | 'ask' | 'deny'; reason: string; destructive?: true }[];
   /** Shell tools: the command prefixes a remembered approval covers (`git commit` = every `git commit …` command). */
   covers?: string[];
@@ -244,7 +244,7 @@ export interface DeletionPreview {
   target: DeletionTarget & { name: string };
   conversations: Array<{ id: string; title: string; messageCount: number }>;
   agentTranscripts: number;
-  /** Chat turns and agents that are stopped. */
+  /** Chat turns and agents still running, which the deletion stops. */
   running: Array<{ runId: string; kind: 'chat' | 'agent'; label: string }>;
   /** false: no sandbox service is configured, so there is no sandbox to remove. */
   sandboxRuntime: boolean;

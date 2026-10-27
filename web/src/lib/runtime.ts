@@ -260,7 +260,7 @@ export function useEverythingAppRuntime(conversationId: string | null) {
     onCancel,
     onDelete,
     adapters: {
-      // Images only for now (other file types are not supported yet) — this gives
+      // Images only: other file types are not supported as attachments. The adapter gives
       // the composer its paperclip button, drag-and-drop, and paste-to-attach for free.
       attachments: new SimpleImageAttachmentAdapter(),
     },

@@ -76,7 +76,7 @@ export interface ConnectorDeps {
   db: Database.Database;
   router: ProviderRouter;
   registry: ToolRegistry;
-  /** The live MCP connection list (operator-configured at startup + UI-added) — also read by /health and shutdown. */
+  /** The live MCP connection list (operator-configured at startup + UI-added), shared with shutdown, which closes them. */
   connections: McpConnectionLike[];
   /** For tests: build a connection without a network. */
   connect?: (cfg: { name: string; url: string; apiKey?: string }) => Promise<Conn>;

@@ -1069,7 +1069,7 @@ export function updateProject(
 export type DeletionTarget = { projectId: string } | { conversationId: string };
 
 export interface OwnedRecords {
-  /** The chats and agent transcripts that go, newest first. */
+  /** The chats and agent transcripts that go, most recently updated first. */
   conversations: Array<{ id: string; title: string; kind: string; messageCount: number }>;
   /** Scheduled tasks of the project, and wake-ups set in these chats. */
   schedules: Array<{ id: string; name: string }>;
@@ -1079,7 +1079,7 @@ export interface OwnedRecords {
   snapshots: Array<{ id: string; filename: string }>;
 }
 
-/** The ids of the conversations a deletion takes along, as a JSON array for `IN (SELECT value FROM json_each(?))`. */
+/** The ids of the conversations a deletion takes along: the chats themselves and the transcripts of their agents. */
 function ownedConversationIds(db: Database.Database, target: DeletionTarget): string[] {
   const roots = 'projectId' in target
     ? (db.prepare(`SELECT id FROM conversations WHERE project_id = ?`).all(target.projectId) as Array<{ id: string }>).map(r => r.id)

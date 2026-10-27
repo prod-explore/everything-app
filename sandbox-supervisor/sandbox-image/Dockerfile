@@ -28,7 +28,7 @@ RUN (userdel -r ubuntu 2>/dev/null || true) \
   && useradd -u 1000 -g 1000 -m -d /home/sandbox -s /bin/bash sandbox
 
 # Workspace dir — this is the agent's working directory and the ONLY persistent writable path.
-# Mounted from a named Docker volume per project; Docker seeds a NEW volume with this directory's ownership,
+# Mounted from a named Docker volume per sandbox owner (project or standalone chat); Docker seeds a NEW volume with this directory's ownership,
 # so it must belong to the sandbox user. /workspace/.ea-checkpoints holds the checkpoint git dir and the
 # append-only action log (read_log); the supervisor creates it on demand.
 RUN mkdir -p /workspace && chown 1000:1000 /workspace

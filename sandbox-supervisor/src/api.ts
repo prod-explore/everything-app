@@ -65,7 +65,7 @@ export function createSupervisorApp(sandboxes: SandboxManager, defaultTimeoutMs 
     }
   });
 
-  // POST /release { ownerId } — stop the sandbox now. The workspace volume is never deleted.
+  // POST /release { ownerId } — stop the sandbox now. The workspace volume is kept.
   app.post('/release', async (req, res) => {
     const ownerId = ownerOf(req.body ?? {});
     if (!ownerId) {

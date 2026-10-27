@@ -36,7 +36,7 @@ function envExampleVariables(): { active: Map<string, string>; all: Set<string> 
   return { active, all };
 }
 
-/** The single default compose gives a variable of the web server. */
+/** The default docker-compose.yml gives one of the web server's variables; fails when it gives none. */
 function webDefault(name: string): string {
   const block = /^ {2}everythingapp-web:\n((?: {4}.*\n|\s*\n)+)/m.exec(compose)?.[1] ?? '';
   const m = new RegExp(`^ {6}${name}: \\$\\{${name}:?-([^}]*)\\}`, 'm').exec(block);

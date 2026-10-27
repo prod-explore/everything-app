@@ -3,7 +3,7 @@
  * every command through).
  *
  * A command is split into its sub-commands (`a && b | c; $(d)`, `bash -c "…"`, function bodies, `find -exec`), each one
- * is classified allow / ask / deny against the project policy and the persisted prefix grants, and the whole command is
+ * is classified allow / ask / deny against the command policy and the persisted prefix grants, and the whole command is
  * only as permissive as its least permissive part. An allow on `ls` therefore never lets `ls && rm -rf ~` through.
  * Rules are matched against the words the shell will actually run: quotes, escapes, `$IFS`, binary paths, variable
  * assignments and wrappers such as `sudo -u x`, `env -S`, `nice -n 5` or `timeout 5` are taken off first.
@@ -95,7 +95,7 @@ const GIT_BRANCH_LIST: Required<OptionSet> & { value: string[] } = {
   long: ['all', 'remotes', 'list', 'verbose', 'show-current', 'contains', 'no-contains', 'merged', 'no-merged', 'points-at',
     'sort', 'format', 'color', 'no-color', 'column', 'no-column', 'ignore-case', 'omit-empty', 'abbrev', 'no-abbrev'],
   short: 'arlvi',
-  /** Take a value as the next word. */
+  /** Options that take their value as the next word. */
   value: ['contains', 'no-contains', 'merged', 'no-merged', 'points-at', 'sort', 'format'],
 };
 
@@ -363,9 +363,12 @@ export function parseCommandPolicy(raw: unknown): CommandPolicy {
 
 /**
  * Splits a shell command into sub-commands: on `;`, `&&`, `||`, `|`, `&`, newlines, and recursively
- * into `$(…)`, `` `…` ``, `<(…)`/`>(…)` and `( … )` subshells. Quotes are respected (single quotes
- * are literal; double quotes still expand `$(…)`). Not a full bash parser — the goal is that no
- * executable part of the string escapes classification; an over-split only costs an extra prompt.
+ * into `$(…)`, `` `…` ``, `<(…)`/`>(…)` and `( … )` subshells, the scripts of `bash -c`, `eval`,
+ * `trap` and `su -c`, and the commands of `find -exec`. Quotes are respected (single quotes are
+ * literal; double quotes still expand `$(…)`). Each part is returned from the command it runs on,
+ * with assignments and wrappers taken off (`FOO=1 sudo node app.js` → `node app.js`). Not a full
+ * bash parser — the goal is that no executable part of the string escapes classification; an
+ * over-split only costs an extra prompt.
  */
 export function splitShellCommand(command: string): string[] {
   return splitDetailed(command).map(s => s.command);
@@ -732,7 +735,10 @@ export function evaluateCommand(command: string, policy: CommandPolicy, granted:
   }
 }
 
-/** Whether a grant on this sub-command's prefix can be stored at all (not for unanalysable or substituted names). */
+/**
+ * Whether approving this sub-command can store a grant on its prefix: only when it asks, and never when its name could
+ * not be analysed or comes from a substitution.
+ */
 export function grantable(v: Pick<SubcommandVerdict, 'decision' | 'prefix'>): boolean {
   return v.decision === 'ask' && v.prefix !== '' && v.prefix !== '__SUBST__' && v.prefix !== TOO_DEEP;
 }

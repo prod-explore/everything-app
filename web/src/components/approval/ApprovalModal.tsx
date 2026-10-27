@@ -4,24 +4,25 @@ import type { ApprovalScope, PendingApproval } from '../../types';
 import { Button } from '../shared/Button';
 import { GrantCoverage } from './GrantCoverage';
 
-/**
- * Approval modal with 4-scope picker:
- * - Deny → always just denies (Escape)
- * - Approve → expands a scope picker (Enter = 'once')
- *   - Once (1 / Enter)    — this call only, not remembered
- *   - This chat (2 / C)   — auto-approves this tool for the rest of this conversation
- *   - This project (3 / P) — auto-approves for all chats in this project (only shown when in a project)
- *   - Always (4 / A)      — auto-approves globally (persisted to DB)
- *
- * For dangerous calls: scope picker is hidden — dangerous calls are always
- * forced to 'once' by the server regardless.
- */
 /** Worker approvals are labelled "[agent researcher] srv/tool" by the server. */
 function agentOf(label: string): string | null {
   const m = /^\[(agent ([^\]]+)|subagent)\]/.exec(label);
   return m ? (m[2] ?? 'subagent') : null;
 }
 
+/**
+ * Approval modal with 4-scope picker:
+ * - Deny → always just denies (Escape)
+ * - Approve → expands a scope picker (Enter = 'once')
+ *   - Once (1 / Enter)    — this call only, not remembered
+ *   - This chat (2 / C)   — auto-approves this tool (a shell command: its prefixes) for the rest of this conversation
+ *   - This project (3 / P) — auto-approves for all chats in this project (only shown when in a project)
+ *   - Always (4 / A)      — auto-approves globally (persisted to DB)
+ *
+ * For dangerous calls: scope picker is hidden — dangerous calls are always
+ * forced to 'once' by the server regardless. A destructive shell command (`maxScope: 'chat'`) offers
+ * Once and This chat only; the server caps it there as well.
+ */
 export function ApprovalModal({
   approval,
   onRespond,

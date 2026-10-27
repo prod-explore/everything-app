@@ -5,11 +5,11 @@ import { timingSafeEqual } from 'node:crypto';
 /**
  * Same-origin proxy for the browser live view.
  *
- * The UI used to open a WebSocket straight to playwright-mcp's port, composed from a build-time
- * VITE_ env var: a second origin (blocked by the page's CSP once it is served by this app, mixed
- * content behind HTTPS, one more port to expose) and the browser had to be handed playwright-mcp's
- * API key. Now the page connects to  wss://<this-host>/api/liveview  and this server — which
- * already authenticates the user — relays the WebSocket to playwright-mcp with the server-side key.
+ * The page connects to  wss://<this-host>/api/liveview  and this server — which already
+ * authenticates the user — relays the WebSocket to playwright-mcp with the server-side key.
+ * Connecting to playwright-mcp's port directly would mean a second origin (blocked by the page's
+ * CSP, mixed content behind HTTPS, one more port to expose) and handing the browser
+ * playwright-mcp's API key.
  *
  * It is a raw HTTP-upgrade relay: after the 101 handshake the two sockets are piped, so frames
  * (binary JPEG screencast, JSON takeover events) pass through untouched and no WS library is needed.

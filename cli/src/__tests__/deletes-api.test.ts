@@ -152,6 +152,7 @@ describe('deleting messages, conversations and projects', () => {
   it('deleting a project removes its sandboxes, chats, transcripts, runs, grants, pins, schedules, Gazeta items and snapshot files', async () => {
     const { projectId, convId, file, runId, transcript, task, report, wakeup, question } = await seedProject('Gone');
     sandbox.destroyed.length = 0;
+    // `?conversations=keep` is ignored: there is no way to delete a project and keep its chats.
     assert.equal((await req(port, 'DELETE', `/api/projects/${projectId}?conversations=keep`)).status, 200);
     assert.deepEqual(sandbox.destroyed.sort(), [projectId, convId, transcript].sort());
     assert.equal((await req(port, 'GET', `/api/conversations/${convId}`)).status, 404);
