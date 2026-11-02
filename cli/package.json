@@ -11,7 +11,7 @@
     "test": "npm run build && node --env-file=test.env --test dist/__tests__/*.test.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@mozilla/readability": "^0.6.0",
     "better-sqlite3": "^11.0.0",
     "croner": "^9.1.0",
