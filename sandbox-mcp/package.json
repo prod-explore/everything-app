@@ -11,7 +11,7 @@
     "test": "rm -rf dist && npm run build && node --test --test-timeout=15000 dist/__tests__/*.test.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "dotenv": "^16.4.5",
     "express": "^4.19.2"
   },
