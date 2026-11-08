@@ -47,7 +47,9 @@ import { Notifier, NotifyConfigError, NOTIFY_VAULT_KEY, normalizeWebhookUrl, sav
 import { buildWebTools, PageCache, WEB_TOOLS_PROMPT } from './web/tools.js';
 import type { FetchOptions } from './web/http.js';
 import type { McpConnectionLike } from './mcp-client.js';
-import { attachLiveViewProxy } from './liveview-proxy.js';
+import { LIVEVIEW_PATH, createLiveViewUpgrade } from './liveview-proxy.js';
+import { attachUpgradeRouter } from './upgrade-router.js';
+import { CONNECT_PATH as DEVICE_CONNECT_PATH, createDeviceService, type DeviceService } from './devices/index.js';
 import {
   GHOST_IMMUTABLE_CODE, GHOST_MODEL_CODE, GHOST_MOVE_CODE, GHOST_PROMPT,
   assertLocalModel, ghostConnectorNames, ghostModelProblem,
@@ -233,7 +235,7 @@ async function main(): Promise<void> {
     console.warn(`[vault] ${router.vault.disabledReason} — saving API keys from the UI is disabled until it is set.`);
   }
 
-  const { app, shutdown, auth } = await buildApp({ db, connections, router, authToken, password: process.env['SERVER_PASSWORD'] || undefined, config, policyFile: policyFilePath() });
+  const { app, shutdown, auth, devices } = await buildApp({ db, connections, router, authToken, password: process.env['SERVER_PASSWORD'] || undefined, config, policyFile: policyFilePath() });
 
   // ─── Start server ─────────────────────────────────────────────────────────
   const port = Number(process.env['PORT'] ?? 3000);
@@ -242,13 +244,17 @@ async function main(): Promise<void> {
     console.log(`[server] listening on ${host}:${port}`);
   });
 
-  // Browser live view: same-origin WebSocket relayed to playwright-mcp (server-side key).
+  // The server's two WebSocket endpoints, behind one upgrade router (anything else is closed):
+  // the browser live view (same-origin relay to playwright-mcp with the server-side key) and the device bridge.
   const playwrightCfg = config.mcpServers.find(c => c.name === 'playwright');
-  attachLiveViewProxy(server, {
-    upstreamUrl: playwrightCfg ? new URL(playwrightCfg.url).origin : undefined,
-    upstreamApiKey: playwrightCfg?.apiKey,
-    authToken,
-    isCookieValid: auth.isCookieValid,
+  attachUpgradeRouter(server, {
+    [LIVEVIEW_PATH]: createLiveViewUpgrade({
+      upstreamUrl: playwrightCfg ? new URL(playwrightCfg.url).origin : undefined,
+      upstreamApiKey: playwrightCfg?.apiKey,
+      authToken,
+      isCookieValid: auth.isCookieValid,
+    }),
+    [DEVICE_CONNECT_PATH]: devices.hub.handleUpgrade,
   });
 
   // ─── Graceful shutdown ────────────────────────────────────────────────────
@@ -314,6 +320,8 @@ export interface BuiltApp {
   /** Process shutdown: `stop`, plus abort running turns, wait for them to store their work, end the event streams. */
   shutdown: (graceMs?: number) => Promise<void>;
   auth: Auth;
+  /** The device bridge: register `devices.hub.handleUpgrade` for `/api/devices/connect` on the HTTP server (see `attachUpgradeRouter`). */
+  devices: DeviceService;
   /** Scheduled agent tasks. Started with the app unless `BuildAppOptions.scheduler.autostart` is false (tests drive `tick()` themselves). */
   scheduler: Scheduler;
 }
@@ -371,6 +379,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   if (opts.policyFile) { policyStore.get(); console.log(`[policy] always-allow/block lists and domains: ${opts.policyFile}${policyStore.lastError ? ` (INVALID: ${policyStore.lastError})` : ''}`); }
   const ledger = new UsageLedger(db);
   const sse = new SSEManager();
+  // ─── Device bridge: the user's own machines as MCP servers (docs/devices.md, ADR 0017–0020) ───
+  const devices = createDeviceService({ db, registry, onChange: id => sse.emitAll('devices:changed', { id }) });
+  approvalGate.setCommandScopeResolver(devices.commandScope);
   /**
    * Model for chats that have none of their own: the `chat` slot — the user's explicit default, else a usable `free`
    * model, else any usable chat model — and finally the configured DEFAULT_MODEL (may be empty: then the turn says
@@ -433,9 +444,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
       humanInputTool({ convId: run.conversationId ?? '', projectId: run.projectId, runId: run.id, agent: run.label }, signal),
       reportTool({ convId: run.conversationId ?? '', projectId: run.projectId, runId: run.id, agent: run.label }),
       // Narrowing like every other tool: a worker gets the file tools only when its parent delegated them by name.
-      ...[...workspaceFileTools(run.conversationId, run.id), ...webToolsFor(run.conversationId)].filter(t => run.tools.includes(t.definition.name)),
+      ...[...workspaceFileTools(run.conversationId, run.id), ...webToolsFor(run.conversationId), ...deviceTransferToolsFor(run.conversationId, run.id)].filter(t => run.tools.includes(t.definition.name)),
     ],
-    delegableTools: run => [...workspaceFileTools(run.conversationId, run.id), ...webToolsFor(run.conversationId)].map(t => t.definition.name),
+    delegableTools: run => [...workspaceFileTools(run.conversationId, run.id), ...webToolsFor(run.conversationId), ...deviceTransferToolsFor(run.conversationId, run.id)].map(t => t.definition.name),
     webGrantedHosts: run => webHostsFor(run.conversationId, run.projectId, run.model)(),
   });
   /** Active root run per conversation — async Gazeta answers are delivered into it while a turn runs. */
@@ -584,6 +595,18 @@ ${formatHumanResponse(response)}` };
     });
   }
 
+  /** `device_transfer`: only in a chat that has a workspace (not a ghost chat) and only while a device is online. */
+  function deviceTransferToolsFor(convId: string | null, runId: string): VirtualTool[] {
+    const conv = convId ? getConversation(db, convId) : null;
+    if (!convId || !conv || conv.ghost) return [];
+    return devices.transferTools({
+      owner: conv.projectId ?? convId,
+      sandbox: sandboxExec,
+      readFile: (o, p) => supervisor.readFile(o, p),
+      onTransfer: t => logApprovalAudit(db, { action: 'device_transfer', toolLabel: `${t.from} -> ${t.to}`, toolArgs: JSON.stringify({ bytes: t.bytes }), conversationId: convId, runId }),
+    });
+  }
+
   function buildVirtualTools(convId: string, rootRunId: string, signal: AbortSignal, unattended = false, wakeChain?: number): VirtualTool[] {
     const conv = getConversation(db, convId);
     // Time tools: in a chat the user is in, both; in a wake-up, only another wake-up (a task that creates tasks would run away).
@@ -600,6 +623,7 @@ ${formatHumanResponse(response)}` };
       ...agents.agentTools(rootRunId, signal),
       ...workspaceFileTools(convId, rootRunId),
       ...webToolsFor(convId),
+      ...deviceTransferToolsFor(convId, rootRunId),
       // The one browser can look at the chat's own dev server (not in a ghost chat: it has no browser).
       ...(conv && !conv.ghost ? [previewTool({ owner: conv.projectId ?? convId, link: o => supervisor.preview(o) })] : []),
     ];
@@ -670,6 +694,9 @@ ${formatHumanResponse(response)}` };
   // git-proxy → orchestrator (own bearer secret, GIT_PROXY_ADMIN_TOKEN) — must sit above the user auth.
   app.use('/internal', github.internal);
 
+  // Device pairing start/poll: the device has no session yet. Rate-limited in the pairing manager; creates nothing until a person approves.
+  app.use('/api', devices.routes.public);
+
   // Browser login/logout/session probe (no auth needed to reach them), then the gate for everything else.
   app.use('/api', auth.routes);
   app.use('/api', auth.middleware);
@@ -686,6 +713,7 @@ ${formatHumanResponse(response)}` };
     onChange: id => sse.emitAll('schedule:changed', { id }),
   }));
   app.use('/api', github.api);
+  app.use('/api', devices.routes.api);
   app.use('/api', connectorRoutes.api);
   app.use('/api', webRoutes.api);
 
@@ -2329,11 +2357,12 @@ ${formatHumanResponse(response)}`;
     ]);
     clearTimeout(timer);
     sse.closeAll();
+    await devices.hub.shutdown(); // 1001: the devices reconnect once the server is back
   }
 
   if (opts.scheduler?.autostart !== false) scheduler.start();
 
-  return { app, sse, stop, shutdown, auth, scheduler };
+  return { app, sse, stop, shutdown, auth, scheduler, devices };
 }
 
 // Only actually boot the server (and install process-level handlers) when

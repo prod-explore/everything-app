@@ -750,8 +750,15 @@ export function extractCommand(toolLabel: string, args: Record<string, unknown>)
     const cmd = args['command'] ?? args['keys'] ?? args['input'];
     return typeof cmd === 'string' ? cmd : null;
   }
+  // Shell tools of a device (docs/devices.md): the command travels in `command` (shell_run) or `input` (shell_send).
+  if (real === 'shell_run') return typeof args['command'] === 'string' ? args['command'] : null;
+  if (real === 'shell_send') return typeof args['input'] === 'string' ? args['input'] : null;
   return null;
 }
 
-/** Grant label for a command prefix (stored in approval_grants.tool_label). */
-export const commandGrantLabel = (prefix: string) => `cmd:${prefix}`;
+/**
+ * Grant label for a command prefix (stored in approval_grants.tool_label). Without a namespace this is the sandbox's
+ * `cmd:git push`; a device's grants are `cmd@device-pc:git push`, so a grant never crosses from the sandbox to a
+ * device, or from one device to another (ADR 0019).
+ */
+export const commandGrantLabel = (prefix: string, namespace?: string) => (namespace ? `cmd@${namespace}:${prefix}` : `cmd:${prefix}`);

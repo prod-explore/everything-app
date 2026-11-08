@@ -7,7 +7,11 @@ const guards = new WeakMap<PlaywrightConfig, UrlGuard>();
 export function guardFor(config: PlaywrightConfig): UrlGuard {
   let g = guards.get(config);
   if (!g) {
-    g = new UrlGuard({ allowHosts: config.allowPrivateHosts, allowPattern: config.previewHostPattern });
+    g = new UrlGuard({
+      allowHosts: config.allowPrivateHosts,
+      allowPattern: config.previewHostPattern,
+      allowPrivateNetwork: config.allowPrivateNetwork,
+    });
     guards.set(config, g);
   }
   return g;

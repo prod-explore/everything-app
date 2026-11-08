@@ -58,6 +58,24 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Device bridge: each paired machine keeps one WebSocket open to this endpoint (MCP over text frames, up to 16 MiB each;
+    # the app pings every 25 s). Needs the Upgrade headers and a long idle timeout so nginx does not cut a quiet device.
+    # client_max_body_size does not apply to WebSocket frames. The pairing endpoints (/api/devices/pair/*) are plain HTTP
+    # and go through `location /` below.
+    location /api/devices/connect {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+        proxy_set_header Host              $http_host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     location = /api/login {
         limit_req zone=ea_login burst=5 nodelay;
         proxy_pass http://127.0.0.1:3000;

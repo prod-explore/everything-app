@@ -107,9 +107,13 @@ export class ToolRegistry {
     return sub;
   }
 
-  /** Drops every tool of one connection (connector disabled/removed at runtime). */
-  removeConnection(name: string): void {
-    for (const [key, tool] of this.tools) if (tool.connection.name === name) this.tools.delete(key);
+  /**
+   * Drops every tool of one connection (connector disabled/removed at runtime). With `only`, just the tools that this very
+   * connection object registered: a device that reconnects registers a new object under the same name, and the old
+   * socket closing late must not take the new tools away.
+   */
+  removeConnection(name: string, only?: McpConnectionLike): void {
+    for (const [key, tool] of this.tools) if (tool.connection.name === name && (!only || tool.connection === only)) this.tools.delete(key);
   }
 
   /** Exposed name for any accepted spelling ("server__tool", "server/tool", bare "tool"), or undefined. */
@@ -134,11 +138,14 @@ export class ToolRegistry {
 
   /**
    * Default-deny: a tool is auto-approved only if whitelisted by its real (unprefixed) name AND it belongs to a connector the
-   * operator configured. A connector added by hand in Settings is not trusted that far — its tools ask (and can be granted
+   * operator configured (a connection with its own `autoApproves` decides for itself, see McpConnectionLike). A connector added by hand in Settings is not trusted that far — its tools ask (and can be granted
    * "always" from the approval card), so a server cannot get a free pass by naming a tool like a whitelisted one.
    */
   requiresApproval(exposedName: string): boolean {
     const tool = this.tools.get(exposedName);
+    // A connection that knows its own rules (a device: live permission levels) has the last word, both ways.
+    const own = tool?.connection.autoApproves?.(tool.realName);
+    if (own !== undefined) return !own;
     if (tool && tool.connection.trusted === false) return true;
     const realName = tool?.realName ?? exposedName;
     return !this.autoApproveTools.includes(realName);

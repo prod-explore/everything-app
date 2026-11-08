@@ -14,5 +14,5 @@ export function registerAllTools(server: McpServer, config: PlaywrightConfig, po
   registerBrowserAct(server, config, pool);
   registerBrowserTabs(server, config, pool);
   registerBrowserScreenshot(server, config, pool);
-  registerBrowserClose(server, pool);
+  registerBrowserClose(server, pool, config);
 }

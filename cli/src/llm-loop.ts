@@ -52,8 +52,14 @@ export interface VirtualToolContext {
  */
 export interface VirtualTool {
   definition: Llm.Tool;
-  /** Route through the approval gate before running. Default: false. */
-  requiresApproval?: boolean;
+  /**
+   * Route through the approval gate before running. Default: false. A function decides per call, from the model's
+   * arguments — for a tool whose need for approval depends on where it acts (device_transfer onto a device that asks
+   * for file writes, or into the workspace, which does not).
+   */
+  requiresApproval?: boolean | ((input: Record<string, unknown>) => boolean);
+  /** The label the approval card and grants use for this call (default: the tool name). Lets a grant be scoped, e.g. `device-pc/device_transfer`. */
+  approvalLabel?: (input: Record<string, unknown>) => string;
   /** Always ask a human, never covered by a grant; the text is shown with the request. */
   alwaysAsk?: string;
   handler(input: Record<string, unknown>, ctx: VirtualToolContext): Promise<{ text: string; isError?: boolean; images?: ToolImage[] }>;
@@ -165,11 +171,13 @@ const DENIED_MESSAGE = 'Rejected by user (approval gate) — not executed.';
 const BROWSER_TOOL_NAMES = new Set(['browser_open', 'browser_observe', 'browser_screenshot', 'browser_act', 'browser_tabs', 'browser_close']);
 /** The subset that lives in the project-scoped sandbox. */
 const SANDBOX_TOOL_NAMES = new Set(['run_bash', 'git_op', 'read_log', 'terminal_list', 'terminal_close']);
+/** Shell tools of a device: one set of shell sessions per (chat, session name), so they get `_conversation_id` but, unlike the sandbox, no project. */
+const DEVICE_SHELL_TOOL_NAMES = new Set(['shell_run', 'shell_send', 'shell_read', 'shell_list', 'shell_close']);
 /**
  * Tools pinned to one conversation: they get `_conversation_id` injected so their MCP server can keep per-chat state
  * (the sandbox owner, the browser session). Matched by the real tool name (after the `__` separator ToolRegistry uses).
  */
-const STATEFUL_TOOL_NAMES = new Set([...SANDBOX_TOOL_NAMES, ...BROWSER_TOOL_NAMES]);
+const STATEFUL_TOOL_NAMES = new Set([...SANDBOX_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...DEVICE_SHELL_TOOL_NAMES]);
 /** Read-only tools that stay unprompted even after a page looked like a prompt injection. */
 const READ_ONLY_AFTER_INJECTION = new Set(['browser_observe', 'browser_screenshot', 'browser_tabs', 'browser_close', 'read_log', 'terminal_list', 'read_file']);
 /** Results of these virtual tools carry the same `[browser-meta]` first line as browser observations. */
@@ -454,12 +462,14 @@ async function runLoop(
       }
 
       // A domain-gated call has just been approved per domain: that IS the approval for opening it.
-      const needsApproval = domainGated ? false : virtual ? virtual.requiresApproval === true : deps.tools.requiresApproval(use.name);
+      const virtualAsks = virtual && (typeof virtual.requiresApproval === 'function' ? virtual.requiresApproval(args) : virtual.requiresApproval === true);
+      const needsApproval = domainGated ? false : virtual ? virtualAsks === true : deps.tools.requiresApproval(use.name);
       // The domain was just approved by a human; asking again for the same call would be the double prompt.
       const afterInjection = injectionWarning && !READ_ONLY_AFTER_INJECTION.has(real) && !(domainGated && approvedHost) ? injectionWarning : undefined;
       const irreversible = !virtual && real === 'browser_act' && looksDangerous(args) ? IRREVERSIBLE_WARNING : undefined;
       const forcePrompt = virtual?.alwaysAsk ?? afterInjection ?? irreversible;
-      const decision = needsApproval || forcePrompt ? await deps.confirm(label, args, forcePrompt ? { forcePrompt } : undefined) : true;
+      const gateLabel = virtual?.approvalLabel?.(args) ?? label;
+      const decision = needsApproval || forcePrompt ? await deps.confirm(gateLabel, args, forcePrompt ? { forcePrompt } : undefined) : true;
       const approved = typeof decision === 'boolean' ? decision : decision.approved;
       const denyReason = typeof decision === 'boolean' ? undefined : decision.reason;
       // Re-check AFTER the (possibly long) human wait: a kill switch pressed while this
@@ -499,6 +509,11 @@ async function runLoop(
         if (needsProjectId(use.name)) {
           const { _project_id: _ignored, ...rest } = enrichedArgs;
           enrichedArgs = deps.projectId ? { ...rest, _project_id: deps.projectId } : rest;
+        }
+        if (DEVICE_SHELL_TOOL_NAMES.has(real)) {
+          // A device has no project: whatever the model put there is not passed on.
+          const { _project_id: _ignored, ...rest } = enrichedArgs;
+          enrichedArgs = rest;
         }
         if (BROWSER_TOOL_NAMES.has(real)) {
           // Hidden args belong to the orchestrator: a model could otherwise widen its own policy, approve a domain

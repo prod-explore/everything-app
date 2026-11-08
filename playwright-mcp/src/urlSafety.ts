@@ -128,6 +128,11 @@ export interface UrlGuardOptions {
    * attached to for exactly that sandbox.
    */
   allowPattern?: RegExp;
+  /**
+   * Skip the private-network checks (the http/https scheme check stays). For the device agent, where a localhost dev
+   * server on the person's own machine is a normal target. Never set on the server.
+   */
+  allowPrivateNetwork?: boolean;
   /** DNS seam for tests. Must return every A/AAAA record. */
   resolve?: (hostname: string) => Promise<string[]>;
   /** How long a hostname's resolution is cached (per-request checks would otherwise hammer DNS). */
@@ -141,6 +146,7 @@ const defaultResolve = async (hostname: string): Promise<string[]> =>
 export class UrlGuard {
   private readonly allow: Set<string>;
   private readonly allowPattern: RegExp | undefined;
+  private readonly allowPrivateNetwork: boolean;
   private readonly resolve: (hostname: string) => Promise<string[]>;
   private readonly ttl: number;
   private readonly now: () => number;
@@ -149,6 +155,7 @@ export class UrlGuard {
   constructor(opts: UrlGuardOptions = {}) {
     this.allow = new Set((opts.allowHosts ?? []).map(h => h.trim().toLowerCase()).filter(Boolean));
     this.allowPattern = opts.allowPattern;
+    this.allowPrivateNetwork = opts.allowPrivateNetwork === true;
     this.resolve = opts.resolve ?? defaultResolve;
     this.ttl = opts.cacheTtlMs ?? 30_000;
     this.now = opts.now ?? Date.now;
@@ -165,6 +172,7 @@ export class UrlGuard {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       throw new UrlBlockedError(rawUrl, 'only http/https URLs are allowed');
     }
+    if (this.allowPrivateNetwork) return;
     // WHATWG parsing already normalises 2130706433 / 0x7f.1 / 017700000001 to dotted-decimal.
     let host = parsed.hostname.toLowerCase().replace(/\.$/, '');
     if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);

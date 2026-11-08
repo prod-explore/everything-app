@@ -33,8 +33,12 @@ export function registerBrowserOpen(server: McpServer, config: PlaywrightConfig,
         'select on the page afterward, and browser_close when you\'re done with it. ' +
         'The page opens in the current tab; with new_tab: true it opens in a new tab and the other tabs stay as they ' +
         'were (switch between them with browser_tabs). ' +
-        'The browser profile is ephemeral: no saved logins or cookies from earlier sessions; if a site ' +
-        'needs a login, ask the user to log in via the live view. The user approves each website ' +
+        (config.persistentProfile
+          ? 'This is the user\'s own browser, visible on their screen, with their saved logins and cookies; if a site ' +
+            'needs a login that is not there, ask the user to log in in that window. '
+          : 'The browser profile is ephemeral: no saved logins or cookies from earlier sessions; if a site ' +
+            'needs a login, ask the user to log in via the live view. ') +
+        'The user approves each website ' +
         '(domain) the first time you open it; a link or redirect to a DIFFERENT domain is blocked until you browser_open that URL, ' +
         'which asks the user. A domain the operator blocked stays blocked — tell the user instead of retrying. ' +
         'Returns a deterministic observation: the interactive element list (refs for browser_act) and ' +

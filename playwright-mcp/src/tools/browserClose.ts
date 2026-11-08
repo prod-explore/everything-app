@@ -1,15 +1,20 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BrowserSessionPool } from '../sessionPool.js';
+import type { PlaywrightConfig } from '../config.js';
 import { ok } from './types.js';
 
-export function registerBrowserClose(server: McpServer, pool: BrowserSessionPool): void {
+export function registerBrowserClose(server: McpServer, pool: BrowserSessionPool, config?: Pick<PlaywrightConfig, 'persistentProfile'>): void {
   server.registerTool(
     'browser_close',
     {
       title: 'Close browser session',
-      description: 'Close this conversation\'s browser session. The profile is ephemeral, so this also discards ' +
-        'its cookies, logins and any allowed downloads. Not required at the end of a task; idle sessions ' +
+      description: (config?.persistentProfile
+        ? 'Close this conversation\'s browser session — on a device this closes the browser window itself (the profile, ' +
+          'with its logins, stays on disk). '
+        : 'Close this conversation\'s browser session. The profile is ephemeral, so this also discards ' +
+          'its cookies, logins and any allowed downloads. ') +
+        'Not required at the end of a task; idle sessions ' +
         'time out on their own, but call this when you know you\'re done to free the slot sooner.',
       inputSchema: {
         _conversation_id: z

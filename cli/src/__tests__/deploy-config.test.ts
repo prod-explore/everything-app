@@ -13,6 +13,14 @@ import { DEFAULT_SCHEDULE_MAX_STEPS } from '../server.js';
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const compose = readFileSync(join(repo, 'docker-compose.yml'), 'utf8');
 const envExample = readFileSync(join(repo, '.env.example'), 'utf8');
+const nginx = readFileSync(join(repo, 'deploy', 'nginx-everythingapp.conf.example'), 'utf8');
+
+/** The body of `location <pattern> { … }` in the nginx example (no nested braces in this file's locations). */
+function nginxLocation(pattern: string): string {
+  const m = new RegExp(`location ${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(nginx);
+  assert.ok(m, `nginx example has a location for ${pattern}`);
+  return m[1]!;
+}
 
 /** Every `${VAR…}` in the compose file, with its default (`${VAR:-x}` / `${VAR-x}`), or null when it has none. */
 function composeVariables(): Map<string, Set<string | null>> {
@@ -71,5 +79,24 @@ describe('deployment configuration', () => {
     assert.equal(webDefault('RETENTION_MONTHS'), String(DEFAULT_RETENTION_MONTHS));
     assert.equal(webDefault('GHOST_CONNECTORS'), DEFAULT_GHOST_CONNECTORS.join(','));
     assert.ok(envExample.includes(DEFAULT_AUTO_APPROVE_TOOLS.join(',')), '.env.example names the default auto-approve list');
+  });
+
+  it('the nginx example forwards WebSocket upgrades for the live view and the device bridge, with long timeouts for devices', () => {
+    for (const path of ['/api/liveview', '/api/devices/connect']) {
+      const block = nginxLocation(path);
+      assert.match(block, /proxy_http_version 1\.1;/, path);
+      assert.match(block, /proxy_set_header Upgrade\s+\$http_upgrade;/, path);
+      assert.match(block, /proxy_set_header Connection "upgrade";/, path);
+      for (const h of ['Host', 'X-Real-IP', 'X-Forwarded-For', 'X-Forwarded-Proto']) assert.match(block, new RegExp(`proxy_set_header ${h}\\s`), `${path} sends ${h}`);
+    }
+    const devices = nginxLocation('/api/devices/connect');
+    assert.match(devices, /proxy_read_timeout 3600s;/);
+    assert.match(devices, /proxy_send_timeout 3600s;/);
+    assert.doesNotMatch(devices, /client_max_body_size/, 'WebSocket frames are not request bodies');
+    assert.match(nginx, /client_max_body_size 16m;/, 'the server-level body limit is unchanged');
+  });
+
+  it('.env.example points operators at the proxy requirement of the device bridge', () => {
+    assert.match(envExample, /api\/devices\/connect/);
   });
 });

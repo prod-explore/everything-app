@@ -34,6 +34,16 @@ export interface PlaywrightConfig {
   domainDeny: string[];
   /** Operator JavaScript policy (BROWSER_JS_POLICY = disabled | review | allowed, default allowed). */
   jsPolicy: JsPolicy;
+  /**
+   * Embedded use only (the device agent, see lib.ts): private/loopback/LAN addresses are reachable. The server never sets
+   * it — the SSRF guard stays on there. The scheme check (http/https only) still applies.
+   */
+  allowPrivateNetwork?: boolean;
+  /**
+   * Embedded use only: the browser runs a PERSISTENT profile (the person's own), so tool descriptions must not promise
+   * an ephemeral one. Unset on the server.
+   */
+  persistentProfile?: boolean;
 }
 
 function required(name: string): string {

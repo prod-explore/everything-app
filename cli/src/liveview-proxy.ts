@@ -1,6 +1,7 @@
 import * as http from 'node:http';
 import type { Duplex } from 'node:stream';
 import { timingSafeEqual } from 'node:crypto';
+import { attachUpgradeRouter, type UpgradeHandler } from './upgrade-router.js';
 
 /**
  * Same-origin proxy for the browser live view.
@@ -45,19 +46,18 @@ function reject(socket: Duplex, status: string): void {
 // Headers that describe the client↔proxy hop or carry the user's credentials — never forwarded upstream.
 const DROP_REQUEST_HEADERS = new Set(['host', 'authorization', 'cookie', 'origin', 'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-real-ip']);
 
+/** A server that serves only the live view (tests). The real server routes both of its WebSocket endpoints through one upgrade router. */
 export function attachLiveViewProxy(server: http.Server, opts: LiveViewProxyOptions): void {
+  attachUpgradeRouter(server, { [LIVEVIEW_PATH]: createLiveViewUpgrade(opts) });
+}
+
+/** The handshake handler for `LIVEVIEW_PATH`; register it with `attachUpgradeRouter`. */
+export function createLiveViewUpgrade(opts: LiveViewProxyOptions): UpgradeHandler {
   const upstream = opts.upstreamUrl ? new URL(opts.upstreamUrl) : null;
 
-  server.on('upgrade', (req, clientSocket, head) => {
-    // A client that resets the connection before the handshake finishes must not become an uncaught 'error' event.
-    clientSocket.on('error', () => clientSocket.destroy());
+  return (req, clientSocket, head) => {
     let url: URL;
     try { url = new URL(req.url ?? '/', 'http://localhost'); } catch { clientSocket.destroy(); return; }
-    if (url.pathname !== LIVEVIEW_PATH) {
-      // This server has no other WebSocket endpoints.
-      clientSocket.destroy();
-      return;
-    }
 
     // Auth: the browser's session cookie (same-origin handshake), or a Bearer header for non-browser clients.
     // The token is never accepted in the URL: it would end up in proxy logs and Referer headers.
@@ -136,5 +136,5 @@ export function attachLiveViewProxy(server: http.Server, opts: LiveViewProxyOpti
     });
 
     upstreamReq.end();
-  });
+  };
 }

@@ -23,6 +23,7 @@ export type SSEEventName =
   | 'agent:finished'
   | 'agent:budget_warning'
   | 'pins:changed'
+  | 'devices:changed'
   | 'schedule:changed'
   | 'provider:retry'
   | 'queue:changed'

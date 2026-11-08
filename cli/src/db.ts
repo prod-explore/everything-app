@@ -1216,6 +1216,15 @@ export function deleteApprovalGrant(db: Database.Database, id: string): boolean 
   return db.prepare(`DELETE FROM approval_grants WHERE id = ?`).run(id).changes > 0;
 }
 
+/**
+ * Deletes every grant whose label starts with one of the prefixes (a revoked device: `device-pc/` and `cmd@device-pc:`).
+ * Compared as text, not with LIKE, so a prefix never acts as a pattern. Returns how many grants went.
+ */
+export function deleteApprovalGrantsWithPrefix(db: Database.Database, prefixes: readonly string[]): number {
+  const stmt = db.prepare(`DELETE FROM approval_grants WHERE substr(tool_label, 1, length(?)) = ?`);
+  return db.transaction(() => prefixes.reduce((n, p) => n + (p ? stmt.run(p, p).changes : 0), 0))();
+}
+
 export function findMatchingGrant(
   db: Database.Database,
   toolLabel: string,

@@ -70,3 +70,13 @@ export async function writeWorkspaceFile(sandbox: SandboxExec, owner: string, ra
   await putFile(sandbox, owner, path, Buffer.from(content, 'utf8'));
   return { path, bytes };
 }
+
+/**
+ * Saves any bytes (a file brought over from a device). Same path rules and atomic write as `writeWorkspaceFile`, without
+ * the text-editor size limit: the caller states its own cap.
+ */
+export async function writeWorkspaceBytes(sandbox: SandboxExec, owner: string, rawPath: string, data: Buffer): Promise<{ path: string; bytes: number }> {
+  const path = resolveWorkspacePath(rawPath);
+  await putFile(sandbox, owner, path, data);
+  return { path, bytes: data.length };
+}

@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
+import { extname, join } from 'node:path';
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Download, type FileChooser, type Page } from 'playwright';
 import { checkNavigation, checkRequest, jsContextOptions, OPEN_POLICY, type EffectivePolicy, type PolicyOverride } from './policy.js';
 import type { UrlGuard } from './urlSafety.js';
@@ -18,6 +21,11 @@ export interface SessionState {
   approvedHosts: Set<string>;
   /** Set per call from `_allow_downloads`; reset after the call. */
   allowDownloads: boolean;
+  /**
+   * Embedded use (device agent): where an ALLOWED download is saved. Unset = the download is only accepted, i.e. kept in
+   * the session's temporary directory until it closes (server behaviour).
+   */
+  downloadDir?: string;
   /** Security-relevant events since the last tool result (blocked navigations, downloads…). Drained by tools. */
   events: string[];
 }
@@ -166,8 +174,21 @@ function isTopLevelNav(req: import('playwright').Request): boolean {
   }
 }
 
-export function handleDownload(state: SessionState, download: Pick<Download, 'cancel' | 'suggestedFilename' | 'url'>): void {
+export function handleDownload(
+  state: SessionState,
+  download: Pick<Download, 'cancel' | 'suggestedFilename' | 'url'> & Partial<Pick<Download, 'saveAs'>>,
+): void {
   const name = safeName(download.suggestedFilename());
+  if (state.allowDownloads && state.downloadDir && download.saveAs) {
+    // Embedded use (device): the person allowed this download, so it lands in their download folder under a name that
+    // cannot overwrite anything (the name was sanitised above; a numeric suffix keeps an existing file intact).
+    const target = freeName(state.downloadDir, name);
+    pushEvent(state, `download allowed, saved to ${target}`);
+    void mkdir(state.downloadDir, { recursive: true })
+      .then(() => download.saveAs!(target))
+      .catch(err => pushEvent(state, `download failed to save: ${err instanceof Error ? err.message : String(err)}`));
+    return;
+  }
   if (state.allowDownloads) {
     pushEvent(state, `download allowed (kept only in the ephemeral session, deleted when it closes): ${name}`);
     return;
@@ -184,6 +205,14 @@ export function handleFileChooser(state: SessionState, _chooser?: FileChooser): 
       ? 'file upload dialog opened — this browser tool cannot upload files'
       : 'file upload blocked — uploads need explicit user permission (ask the user)',
   );
+}
+
+function freeName(dir: string, name: string): string {
+  const ext = extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  let candidate = join(dir, name);
+  for (let n = 1; existsSync(candidate) && n < 1000; n++) candidate = join(dir, `${stem} (${n})${ext}`);
+  return candidate;
 }
 
 function safeName(s: string): string {

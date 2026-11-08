@@ -14,7 +14,9 @@ import {
   extractCommand,
   parseCommandPolicy,
   commandGrantLabel,
+  type CommandPolicy,
   grantable,
+  type CommandMode,
   type SubcommandVerdict,
 } from './command-policy.js';
 import { mergeCommandPolicy, type PolicyStore } from './policy-file.js';
@@ -87,6 +89,8 @@ export interface PendingApproval {
   commands?: SubcommandVerdict[];
   /** Shell tools: the command prefixes a "for this chat" / "always" approval covers (`git commit` = every `git commit …`). */
   covers?: string[];
+  /** Shell tools of a device: the namespace its command grants live in (`cmd@device-pc:…`); unset for the sandbox (`cmd:…`). */
+  grantNamespace?: string;
   /** 'chat' when a sub-command is destructive: the approval can be remembered for this chat at most. */
   maxScope?: 'chat';
   /** Why this call must be approved by hand even though a grant/policy might cover it. */
@@ -116,6 +120,19 @@ type ConfirmCtx = {
   origin?: string;
 };
 
+/**
+ * Where the commands of a tool are judged and remembered when it is not the project's sandbox: a device's shell.
+ * `mode` is the effective command mode (the device's own level, already downgraded for a shell that is not POSIX),
+ * `namespace` scopes the grants that approving a command creates and the grants that can cover it.
+ */
+export interface CommandScope {
+  namespace: string;
+  mode: CommandMode;
+}
+
+/** Resolves the command scope of a tool label (`device-pc/shell_run`), or null for the sandbox and everything else. */
+export type CommandScopeResolver = (toolLabel: string) => CommandScope | null;
+
 /** Requests of runs that did not wait stay in the list this long, and at most this many. */
 const LATE_TTL_MS = 7 * 24 * 3600 * 1000;
 const LATE_MAX = 50;
@@ -126,6 +143,14 @@ export class WebApprovalGate {
   // looked up on every confirm() so revocation and model/skill scoping take effect immediately.
   private readonly chatAllowed = new Map<string, Set<string>>();
   private readonly pending = new Map<string, { entry: PendingApproval; resolve: (approved: boolean) => void; timer?: ReturnType<typeof setTimeout> }>();
+
+  /** Set by the device bridge; without it every command is judged by the project's policy, as always. */
+  private commandScope?: CommandScopeResolver;
+
+  /** Installs the resolver that gives device shells their own policy and grant namespace. */
+  setCommandScopeResolver(resolver: CommandScopeResolver | undefined): void {
+    this.commandScope = resolver;
+  }
 
   /** Called when a call starts waiting for a human (not for grants/policy decisions). Must not throw. */
   onPending?: (entry: PendingApproval) => void;
@@ -160,24 +185,34 @@ export class WebApprovalGate {
     const grantCtx = { conversationId, projectId: ctx?.projectId, modelId: ctx?.modelId, skillId: ctx?.skillId };
     const audit = (action: string) => logApprovalAudit(this.db, { action, toolLabel, toolArgs: JSON.stringify(args), conversationId });
 
-    // Shell commands: classified per sub-command by the project's command policy.
+    // Shell commands: classified per sub-command by the project's command policy — or, for a device's shell, by the
+    // device's own level (ADR 0019) with grants kept in the device's namespace.
     // A tool-level grant on run_bash deliberately does NOT apply here: it would approve any command the tool can run.
     const command = extractCommand(toolLabel, args);
+    const scope = command !== null ? this.commandScope?.(toolLabel) ?? null : null;
+    const grantNamespace = scope?.namespace;
     let commands: SubcommandVerdict[] | undefined;
     if (command !== null) {
-      const project = ctx?.projectId ? getProject(this.db, ctx.projectId) : null;
-      const projectRaw = project?.policy?.['commands'];
-      const projectPolicy = parseCommandPolicy(projectRaw);
-      const projectHasMode = !!projectRaw && typeof projectRaw === 'object' && 'mode' in (projectRaw as object);
-      const policy = this.policyFile ? mergeCommandPolicy(this.policyFile.get().commands, projectPolicy, projectHasMode) : projectPolicy;
+      let policy: CommandPolicy;
+      if (scope) {
+        // The project's policy says nothing about a machine of the user's: only policy.json's lists apply next to the device's level.
+        const bare: CommandPolicy = { mode: scope.mode, allow: [], deny: [], domains: [] };
+        policy = this.policyFile ? mergeCommandPolicy(this.policyFile.get().commands, bare, true) : bare;
+      } else {
+        const project = ctx?.projectId ? getProject(this.db, ctx.projectId) : null;
+        const projectRaw = project?.policy?.['commands'];
+        const projectPolicy = parseCommandPolicy(projectRaw);
+        const projectHasMode = !!projectRaw && typeof projectRaw === 'object' && 'mode' in (projectRaw as object);
+        policy = this.policyFile ? mergeCommandPolicy(this.policyFile.get().commands, projectPolicy, projectHasMode) : projectPolicy;
+      }
       const chatSet = this.chatAllowed.get(conversationId);
       const verdict = evaluateCommand(command, policy, (prefix, { chatOnly }) =>
-        !!chatSet?.has(commandGrantLabel(prefix)) ||
-        !!findMatchingGrant(this.db, commandGrantLabel(prefix), chatOnly ? { ...grantCtx, scopes: ['chat'] } : grantCtx));
+        !!chatSet?.has(commandGrantLabel(prefix, grantNamespace)) ||
+        !!findMatchingGrant(this.db, commandGrantLabel(prefix, grantNamespace), chatOnly ? { ...grantCtx, scopes: ['chat'] } : grantCtx));
       if (verdict.decision === 'deny') {
         audit('policy_denied');
         const blocked = verdict.subcommands.filter(s => s.decision === 'deny').map(s => s.command);
-        return { approved: false, reason: `blocked by the project command policy: ${blocked.join('; ')}` };
+        return { approved: false, reason: `blocked by the ${scope ? 'command' : 'project command'} policy: ${blocked.join('; ')}` };
       }
       if (verdict.decision === 'allow' && !dangerous) {
         audit('auto_approved');
@@ -199,9 +234,10 @@ export class WebApprovalGate {
     const timeoutMs = unattended ? (waitSeconds > 0 ? waitSeconds * 1000 : undefined) : ctx?.timeoutSeconds ? ctx.timeoutSeconds * 1000 : undefined;
     const entry: PendingApproval = {
       id, conversationId, projectId: ctx?.projectId, toolLabel, args, dangerous, createdAt: new Date().toISOString(), timeoutMs, commands, warning: ctx?.forcePrompt,
+      ...(grantNamespace ? { grantNamespace } : {}),
     };
     if (commands) {
-      if (!dangerous) entry.covers = this.grantLabels(entry).map(l => l.slice(commandGrantLabel('').length));
+      if (!dangerous) entry.covers = this.grantLabels(entry).map(l => l.slice(commandGrantLabel('', grantNamespace).length));
       if (commands.some(c => c.decision === 'ask' && c.destructive)) entry.maxScope = 'chat';
     }
     const who = ctx?.origin ? `Scheduled task "${ctx.origin}"` : 'A scheduled run';
@@ -336,10 +372,10 @@ export class WebApprovalGate {
   }
 
   /** What "allow for good" would cover for this call: the sub-command prefixes the human saw for a shell tool, else the tool itself. A dangerous call is never covered. */
-  grantLabels(req: { toolLabel: string; dangerous: boolean; commands?: SubcommandVerdict[] }): string[] {
+  grantLabels(req: { toolLabel: string; dangerous: boolean; commands?: SubcommandVerdict[]; grantNamespace?: string }): string[] {
     if (req.dangerous) return [];
     return req.commands
-      ? [...new Set(req.commands.filter(grantable).map(c => commandGrantLabel(c.prefix)))]
+      ? [...new Set(req.commands.filter(grantable).map(c => commandGrantLabel(c.prefix, req.grantNamespace)))]
       : [req.toolLabel];
   }
 

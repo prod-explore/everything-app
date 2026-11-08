@@ -6,7 +6,7 @@ import type { McpServerConfig } from './config.js';
 import { pickImages, type ToolImage } from './tool-images.js';
 
 const envTimeout = parseInt(process.env['MCP_TOOL_TIMEOUT_MS'] ?? '', 10);
-const TOOL_CALL_TIMEOUT_MS = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 330_000;
+export const TOOL_CALL_TIMEOUT_MS = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 330_000;
 
 export interface McpToolInfo {
   name: string;
@@ -40,8 +40,27 @@ export interface McpConnectionLike {
   connect?(): Promise<void>;
   /** The name the server reports about itself, once connected. */
   readonly serverName?: string;
+  /**
+   * The connection's own verdict on whether a call to this tool (real, unprefixed name) runs without asking. When a
+   * connection has one, its answer is final — `true` skips the approval, `false` asks even if AUTO_APPROVE_TOOLS names
+   * the tool — because it knows something the registry cannot (a device's live permission levels, ADR 0019).
+   * Unset = the registry's own rules (trusted + AUTO_APPROVE_TOOLS).
+   */
+  autoApproves?(realName: string): boolean;
   listTools(): Promise<McpToolInfo[]>;
   callTool(name: string, args: Record<string, unknown>): Promise<McpToolCallResult>;
+}
+
+/** Flattens an MCP `tools/call` result into text, pictures and an error flag (shared by every connection type). */
+export function toCallResult(raw: object): McpToolCallResult {
+  const result = raw as { content?: unknown; isError?: unknown };
+  const content = (result.content ?? []) as Array<{ type: string; text?: string; data?: unknown; mimeType?: unknown }>;
+  const { images, notes } = pickImages(content);
+  const text = [
+    ...content.filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text as string),
+    ...notes,
+  ].join('\n');
+  return { text: text || (images.length > 0 ? `(${images.length === 1 ? 'an image' : `${images.length} images`})` : '(empty result)'), isError: Boolean(result.isError), ...(images.length > 0 ? { images } : {}) };
 }
 
 /**
@@ -142,13 +161,7 @@ export class McpConnection implements McpConnectionLike {
     // The SDK's default request timeout is 60s, which would cut off a long `npm install` that the sandbox
     // itself is still happily running. Sandbox commands have their own, lower cap (MAX_COMMAND_MS in sandbox-mcp).
     const result = await this.client!.callTool({ name, arguments: args }, undefined, { timeout: TOOL_CALL_TIMEOUT_MS });
-    const content = (result.content ?? []) as Array<{ type: string; text?: string; data?: unknown; mimeType?: unknown }>;
-    const { images, notes } = pickImages(content);
-    const text = [
-      ...content.filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text as string),
-      ...notes,
-    ].join('\n');
-    return { text: text || (images.length > 0 ? `(${images.length === 1 ? 'an image' : `${images.length} images`})` : '(empty result)'), isError: Boolean(result.isError), ...(images.length > 0 ? { images } : {}) };
+    return toCallResult(result);
   }
 
   async close(): Promise<void> {
