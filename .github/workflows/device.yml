@@ -2,7 +2,8 @@ name: Device
 
 # Device bridge: the Node agent (device/agent) and the Tauri tray app (device/app).
 # Pushes and pull requests touching device/** run the checks; a tag device-vX.Y.Z builds the installers for every
-# platform into a draft GitHub release (unsigned until signing credentials are added below).
+# platform into a draft GitHub release (unsigned until signing credentials are added below). The same release build can be
+# started from the Actions tab ("Run workflow") with a version; the tag is then created by the release itself.
 
 on:
   push:
@@ -15,6 +16,12 @@ on:
     paths:
       - 'device/**'
       - '.github/workflows/device.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without the prefix, e.g. 0.1.0 (published as tag device-v<version>)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -77,7 +84,7 @@ jobs:
 
   release:
     name: release (${{ matrix.target }})
-    if: startsWith(github.ref, 'refs/tags/device-v')
+    if: startsWith(github.ref, 'refs/tags/device-v') || github.event_name == 'workflow_dispatch'
     needs: [agent, tauri-check]
     runs-on: ${{ matrix.os }}
     # The only job that writes to the repository (draft release assets).
@@ -135,8 +142,8 @@ jobs:
           projectPath: device/app
           tauriScript: npx tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-          tagName: ${{ github.ref_name }}
-          releaseName: 'EverythingApp Device ${{ github.ref_name }}'
+          tagName: ${{ github.event_name == 'workflow_dispatch' && format('device-v{0}', inputs.version) || github.ref_name }}
+          releaseName: ${{ format('EverythingApp Device {0}', github.event_name == 'workflow_dispatch' && format('device-v{0}', inputs.version) || github.ref_name) }}
           releaseBody: 'Unsigned installers. Windows: SmartScreen may warn; macOS: allow the app in System Settings > Privacy & Security.'
           releaseDraft: true
           prerelease: false
