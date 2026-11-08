@@ -50,6 +50,10 @@ All screenshots were taken against the scripted mock model in `tools/mock-llm` (
 - **Ghost chats.** Chats and projects that only ever talk to models marked as running on your own hardware, without web,
   browser or third-party connectors. The flag cannot be turned off once set.
 - **Connectors.** Any MCP server, added by URL in Settings.
+- **Your own machines.** A tray app on Windows, macOS or Linux pairs a computer with the app once (approve it in the
+  browser) and gives agents its terminal, chosen folders and your own browser profile, each switched on or off on that
+  machine. Every call goes through the same approval cards; nothing listens on the computer.
+  [Devices](docs/devices.md).
 
 ## Try it locally
 
@@ -150,6 +154,8 @@ that the process holding your keys never runs agent code and the processes runni
 | [`sandbox-mcp/`](sandbox-mcp) | MCP tools `run_bash`, `git_op`, `read_log`, `checkpoint_list`, `rollback`, terminals |
 | [`playwright-mcp/`](playwright-mcp) | Browser agent tools, live view, URL guard |
 | [`git-proxy/`](git-proxy) | Git smart-HTTP proxy to github.com ([git-proxy/README.md](git-proxy/README.md)) |
+| [`device/agent/`](device/agent) | Device agent: shell, file and browser tools of a paired computer, over an outbound WebSocket |
+| [`device/app/`](device/app) | Tray app (Tauri v2) that pairs a computer and supervises the device agent ([device/app/README.md](device/app/README.md)) |
 | [`deploy/`](deploy) | Update with rollback, backup, egress guard, nginx example |
 | [`docs/adr/`](docs/adr) | Architecture decision records |
 
@@ -174,6 +180,11 @@ that the process holding your keys never runs agent code and the processes runni
   data to an address it composed. [ADR 0012](docs/adr/0012-web-access.md).
 - **Ghost is a database invariant.** A trigger rejects any update of the ghost flag, and "local" must be stated positively
   (by you or by the provider), never inferred. [ADR 0013](docs/adr/0013-ghost-mode.md).
+- **Devices dial out and speak MCP.** A paired computer opens one WebSocket to the app and serves MCP over it, so its
+  tools join the registry like any connector and pass the same gate; no port is opened on the computer. The machine sets
+  the ceiling (which capabilities, which folders), the app approves each call, and command grants are scoped to one device.
+  [ADR 0017](docs/adr/0017-device-bridge.md), [0018](docs/adr/0018-device-pairing.md), [0019](docs/adr/0019-device-permissions.md),
+  [0020](docs/adr/0020-device-browser.md), [0021](docs/adr/0021-device-app.md).
 - **Unattended runs use the same gate.** A scheduled run can do what you already allowed; anything else is refused or waits
   in the inbox for a set time. [ADR 0016](docs/adr/0016-scheduled-tasks.md).
 
@@ -211,10 +222,12 @@ do so ask first, but once approved they run.
 - **GitHub only** for git through the proxy. Signed pushes are refused; force pushes are not always detectable (see
   [git-proxy/README.md](git-proxy/README.md#limitations-v1)).
 - **Checkpoints skip nested repositories** inside the workspace (git records them as gitlinks).
-- **`web_fetch` reads HTML, JSON and text only**, and runs no JavaScript; the browser covers the rest. Browser profiles are
-  ephemeral, so logins do not persist.
+- **`web_fetch` reads HTML, JSON and text only**, and runs no JavaScript; the browser covers the rest. The server browser's
+  profiles are ephemeral, so logins do not persist there; a paired computer's browser uses your own profile instead.
 - **The network guard is IPv4 iptables on Linux.**
 - **A ghost chat is only as local as its labels.** A provider or gateway that marks a cloud model as local defeats it.
+- **Device tools exist only while the device is online**, and a device's browser serves one chat at a time. The user's own
+  profile can be driven only while that browser is closed. Installers are unsigned until signing keys are configured.
 - **Schedules do not run while the app is down.** A slot missed by up to two hours runs late; older ones are skipped.
 
 ## Development

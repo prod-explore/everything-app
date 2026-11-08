@@ -102,7 +102,8 @@ is a starting config for nginx and certbot. Whatever proxy you use, keep what th
 
 - `/internal/` must not be reachable from outside (it hands out GitHub tokens to git-proxy, guarded by one token);
 - the chat stream (`/api/conversations/<id>/stream`) is server-sent events: no buffering, a long read timeout;
-- `/api/liveview` is a WebSocket: forward the `Upgrade` headers;
+- `/api/liveview` and `/api/devices/connect` are WebSockets: forward the `Upgrade` headers; the device socket stays open
+  for hours, so give it a long read and send timeout (the example uses 3600 s; the server pings every 25 s);
 - the body limit must allow image attachments (they travel as base64 in JSON, up to about 8 MB each);
 - the app trusts exactly one proxy hop (`X-Forwarded-For`, `X-Forwarded-Proto`) for the login limiter and the `Secure` cookie flag.
 
