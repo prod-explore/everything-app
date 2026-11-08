@@ -13,15 +13,15 @@ device/app/
 ## How it works
 
 - The app starts with no window. Its menu shows the state, the last activity, Pair / Pause / Resume, the Terminal / Files / Browser switches (they edit `config.json` and send `config-changed`), Settings, Open EverythingApp, Start at login and Quit.
-- It runs `evvapp-node <resources>/agent/dist/main.mjs --stdio`, writes the `start` line (config path, data dir, token from the credential store) and reads JSON lines from stdout. Stderr goes to `agent.log` in the app log dir (rotated at 1 MiB, 3 files kept).
-- A crashed agent is restarted after 1 s, 2 s, 4 s ... up to 30 s; five crashes within two minutes put the tray in the `error` state (Settings and Quit still work; saving the server URL starts it again). On Quit the app sends `shutdown`, waits 5 s and kills the process.
+- It runs `evvapp-node <resources>/agent/dist/main.mjs --stdio`, writes the `start` line (config path, data dir, token from the credential store) and reads JSON lines from stdout. Stderr goes to `agent.log` in the app log dir (rotated at 1 MiB, the three previous files are kept as `agent.log.1` to `.3`).
+- A crashed agent is restarted after 1 s, 2 s, 4 s ... up to 30 s; five crashes within two minutes put the tray in the `error` state (Settings and Quit still work; changing the server URL starts it again). On Quit the app sends `shutdown`, waits 5 s and kills the process.
 - The agent is not started while `server` is empty (the tray says "Set the server URL in Settings"; the settings window opens on first run).
 - The token lives in the credential store under service `everythingapp-device`, account = server `host[:port]`. It is stored on `paired`, deleted on `unpaired` and `revoked`, and passed to the agent only on stdin. Changing the server restarts the agent so a token is never sent to another host.
 - The pairing URL from the agent is opened only if it is on the configured server's host.
 - Files (per user): config `config.json` in the app config dir, agent data (token file for headless use, browser profile) in the app data dir, logs in the app log dir. Identifier: `app.everythingapp.device`.
   - Windows: `%APPDATA%\app.everythingapp.device`, logs under `%LOCALAPPDATA%\app.everythingapp.device\logs`
   - macOS: `~/Library/Application Support/app.everythingapp.device`, logs in `~/Library/Logs/app.everythingapp.device`
-  - Linux: `~/.config/app.everythingapp.device`, `~/.local/share/app.everythingapp.device`
+  - Linux: `~/.config/app.everythingapp.device`, `~/.local/share/app.everythingapp.device`, logs in its `logs` folder
 
 ## Build prerequisites
 

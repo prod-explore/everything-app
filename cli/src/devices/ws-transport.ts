@@ -4,7 +4,7 @@ import { JSONRPCMessageSchema, type JSONRPCMessage } from '@modelcontextprotocol
 
 /**
  * MCP over a WebSocket, as the device bridge uses it (ADR 0017): one JSON-RPC message per text frame. The device agent
- * has the same ~60 lines (device/agent/src/ws-transport.ts) — two deployables, no shared package.
+ * has the mirror image (device/agent/src/ws-transport.ts) — two deployables, no shared package.
  *
  * Strict on purpose: a binary frame or a frame over 16 MiB is not something a well-behaved peer sends, so the socket is
  * closed (1003 / 1009) instead of the frame being skipped, and a frame that is not a JSON-RPC message closes it with 1007.

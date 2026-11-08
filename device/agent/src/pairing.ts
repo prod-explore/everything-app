@@ -136,9 +136,10 @@ export async function pairDevice(opts: PairingOptions): Promise<PairingResult> {
         return { deviceId, deviceToken, connectionName: typeof connectionName === 'string' ? connectionName : '' };
       }
       if (res.status === 429) await sleep(intervalMs, opts.signal); // slow down, keep waiting
-      else if (res.status !== 200) {
-        // 404 etc.: the pairing is gone (a server restart cancels pending pairings) — waiting longer cannot help.
-        if (res.status === 404) throw new PairingError('expired', 'the server no longer knows this pairing (it may have restarted) — start again');
+      else if (res.status === 404) {
+        // The server answers 410 for a pairing it does not know (also after a restart), so a 404 means this address
+        // has no pairing endpoint (wrong URL, or a server without the device bridge) — waiting longer cannot help.
+        throw new PairingError('expired', 'the server has no pairing to poll at this address (wrong server URL?) — start again');
       }
     } catch (err) {
       if (err instanceof PairingError) throw err;

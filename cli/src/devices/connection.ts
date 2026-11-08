@@ -50,8 +50,6 @@ export class DeviceConnection implements McpConnectionLike {
   private readonly client: Client;
   private readonly policy: () => DevicePolicy;
   private up = true;
-  /** When anything last arrived from the device (set by the hub on every frame and pong). */
-  lastActivity = Date.now();
 
   constructor(opts: DeviceConnectionOptions) {
     this.deviceId = opts.deviceId;

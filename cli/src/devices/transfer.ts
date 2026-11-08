@@ -11,17 +11,17 @@ import type { DeviceStore } from './store.js';
  * internal tools itself; this is the one door.
  *
  * Approval (ADR 0019 / 0010): putting a file ONTO a device is a file write there and follows that device's `filesWrite`
- * level; into the workspace needs none. `VirtualTool.requiresApproval` was a fixed boolean, which would have meant either
- * asking for every transfer (a download into the workspace is harmless) or for none (an upload onto a device that asks for
- * file writes would slip through). It may now be a function of the call, and `approvalLabel` scopes the grant to the target
- * device (`device-pc/device_transfer`), so "always" for the desktop never covers the laptop and revoking a device deletes it.
+ * level; into the workspace needs none. A fixed yes/no would either ask for every transfer (a download into the workspace
+ * is harmless) or for none (an upload onto a device that asks for file writes would slip through), so
+ * `VirtualTool.requiresApproval` is a function of the call here, and `approvalLabel` scopes the grant to the target
+ * device (`device-pc/device_transfer`): "always" for the desktop never covers the laptop and revoking a device deletes it.
  * The decision therefore rides the loop's ordinary gate — unattended runs, Gazeta cards, notifications and audit all work.
  */
 
 /**
  * The most one transfer moves. The wire carries a file as base64 inside one JSON-RPC frame and a frame is limited to
- * 16 MiB (ADR 0017), so 12 MB of file (16 MB of base64) is the largest that fits — not the 25 MB the contract's
- * `_fs_read_b64` mentions, which could never be sent in one frame. A device must refuse bigger files in `_fs_read_b64`.
+ * 16 MiB (docs/devices.md), so 12 MB of file (16 MB of base64) is the largest that fits; a 25 MB file would be 33 MB of
+ * base64, which could never be sent in one frame. A device must refuse bigger files in `_fs_read_b64`.
  */
 export const TRANSFER_MAX_BYTES = 12_000_000;
 

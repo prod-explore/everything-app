@@ -16,8 +16,9 @@ import { errMessage, fail, ok, type ToolResult } from './common.js';
  * capability is on; the write tools exist only when `files.write` is true (ADR 0019) and are approval-gated by the server.
  */
 
-// 12 000 000 bytes (the server enforces the same figure): base64 of it is 16 000 000 characters, inside the 16 MiB frame. The contract's 25 MB would be closed by the server with 1009.
+// 12 000 000 bytes (the server enforces the same figure): base64 of it is 16 000 000 characters, inside the 16 MiB frame. A larger file would not fit in one frame, and the server closes the socket on an oversized frame (1009).
 export const MAX_B64_BYTES = 12_000_000;
+const MAX_B64_TEXT = `${MAX_B64_BYTES / 1e6} MB`; // decimal, as the figure is: humanSize() would print 11.4 MB
 const MAX_EDIT_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_READ_CHARS = 60_000;
@@ -172,7 +173,7 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
-/** Applies Claude Code's Edit semantics; returns the new text or an error message. Pure. */
+/** Exact-text replace: one unique match unless replace_all, CRLF-aware; returns the new text or an error message. Pure. */
 export function applyEdit(
   content: string,
   oldString: string,
@@ -339,7 +340,7 @@ export function registerFileTools(server: McpServer, cfg: ResolvedConfig, guard 
     '_fs_read_b64',
     {
       title: 'Read file as base64 (internal)',
-      description: `Internal: read a whole file as base64 for device_transfer (at most ${humanSize(MAX_B64_BYTES)}). ${scope}`,
+      description: `Internal: read a whole file as base64 for device_transfer (at most ${MAX_B64_TEXT}). ${scope}`,
       inputSchema: { path: z.string() },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -349,7 +350,7 @@ export function registerFileTools(server: McpServer, cfg: ResolvedConfig, guard 
       const info = await stat(r.path).catch(() => null);
       if (!info) return fail(`"${path}" does not exist.`);
       if (!info.isFile()) return fail(`"${path}" is not a regular file.`);
-      if (info.size > MAX_B64_BYTES) return fail(`"${path}" is ${humanSize(info.size)}; a transfer carries at most ${humanSize(MAX_B64_BYTES)}.`);
+      if (info.size > MAX_B64_BYTES) return fail(`"${path}" is ${humanSize(info.size)}; a transfer carries at most ${MAX_B64_TEXT}.`);
       const base64 = (await readFile(r.path)).toString('base64');
       const result = { name: nodePath.basename(r.path), size: info.size, base64 };
       return ok(JSON.stringify(result), result);
@@ -446,14 +447,14 @@ export function registerFileTools(server: McpServer, cfg: ResolvedConfig, guard 
     '_fs_write_b64',
     {
       title: 'Write file from base64 (internal)',
-      description: `Internal: write a whole file from base64 for device_transfer (at most ${humanSize(MAX_B64_BYTES)}). ${scope}`,
+      description: `Internal: write a whole file from base64 for device_transfer (at most ${MAX_B64_TEXT}). ${scope}`,
       inputSchema: { path: z.string(), base64: z.string(), overwrite: z.boolean().optional() },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     async ({ path, base64, overwrite }): Promise<ToolResult> => {
       if (!/^[A-Za-z0-9+/\r\n]*={0,2}$/.test(base64)) return fail('base64 is not valid.');
       const data = Buffer.from(base64, 'base64');
-      if (data.length > MAX_B64_BYTES) return fail(`${humanSize(data.length)} is over the transfer limit of ${humanSize(MAX_B64_BYTES)}.`);
+      if (data.length > MAX_B64_BYTES) return fail(`${humanSize(data.length)} is over the transfer limit of ${MAX_B64_TEXT}.`);
       const r = await resolveOrFail(guard, path);
       if (isFailure(r)) return r;
       try {

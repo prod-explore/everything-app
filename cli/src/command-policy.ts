@@ -727,7 +727,7 @@ export function evaluateCommand(command: string, policy: CommandPolicy, granted:
     if (boundary) return { command: sub, prefix, decision: 'ask', reason: boundary };
     if (granted(prefix, { chatOnly: destructiveWords(words) })) return { command: sub, prefix, decision: 'allow', reason: 'granted' };
     if (policy.allow.some(a => matchesPrefix(run, a))) return { command: sub, prefix, decision: 'allow', reason: 'project allowlist' };
-    if (policy.mode === 'auto') return { command: sub, prefix, decision: 'allow', reason: 'auto mode (inside sandbox)' };
+    if (policy.mode === 'auto') return { command: sub, prefix, decision: 'allow', reason: 'auto mode' };
     if (policy.mode === 'strict') return { command: sub, prefix, decision: 'ask', reason: 'strict mode' };
     const why = notReadOnly(sub, prefixed);
     if (why === null) return { command: sub, prefix, decision: 'allow', reason: 'safe read-only command' };

@@ -4,8 +4,8 @@ import type WebSocket from 'ws';
 
 /**
  * MCP transport over one WebSocket: one JSON-RPC message per TEXT frame, 16 MiB at most per frame. The server has the
- * mirror image (`cli/src/devices/ws-transport.ts`); the two stay ~60 lines each, with no shared package between two
- * deployables (ADR 0017).
+ * mirror image (`cli/src/devices/ws-transport.ts`), kept separate because there is no shared package between two
+ * deployables (ADR 0017). Unlike the server it ignores a bad frame instead of closing the socket.
  *
  * The socket is created and owned by the caller (the connection dials it and decides about reconnects); the transport
  * only frames messages and reports the socket closing as the MCP session ending.

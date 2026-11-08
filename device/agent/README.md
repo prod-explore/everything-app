@@ -2,8 +2,8 @@
 
 The EverythingApp device agent. It runs on one of your own computers, dials **out** to your EverythingApp server over a
 single WebSocket and serves that machine's **shell**, **folders** and **browser** to the server as an MCP server. Nothing
-listens on the machine; what the agent may do is decided by the config file on the machine, and every individual call is
-approved in the app. Why it is built this way: `docs/adr/0017` to `0021`. Interfaces: `docs/devices.md`.
+listens on the machine; what the agent may do is decided by the config file on the machine, and the app asks before
+anything that changes something unless you set that capability to auto. Why it is built this way: `docs/adr/0017` to `0021`. Interfaces: `docs/devices.md`.
 
 The tray app (`device/app`) runs this same program as a child process (`--stdio`). This README is about running it on its
 own, e.g. on a server or a build box.

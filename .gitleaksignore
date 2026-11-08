@@ -1,2 +1,2 @@
-# The RFC 6455 sample WebSocket nonce in a test (not a secret); the test now generates its key.
+# The RFC 6455 sample WebSocket nonce in an earlier revision of this test (not a secret).
 f8c6a61bbf9eef815f34b49fc334b86e08ee976b:cli/src/__tests__/devices-app.test.ts:generic-api-key:96

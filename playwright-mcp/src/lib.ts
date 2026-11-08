@@ -21,8 +21,9 @@ export { UrlGuard } from './urlSafety.js';
 export type { PlaywrightConfig } from './config.js';
 
 /**
- * A PlaywrightConfig for a host that has no env file: the server-only fields (port, API key) are inert here, the limits
- * match the server's defaults. `maxSessions` is the host's call (the device runs one browser).
+ * A PlaywrightConfig for a host that has no env file: the server-only fields (port, API key) are inert here and the
+ * limits are the server's defaults, except `maxSessions` (the host's call: the device runs one browser) and the idle
+ * watchdog, which checks every minute instead of every two.
  */
 export function embeddedConfig(overrides: Partial<PlaywrightConfig> = {}): PlaywrightConfig {
   return {

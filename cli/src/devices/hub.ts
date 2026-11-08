@@ -175,7 +175,7 @@ export class DeviceHub {
       policy: () => store.get(live.deviceId)?.policy ?? DEFAULT_DEVICE_POLICY,
     });
     const report = await conn.readReport();
-    if (!report) this.log(`[devices] '${conn.name}' sent no usable device info; its shell is treated as unparsable (strict)`);
+    if (!report) this.log(`[devices] '${conn.name}' sent no usable device info; its shell is treated as unparsable`);
     store.setReport(live.deviceId, report, report?.agentVersion || client.getServerVersion()?.version);
     if (this.live.get(live.deviceId) !== live) return;
 
