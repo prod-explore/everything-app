@@ -1,0 +1,6 @@
+{
+  // For esbuild (scripts/build.mjs, scripts/test.mjs): the `paths` in tsconfig.json point at .d.ts files for the
+  // type checker only; bundling must not follow them.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "paths": {} }
+}

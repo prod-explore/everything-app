@@ -1,0 +1,31 @@
+{
+  "name": "evvapp-device",
+  "version": "0.1.0",
+  "description": "EverythingApp device agent: exposes this computer's shell, folders and browser to the server as an MCP server over one outbound WebSocket",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "evvapp-device": "dist/main.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test.mjs",
+    "start": "node dist/main.mjs run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "playwright": "^1.48.0",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.4.5"
+  }
+}

@@ -86,8 +86,8 @@ Exposed only when their capability is on. Tools whose name starts with `_` are i
 | `fs_write` | `path`, `content` | `filesWrite` |
 | `fs_edit` | `path`, `old_string`, `new_string`, `replace_all?` | `filesWrite` |
 | `fs_mkdir` | `path` | `filesWrite` |
-| `_fs_read_b64` | `path` → `{ name, size, base64 }` (≤ 25 MB) | internal |
-| `_fs_write_b64` | `path`, `base64`, `overwrite?` | internal |
+| `_fs_read_b64` | `path` → `{ name, size, base64 }` (≤ 12 MB: base64 must fit one 16 MiB frame) | internal |
+| `_fs_write_b64` | `path`, `base64`, `overwrite` (always sent; refuse an existing file unless true) | internal |
 | `browser_open` … `browser_close` | as in playwright-mcp | domain gate; `browser_act` → `browserAct` |
 
 Shell sessions are per `(conversation, session)`: at most 8 per device, closed after 30 min idle. Output per call is capped at 30 000 chars (head and tail kept). A command that times out is interrupted; the session survives. `background: true` starts the command in its own session (named by `session`) and returns at once; `shell_read` collects its output.

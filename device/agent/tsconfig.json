@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    // playwright-mcp's sources are compiled into this package (see src/tools/browser.ts). Its own node_modules would give
+    // TypeScript a second copy of every dependency, and two copies of the MCP SDK are two incompatible McpServer types:
+    // pin the shared packages to ours. (At runtime the bundle resolves them from here too, see scripts/build.mjs.)
+    "paths": {
+      "@modelcontextprotocol/sdk/*": ["./node_modules/@modelcontextprotocol/sdk/dist/esm/*"],
+      "zod": ["./node_modules/zod/index.d.ts"],
+      "playwright": ["./node_modules/playwright/index.d.ts"],
+      "playwright-core": ["./node_modules/playwright-core/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
