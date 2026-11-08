@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
@@ -93,7 +94,7 @@ describe('device bridge inside the real app', () => {
     const a = await appRig();
     try {
       const code = await new Promise<number>(resolve => {
-        const r = http.request({ host: '127.0.0.1', port: a.port, path: '/api/liveview?conversationId=c', agent: false, headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13' } });
+        const r = http.request({ host: '127.0.0.1', port: a.port, path: '/api/liveview?conversationId=c', agent: false, headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': randomBytes(16).toString('base64'), 'Sec-WebSocket-Version': '13' } });
         r.on('response', res => { res.resume(); resolve(res.statusCode ?? 0); });
         r.on('error', () => resolve(-1));
         r.end();
