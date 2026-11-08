@@ -79,11 +79,27 @@ export function deviceTransferTools(deps: TransferDeps): VirtualTool[] {
   const online = deps.hub.list().map(d => d.connectionName);
   if (online.length === 0) return [];
 
+  const rowOf = (connection: string) => deps.store.getBySlug(connection.slice('device-'.length));
+
+  /**
+   * Why a device end cannot take part, or null. Checked from the device's own report (its ceiling, ADR 0019) before any
+   * approval is asked: a card for a copy the device would refuse anyway is a click for nothing.
+   */
+  const refusal = (connection: string, role: 'from' | 'to'): string | null => {
+    const row = rowOf(connection);
+    const files = row?.report?.files;
+    const name = row?.name ?? connection;
+    if (!files?.enabled) return `Files are switched off on ${name}. They can be switched on in the device's tray app (Files).`;
+    if (role === 'to' && !files.write) return `${name} shares its folders read-only, so nothing can be copied onto it. Write access is set in the device's tray app.`;
+    return null;
+  };
+
   /** Does this call put a file onto a device whose `filesWrite` level asks? */
   const targetAsks = (input: Record<string, unknown>): boolean => {
     const to = parseEndpoint(input['to']);
     if ('error' in to || to.kind !== 'device') return false;
-    const row = deps.store.getBySlug(to.connection.slice('device-'.length));
+    if (refusal(to.connection, 'to')) return false; // refused in the handler without a card
+    const row = rowOf(to.connection);
     return row === null || row.policy.filesWrite === 'ask'; // an unknown device fails in the handler; asking first is harmless
   };
 
@@ -100,8 +116,11 @@ export function deviceTransferTools(deps: TransferDeps): VirtualTool[] {
       if ('error' in from) return err(`from: ${from.error}`);
       if ('error' in to) return err(`to: ${to.error}`);
       if (from.kind === 'workspace' && to.kind === 'workspace') return err('Both ends are the workspace — use a shell command to copy inside it.');
-      for (const e of [from, to]) {
-        if (e.kind === 'device' && !deps.hub.get(e.connection)) return err(`${e.connection} is not online right now.`);
+      for (const [e, role] of [[from, 'from'], [to, 'to']] as const) {
+        if (e.kind !== 'device') continue;
+        if (!deps.hub.get(e.connection)) return err(`${e.connection} is not online right now.`);
+        const why = refusal(e.connection, role);
+        if (why) return err(why);
       }
 
       // Read.

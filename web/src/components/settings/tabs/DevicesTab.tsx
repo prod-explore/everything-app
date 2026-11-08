@@ -144,6 +144,9 @@ function exposure(d: DeviceInfo): string[] {
   return out;
 }
 
+/** Where a remembered command applies: a chat grant ends with its chat, "always" lasts until forgotten here. */
+const GRANT_SCOPE_LABEL: Record<ApprovalGrantRow['scope'], string> = { chat: 'this chat', project: 'project', always: 'always' };
+
 function DeviceRow({ device: d, grants, onChange, onRevoked, onGrantRevoked }: {
   device: DeviceInfo;
   grants: ApprovalGrantRow[];
@@ -232,6 +235,7 @@ function DeviceRow({ device: d, grants, onChange, onRevoked, onGrantRevoked }: {
               {grants.map(g => (
                 <li key={g.id} className="flex items-center gap-2 px-2 py-1 text-xs">
                   <span className="min-w-0 flex-1 truncate font-mono text-fg" title={grantText(g.toolLabel)}>$ {parseDeviceGrant(g.toolLabel)?.command ?? g.toolLabel}</span>
+                  <span className="shrink-0 text-fg-tertiary">{GRANT_SCOPE_LABEL[g.scope]}</span>
                   <button
                     onClick={() => void run(async () => { await revokeApprovalGrant(g.id); onGrantRevoked(); })}
                     className="rounded p-1 text-fg-tertiary hover:text-danger"

@@ -8,7 +8,7 @@ import { runTurn, type LlmClient } from '../llm-loop.js';
 import type * as Llm from '../llm-types.js';
 import { TRANSFER_MAX_BYTES, parseEndpoint } from '../devices/transfer.js';
 import { DEFAULT_DEVICE_POLICY } from '../devices/types.js';
-import { closeRigs, deviceRig, online, waitFor, type Rig } from './devices-fixture.js';
+import { closeRigs, deviceRig, online, posixReport, waitFor, type Rig } from './devices-fixture.js';
 
 afterEach(closeRigs);
 
@@ -24,10 +24,10 @@ function workspace() {
 }
 
 /** A device with a tiny in-memory disk behind _fs_read_b64 / _fs_write_b64. */
-async function deviceWithDisk(r: Rig, disk: Map<string, Buffer>, name = 'PC') {
+async function deviceWithDisk(r: Rig, disk: Map<string, Buffer>, name = 'PC', report = posixReport()) {
   const p = r.pair(name);
   const writes: Array<Record<string, unknown>> = [];
-  await online(r, p.token, { tools: [
+  await online(r, p.token, { report, tools: [
     { name: 'fs_list' },
     { name: '_fs_read_b64', handler: a => {
       const data = disk.get(String(a['path']));
@@ -117,6 +117,29 @@ describe('device_transfer', () => {
     assert.equal(up.isError, true);
     assert.equal(dev.writes.length, 0);
     assert.equal(disk.has('/big2'), false);
+  });
+
+  it('refuses, without a card, a copy the device\'s own settings rule out', async () => {
+    const r = await deviceRig();
+    const ws = workspace();
+    writeFileSync(join(ws.dir, 'a.txt'), 'x');
+    const disk = new Map<string, Buffer>([['/a', Buffer.from('x')]]);
+    const dev = await deviceWithDisk(r, disk, 'PC', posixReport({ files: { enabled: true, roots: ['/home/me'], write: false } }));
+    const t = tool(r, ws);
+    const needs = (input: Record<string, unknown>) => (typeof t.requiresApproval === 'function' ? t.requiresApproval(input) : t.requiresApproval === true);
+    assert.equal(needs({ from: 'workspace:a.txt', to: 'device-pc:/b' }), false, 'no card for a write the device refuses');
+    const up = await t.handler({ from: 'workspace:a.txt', to: 'device-pc:/b' }, ctx);
+    assert.equal(up.isError, true);
+    assert.match(up.text, /read-only/);
+    assert.equal(dev.writes.length, 0);
+    const down = await t.handler({ from: 'device-pc:/a', to: 'workspace:a2.txt' }, ctx);
+    assert.equal(down.isError, undefined, 'reading from a read-only device still works');
+
+    const r2 = await deviceRig();
+    await deviceWithDisk(r2, new Map(), 'PC', posixReport({ files: { enabled: false, roots: [], write: false } }));
+    const off = await tool(r2, ws).handler({ from: 'device-pc:/a', to: 'workspace:a3.txt' }, ctx);
+    assert.equal(off.isError, true);
+    assert.match(off.text, /Files are switched off on PC/);
   });
 
   it('rejects bad endpoints and offline devices', async () => {
