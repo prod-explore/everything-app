@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import * as http from 'node:http';
 import express from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -65,13 +66,24 @@ function createMcpServer(config: PlaywrightConfig, pool: BrowserSessionPool): Mc
   return server;
 }
 
-export function createApp(config: PlaywrightConfig): {
+export function createApp(config: PlaywrightConfig, opts: { rateLimitPerMinute?: number } = {}): {
   app: express.Express;
   attachLiveViewToServer: (server: http.Server) => void;
 } {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json());
+
+  // Defence in depth: this service sits behind a bearer key on a private Docker network, but a runaway or compromised
+  // client should still hit a ceiling. Per client IP, 600 requests a minute (an agent's tool calls stay far below it);
+  // mounted before every route, so a flood is answered 429 before auth or any tool work.
+  app.use(rateLimit({
+    windowMs: 60_000,
+    limit: opts.rateLimitPerMinute ?? 600,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many requests' },
+  }));
 
   const sseSessions = new Map<string, { transport: SSEServerTransport; server: McpServer }>();
 

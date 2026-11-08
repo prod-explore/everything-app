@@ -253,7 +253,7 @@ export class SandboxManager {
     }
     // Preview links do not survive a restart of the sandbox they point at; drop what is left so subnets are not leaked.
     for (const n of await this.ops.listPreviewNetworks().catch(() => [])) {
-      await this.ops.removePreviewNetwork(n.name).catch(err => console.warn(`[sandboxes] stale preview network ${n.name}:`, err));
+      await this.ops.removePreviewNetwork(n.name).catch(err => console.warn('[sandboxes] stale preview network %s:', n.name, err));
     }
     return managed.length;
   }
@@ -342,7 +342,7 @@ export class SandboxManager {
         return { sandbox: existing, isNew: false };
       } catch (err) {
         // Container was removed behind our back. The volume (the part that matters) is intact: rebuild around it.
-        console.warn(`[sandboxes] ${ownerId}: restart failed (${(err as Error).message}); recreating container`);
+        console.warn('[sandboxes] %s: restart failed (%s); recreating container', ownerId, (err as Error).message);
       }
     }
     const volume = volumeName(ownerId);
@@ -378,7 +378,7 @@ export class SandboxManager {
   }
 
   private async stopSandbox(s: Sandbox, reason: string): Promise<void> {
-    console.log(`[sandboxes] stopping ${s.ownerId} (${reason}); workspace volume is kept`);
+    console.log('[sandboxes] stopping %s (%s); workspace volume is kept', s.ownerId, reason);
     await s.terminals.closeAll();
     s.running = false;
     s.stoppedAt = this.opts.now();
@@ -386,7 +386,7 @@ export class SandboxManager {
     s.cpu.hotSinceWarn = 0;
     s.cpu.warned = false;
     s.disk.bytes = null;
-    await this.ops.stopContainer(s.containerId).catch(err => console.warn(`[sandboxes] stop failed for ${s.ownerId}:`, err));
+    await this.ops.stopContainer(s.containerId).catch(err => console.warn('[sandboxes] stop failed for %s:', s.ownerId, err));
     await this.unpreview(s.ownerId);
   }
 
@@ -413,7 +413,7 @@ export class SandboxManager {
   /** Cuts the link again. Safe to call when there is none. */
   async unpreview(ownerId: string): Promise<void> {
     if (!this.opts.browserContainer) return;
-    await this.ops.removePreviewNetwork(previewNetworkName(ownerId)).catch(err => console.warn(`[sandboxes] unpreview ${ownerId}:`, err));
+    await this.ops.removePreviewNetwork(previewNetworkName(ownerId)).catch(err => console.warn('[sandboxes] unpreview %s:', ownerId, err));
   }
 
   /** Stop a sandbox now (e.g. the chat's sandbox toggle was switched off). Files are untouched. */
@@ -444,7 +444,7 @@ export class SandboxManager {
     let containersRemoved = 0;
     for (const id of ids) if (await this.ops.removeContainer(id)) containersRemoved++;
     const volumeRemoved = await this.ops.removeVolume(volumeName(ownerId));
-    console.log(`[sandboxes] destroyed ${ownerId}: ${containersRemoved} container(s), volume ${volumeRemoved ? 'removed' : 'absent'}`);
+    console.log('[sandboxes] destroyed %s: %d container(s), volume %s', ownerId, containersRemoved, volumeRemoved ? 'removed' : 'absent');
     return { containersRemoved, volumeRemoved };
   }
 
@@ -620,9 +620,9 @@ export class SandboxManager {
         await this.ops.removeContainer(s.containerId);
         this.sandboxes.delete(s.ownerId);
         removed.push(s.ownerId);
-        console.log(`[sandboxes] removed container of ${s.ownerId} (stopped ${Math.round((now - s.stoppedAt) / 86_400_000)}d); volume kept`);
+        console.log('[sandboxes] removed container of %s (stopped %dd); volume kept', s.ownerId, Math.round((now - s.stoppedAt) / 86_400_000));
       } catch (err) {
-        console.warn(`[sandboxes] container GC failed for ${s.ownerId}:`, err);
+        console.warn('[sandboxes] container GC failed for %s:', s.ownerId, err);
       }
     }
     return { terminalsClosed, sandboxesStopped: stopped, containersRemoved: removed };
@@ -666,7 +666,7 @@ export class SandboxManager {
         s.cpu.warned = true;
         s.cpu.hotSinceWarn = 0;
         const message = `CPU at ${pct.toFixed(0)}% for ${s.cpu.hot} consecutive samples with no agent activity for ${Math.round(agentIdleFor / 60_000)}m; it will be stopped if this continues`;
-        console.warn(`[sandboxes] ${s.ownerId}: ${message}`);
+        console.warn('[sandboxes] %s: %s', s.ownerId, message);
         this.addEvent(s, { type: 'cpu_high', message, cpuPercent: pct });
         warned.push(s.ownerId);
         continue;
@@ -674,7 +674,7 @@ export class SandboxManager {
       s.cpu.hotSinceWarn++;
       if (s.cpu.hotSinceWarn >= c.stopAfterSamples) {
         const message = `stopped: CPU stayed at ${pct.toFixed(0)}% with no agent activity (workspace kept)`;
-        console.warn(`[sandboxes] ${s.ownerId}: ${message}`);
+        console.warn('[sandboxes] %s: %s', s.ownerId, message);
         this.addEvent(s, { type: 'cpu_stopped', message, cpuPercent: pct });
         await this.stopSandbox(s, 'cpu watchdog');
         stopped.push(s.ownerId);

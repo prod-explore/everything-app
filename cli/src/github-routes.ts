@@ -5,6 +5,7 @@ import type { WebApprovalGate } from './web-approval.js';
 import { GitHubCredentials, classifyGithubPath } from './github.js';
 import { shq, type SandboxExec } from './supervisor-client.js';
 import { getConversation, getProject, listProjectConversations, logApprovalAudit } from './db.js';
+import { trimTrailingSlashes } from './text-utils.js';
 
 /**
  * GitHub integration, orchestrator side:
@@ -209,7 +210,7 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
   const owner = (projectId: string) => projectId;
 
   function repoDir(raw: unknown): string | null {
-    const d = typeof raw === 'string' ? raw.replace(/^\/workspace\/?/, '').replace(/\/+$/, '') : '';
+    const d = typeof raw === 'string' ? trimTrailingSlashes(raw.replace(/^\/workspace\/?/, '')) : '';
     if (d === '') return '/workspace';
     if (d.split('/').some(seg => seg === '..' || seg === '' || !/^[\w.@+-]+$/.test(seg))) return null;
     return `/workspace/${d}`;

@@ -1,14 +1,13 @@
 import { timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import { HttpError, SandboxManager } from './sandboxes.js';
+import { MAX_TIMEOUT_MS } from './limits.js';
 import { TerminalManager } from './terminals.js';
 
 /**
  * HTTP API of the sandbox-supervisor. sandbox-mcp uses it for commands, terminals and checkpoints; the orchestrator
  * for the workspace explorer, checkpoints, browser previews and deleting a project or chat (inventory, then removal).
  */
-
-const MAX_TIMEOUT_MS = 30 * 60_000;
 
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const statusOf = (err: unknown, fallback: number) => (err instanceof HttpError ? err.status : fallback);
@@ -176,7 +175,7 @@ export function createSupervisorApp(sandboxes: SandboxManager, defaultTimeoutMs 
       await fn(req, res);
     } catch (err) {
       const status = statusOf(err, 500);
-      if (status >= 500) console.error(`[api] ${req.method} ${req.originalUrl}:`, err);
+      if (status >= 500) console.error('[api] %s %s:', req.method, req.originalUrl, err);
       if (!res.headersSent) res.status(status).json({ error: messageOf(err) });
     }
   };

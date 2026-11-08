@@ -5,6 +5,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { ADMIN, basic, decodePkts, harness, readBody, receivePackBody, sha, ZERO, type Harness } from './helpers.js';
 import { FLUSH_PKT } from '../pktline.js';
+import { endpointSegmentsOk } from '../server.js';
 
 interface Resp {
   status: number;
@@ -360,5 +361,51 @@ describe('LFS batch pass-through', () => {
     });
     assert.equal(down.status, 200);
     assert.equal(h.upstreamSeen.length, 2);
+  });
+});
+
+describe('upstream path hardening', () => {
+  /** Sends the request target byte-for-byte (http.request(url) would normalise dot segments client-side). */
+  function rawGet(base: string, path: string, authorization: string): Promise<Resp> {
+    const u = new URL(base);
+    return new Promise((resolve, reject) => {
+      const req = http.request({ host: u.hostname, port: u.port, path, method: 'GET', headers: { authorization }, agent: false }, res => {
+        readBody(res as unknown as http.IncomingMessage).then(body => resolve({ status: res.statusCode!, headers: res.headers, body }), reject);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  it('endpointSegmentsOk rejects empty, dot and percent-encoded dot segments', () => {
+    assert.equal(endpointSegmentsOk('info/lfs/objects/batch'), true);
+    assert.equal(endpointSegmentsOk('info/lfs/objects/a.b-c_d'), true);
+    for (const bad of ['info/lfs/../x', 'info/lfs/./x', 'info/lfs//x', 'info/lfs/', 'info/lfs/%2e%2e/x', 'info/lfs/%2E%2e/x', 'info/lfs/.%2E/x', 'info/lfs/%2e/x', '..']) {
+      assert.equal(endpointSegmentsOk(bad), false, bad);
+    }
+  });
+
+  it('crafted LFS paths never reach upstream and never carry the injected Authorization', async () => {
+    h = await harness();
+    const token = h.mint([{ owner: 'acme', repo: 'app', pushMode: 'allow' }]);
+    const paths = [
+      '/acme/app.git/info/lfs/../../../other/repo.git/info/refs',
+      '/acme/app.git/info/lfs/%2e%2e/%2e%2e/x',
+      '/acme/app.git/info/lfs/%2E%2e/x',
+      '/acme/app.git/info/lfs/.%2e/x',
+      '/acme/app.git/info/lfs//x',
+      '/acme/app.git/info/lfs/objects//batch',
+    ];
+    // (A lone `./` is collapsed by the URL parser into an ordinary in-prefix LFS path, so it is not listed here.)
+    for (const p of paths) {
+      const r = await rawGet(h.proxy, p, basic(token));
+      assert.ok(r.status >= 400 && r.status < 500, `${p} -> ${r.status}`);
+    }
+    assert.equal(h.upstreamSeen.length, 0);
+    // A legitimate LFS path still goes through, so the guard is not simply rejecting everything.
+    const ok = await rawGet(h.proxy, '/acme/app.git/info/lfs/objects/abc', basic(token));
+    assert.equal(ok.status, 200);
+    assert.equal(h.upstreamSeen.length, 1);
+    assert.equal(h.upstreamSeen[0]!.url, '/acme/app.git/info/lfs/objects/abc');
   });
 });

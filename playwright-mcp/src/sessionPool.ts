@@ -127,7 +127,7 @@ export class BrowserSessionPool {
     });
     this.sessions.set(conversationId, handle);
     this.ensureWatchdog();
-    console.log(`[sessionPool] opened session ${conversationId.slice(0, 8)} (${this.sessions.size}/${this.opts.maxSessions})`);
+    console.log('[sessionPool] opened session %s (%d/%d)', conversationId.slice(0, 8), this.sessions.size, this.opts.maxSessions);
     return { session: handle, isNew: true };
   }
 
@@ -150,11 +150,11 @@ export class BrowserSessionPool {
     if (!s) return false;
     this.sessions.delete(conversationId);
     s.tabs.markClosing();
-    console.log(`[sessionPool] closing session ${conversationId.slice(0, 8)} — ${reason}`);
+    console.log('[sessionPool] closing session %s — %s', conversationId.slice(0, 8), reason);
     try {
       await s.context.close();
     } catch (err) {
-      console.error(`[sessionPool] error closing session ${conversationId.slice(0, 8)}:`, err);
+      console.error('[sessionPool] error closing session %s:', conversationId.slice(0, 8), err);
     }
     return true;
   }

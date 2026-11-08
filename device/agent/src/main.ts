@@ -56,23 +56,23 @@ function printer(): (m: AgentMessage) => void {
   return m => {
     switch (m.type) {
       case 'status':
-        console.log(`[${stamp()}] ${m.state}${m.detail ? ` — ${m.detail}` : ''}`);
+        console.log('[%s] %s%s', stamp(), m.state, m.detail ? ` — ${m.detail}` : '');
         break;
       case 'pairing':
-        console.log(`\nApprove this device in the app:\n  code  ${m.userCode}\n  open  ${m.url}\n(the code on that page must match)\n`);
+        console.log('\nApprove this device in the app:\n  code  %s\n  open  %s\n(the code on that page must match)\n', m.userCode, m.url);
         openInBrowser(m.url);
         break;
       case 'paired':
-        console.log(`[${stamp()}] paired (device ${m.deviceId})`);
+        console.log('[%s] paired (device %s)', stamp(), m.deviceId);
         break;
       case 'unpaired':
         console.log(`[${stamp()}] unpaired`);
         break;
       case 'activity':
-        console.log(`[${stamp()}] ${m.tool}${m.summary ? `: ${m.summary}` : ''}`);
+        console.log('[%s] %s%s', stamp(), m.tool, m.summary ? `: ${m.summary}` : '');
         break;
       case 'log':
-        console.error(`[${stamp()}] ${m.level}: ${m.message}`);
+        console.error('[%s] %s: %s', stamp(), m.level, m.message);
         break;
     }
   };

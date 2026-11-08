@@ -1,4 +1,5 @@
 import type * as Llm from '../llm-types.js';
+import { trimTrailingSlashes } from '../text-utils.js';
 
 /**
  * Where a URL came from. Claude and Gemini fetch without asking because they only open addresses that are already in
@@ -40,7 +41,7 @@ export function urlKey(raw: string): { host: string; key: string } | null {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
   const host = u.hostname.toLowerCase().replace(/\.$/, '');
   if (!host) return null;
-  const path = u.pathname.replace(/\/+$/, '');
+  const path = trimTrailingSlashes(u.pathname);
   return { host, key: `${host}${u.port ? `:${u.port}` : ''}${path}${u.search}` };
 }
 

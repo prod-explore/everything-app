@@ -10,6 +10,7 @@ import {
   type ProviderRecord,
   type ToolSchemaMode,
 } from './registry.js';
+import { trimTrailingSlashes } from '../text-utils.js';
 
 /**
  * The model catalog: which providers exist and which models each one offers. Everything here is data in SQLite —
@@ -59,7 +60,7 @@ export function normalizeBaseUrl(raw: unknown): string | null {
     const u = new URL(raw.trim());
     if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
     if (u.username || u.password) return null; // credentials go in the vault, not the URL
-    return u.toString().replace(/\/+$/, '');
+    return trimTrailingSlashes(u.toString());
   } catch {
     return null;
   }

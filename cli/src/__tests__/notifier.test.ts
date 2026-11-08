@@ -29,13 +29,14 @@ function recorder(status = 200) {
   return { sent, fetchImpl };
 }
 const now = (fn: () => void) => fn();
+const publicDns = async () => [{ address: '93.184.216.34', family: 4 }];
 
 function notifier(env: NodeJS.ProcessEnv = {}, status = 200) {
   const db = openDb(':memory:');
   runMigrations(db);
   const vault = new KeyVault(db, 'k'.repeat(40));
   const rec = recorder(status);
-  const n = new Notifier({ db, vault, env, fetchImpl: rec.fetchImpl, setTimer: now });
+  const n = new Notifier({ db, vault, env, fetchImpl: rec.fetchImpl, resolve: publicDns, setTimer: now });
   return { db, vault, n, ...rec };
 }
 const settle = () => new Promise(r => setTimeout(r, 10));
@@ -150,15 +151,16 @@ describe('Notifier', () => {
     assert.equal(sent.length, 0);
   });
 
-  it('waits the configured delay for approvals and questions, not for urgent items', () => {
+  it('waits the configured delay for approvals and questions, not for urgent items', async () => {
     const { db, vault } = notifier();
     vault.set(NOTIFY_VAULT_KEY, URL_SECRET);
     const delays: number[] = [];
     const rec = recorder();
-    const n = new Notifier({ db, vault, fetchImpl: rec.fetchImpl, setTimer: (_f, ms) => void delays.push(ms) });
+    const n = new Notifier({ db, vault, fetchImpl: rec.fetchImpl, resolve: publicDns, setTimer: (_f, ms) => void delays.push(ms) });
     n.notify({ kind: 'approval', ghost: false });
     n.notify({ kind: 'urgent', ghost: false });
     assert.deepEqual(delays, [30_000]);
+    await settle();
     assert.equal(rec.sent.length, 1, 'urgent went out at once');
   });
 
@@ -234,7 +236,7 @@ async function boot(script: (call: number) => Llm.Message, vaultSecret = 'v'.rep
   router.catalog.create({ slug: 't', label: 'Test', baseUrl: 'https://t.example/v1', keyOptional: true });
   router.catalog.addManual('t', 'm', { tags: ['reasoning'] });
   const rec = recorder();
-  const built = await buildApp({ db, connections: [], router, authToken: TOKEN, config: { model: '', autoApproveTools: [] }, notify: { fetchImpl: rec.fetchImpl, env: {}, setTimer: now } });
+  const built = await buildApp({ db, connections: [], router, authToken: TOKEN, config: { model: '', autoApproveTools: [] }, notify: { fetchImpl: rec.fetchImpl, resolve: publicDns, env: {}, setTimer: now } });
   const server = built.app.listen(0);
   await new Promise<void>(r => server.once('listening', () => r()));
   const call$ = api((server.address() as AddressInfo).port);
@@ -267,6 +269,12 @@ describe('Settings → Notifications API', () => {
     const t = await boot(() => msg([{ type: 'text', text: 'x', citations: null }], 'end_turn'));
     try {
       assert.equal((await t.call('PUT', '/api/notifications', { webhookUrl: 'javascript:alert(1)' })).status, 400);
+      const meta = await t.call('PUT', '/api/notifications', { webhookUrl: 'http://169.254.169.254/latest/meta-data' });
+      assert.equal(meta.status, 400);
+      assert.match(meta.json.error, /link-local|metadata/);
+      assert.equal((await t.call('PUT', '/api/notifications', { webhookUrl: 'http://127.0.0.1:9/x' })).status, 400);
+      const testBlocked = await t.call('POST', '/api/notifications/test', { webhookUrl: 'http://[::ffff:10.0.0.1]/x' });
+      assert.equal(testBlocked.status, 400);
       assert.equal((await t.call('PUT', '/api/notifications', { delaySeconds: 99999 })).status, 400);
     } finally { t.close(); }
   });

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { clampTimeoutMs } from './limits.js';
 
 /**
  * Persistent shell sessions ("terminals") inside a sandbox container.
@@ -148,7 +149,7 @@ class Terminal {
         this.exitListener = null;
         this.listener = null;
         void this.close().then(() => finish({ output: partial, exitCode: null, timedOut: true }));
-      }, timeoutMs);
+      }, clampTimeoutMs(timeoutMs));
 
       // base64 keeps quotes, heredocs and newlines in the command from ever being parsed by the outer
       // shell; `< /dev/null` stops a command that reads stdin from swallowing the lines that follow.

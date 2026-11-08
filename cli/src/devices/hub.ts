@@ -74,7 +74,7 @@ export class DeviceHub {
     this.pingMs = opts.pingIntervalMs ?? 25_000;
     this.deadMs = opts.deadAfterMs ?? 60_000;
     this.initMs = opts.initTimeoutMs ?? 15_000;
-    this.log = opts.log ?? (m => console.log(m));
+    this.log = opts.log ?? (m => console.log('%s', m));
   }
 
   /** The upgrade handler for `/api/devices/connect` (register it with the upgrade router). */

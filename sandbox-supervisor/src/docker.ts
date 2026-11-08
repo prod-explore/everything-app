@@ -1,6 +1,7 @@
 import Docker from 'dockerode';
 import type { IncomingMessage } from 'node:http';
 import { PassThrough, type Duplex, type Readable } from 'node:stream';
+import { clampTimeoutMs } from './limits.js';
 import type { DockerOps, ExecResult, ManagedContainer, SandboxSpec } from './sandboxes.js';
 import type { ShellFactory, ShellProcess } from './terminals.js';
 import { WORKSPACE, type PathStat } from './explorer.js';
@@ -317,12 +318,13 @@ export class DockerodeOps implements DockerOps {
 
   /** One-shot `bash -c` in the container, output captured. Used for git_op, read_log and the action log. */
   exec(id: string, command: string, timeoutMs: number): Promise<ExecResult> {
+    const limit = clampTimeoutMs(timeoutMs);
     return new Promise((resolve, reject) => {
       const container = this.docker.getContainer(id);
       container
         .exec({ Cmd: ['bash', '-c', command], AttachStdout: true, AttachStderr: true, WorkingDir: '/workspace', Env: tzEnv(this.cfg) })
         .then(exec => {
-          const timer = setTimeout(() => reject(new Error(`Command timed out after ${timeoutMs}ms`)), timeoutMs);
+          const timer = setTimeout(() => reject(new Error(`Command timed out after ${limit}ms`)), limit);
           exec.start({ hijack: true, stdin: false }, (err, stream) => {
             if (err || !stream) {
               clearTimeout(timer);

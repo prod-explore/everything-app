@@ -1,6 +1,7 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import type Docker from 'dockerode';
+import { MAX_TIMEOUT_MS, clampTimeoutMs } from '../limits.js';
 import { DockerodeOps, buildCreateOptions, configFromEnv, cpuPercentFromStats } from '../docker.js';
 
 const spec = { ownerId: 'proj-1', volume: 'everything-workspace-proj-1', name: 'everything-sandbox-proj-1-x' };
@@ -190,5 +191,47 @@ describe('docker-compose.yml', () => {
     assert.equal(Number(passed('SANDBOX_CPUS')), cfg.cpus);
     // Documented as the way to turn on gVisor (README), so it has to reach the supervisor.
     assert.equal(passed('SANDBOX_RUNTIME'), cfg.runtime);
+  });
+});
+
+describe('exec timeout clamp', () => {
+  it('clampTimeoutMs bounds to [1, MAX_TIMEOUT_MS] and survives garbage', () => {
+    assert.equal(clampTimeoutMs(5_000), 5_000);
+    assert.equal(clampTimeoutMs(0), 1);
+    assert.equal(clampTimeoutMs(-10), 1);
+    assert.equal(clampTimeoutMs(Number.NaN), 1);
+    assert.equal(clampTimeoutMs(Number.POSITIVE_INFINITY), MAX_TIMEOUT_MS);
+    assert.equal(clampTimeoutMs(2 ** 40), MAX_TIMEOUT_MS);
+    assert.equal(clampTimeoutMs(12.9), 12);
+  });
+
+  it('exec arms its timer with the clamped value, whatever the caller passed', async t => {
+    t.after(() => mock.timers.reset());
+    mock.timers.enable({ apis: ['setTimeout'] });
+    const docker = {
+      getContainer: () => ({
+        // exec.start never calls back, so only the timer can end the call.
+        exec: async () => ({ start: () => {} }),
+      }),
+    } as unknown as Docker;
+    const ops = new DockerodeOps(configFromEnv({}), docker);
+
+    const huge = ops.exec('c', 'sleep 1', Number.MAX_SAFE_INTEGER);
+    const settled = assert.rejects(huge, new RegExp(`timed out after ${MAX_TIMEOUT_MS}ms`));
+    await new Promise<void>(r => setImmediate(r));
+    mock.timers.tick(MAX_TIMEOUT_MS - 1);
+    // Not yet fired: the unclamped value would have been Infinity-like, and a coerced 1 ms would have fired already.
+    let early = false;
+    huge.catch(() => (early = true));
+    await new Promise<void>(r => setImmediate(r));
+    assert.equal(early, false);
+    mock.timers.tick(1);
+    await settled;
+
+    const negative = ops.exec('c', 'sleep 1', -5);
+    const negSettled = assert.rejects(negative, /timed out after 1ms/);
+    await new Promise<void>(r => setImmediate(r));
+    mock.timers.tick(1);
+    await negSettled;
   });
 });

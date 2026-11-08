@@ -19,8 +19,10 @@ describe('pairing client against a fake server', () => {
       req.on('end', () => {
         const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
         seen.push({ path: req.url!, body, ...(req.method ? { method: req.method } : {}) });
-        const h = handlers.get(req.url!);
-        if (!h) {
+        // Look the handler up explicitly and only call something that really is a function: an unknown
+        // path (whatever the client sent as req.url) answers 404 instead of being invoked blindly.
+        const h = handlers.get(req.url ?? '');
+        if (typeof h !== 'function') {
           res.writeHead(404).end();
           return;
         }

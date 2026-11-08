@@ -240,7 +240,7 @@ export async function installPolicyRoutes(
       return;
     }
     if (top) pushEvent(state, `navigation blocked: ${d.reason}`);
-    else console.warn(`[browser-policy] blocked request to ${url}: ${d.reason}`);
+    else console.warn('[browser-policy] blocked request to %s: %s', url, d.reason);
     await route.abort('blockedbyclient').catch(() => {});
   });
 }

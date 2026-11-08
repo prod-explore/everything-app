@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { getSetting, setSetting } from '../db.js';
+import { trimTrailingSlashes } from '../text-utils.js';
 
 /**
  * Backends for web_search. Pluggable in Settings → Web; the model sees one tool and never knows which engine answers.
@@ -40,10 +41,25 @@ export interface Searcher {
 
 export class SearchError extends Error {}
 
+/**
+ * Removes HTML tags from a search snippet. One pass of a tag regex is not enough: removing the inner tag can
+ * splice the surrounding text into a new one (`<scr<b>ipt>` -> `<script>`), so it repeats until nothing changes
+ * and then drops any stray angle brackets, which can never be part of legitimate snippet text anyway.
+ */
+export function stripTags(html: string): string {
+  let prev: string;
+  let out = html;
+  do {
+    prev = out;
+    out = out.replace(/<\/?[a-z][^<>]*>/gi, '');
+  } while (out !== prev);
+  return out.replace(/[<>]/g, '');
+}
+
 const TIMEOUT_MS = 15_000;
 
 export function normalizeSearxngUrl(raw: string): string {
-  const trimmed = raw.trim().replace(/\/+$/, '');
+  const trimmed = trimTrailingSlashes(raw.trim());
   if (!trimmed) return '';
   let u: URL;
   try {
@@ -53,7 +69,7 @@ export function normalizeSearxngUrl(raw: string): string {
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new SearchError('SearXNG URL must start with http:// or https://');
   if (u.username || u.password) throw new SearchError('Put no credentials in the SearXNG URL');
-  return `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
+  return `${u.origin}${trimTrailingSlashes(u.pathname)}`;
 }
 
 export function loadSearchConfig(db: Database.Database, env: NodeJS.ProcessEnv = process.env): WebSearchConfig {
@@ -161,7 +177,7 @@ export function createBraveSearcher(apiKey: string, fetchImpl: typeof fetch = fe
         const url = str(r['url']);
         if (!isWebUrl(url)) continue;
         // Brave marks matches with <strong>; the description is otherwise plain text.
-        hits.push({ title: str(r['title']), url, snippet: str(r['description']).replace(/<\/?[a-z][^>]*>/gi, ''), age: str(r['age']) || undefined });
+        hits.push({ title: str(r['title']), url, snippet: stripTags(str(r['description'])), age: str(r['age']) || undefined });
         if (hits.length >= count) break;
       }
       return hits;

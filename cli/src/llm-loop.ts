@@ -300,7 +300,7 @@ export async function runTurn(
       flushNew(deps, trace);
     } catch (storeErr) {
       // The original failure is the one worth reporting.
-      console.warn(`[turn] could not store the messages of a failed turn: ${(storeErr as Error).message}`);
+      console.warn('[turn] could not store the messages of a failed turn: %s', (storeErr as Error).message);
     }
     throw err;
   }

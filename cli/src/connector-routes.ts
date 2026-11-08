@@ -4,6 +4,7 @@ import type { ProviderRouter } from './providers/router.js';
 import { McpConnection, type McpConnectionLike } from './mcp-client.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type { KeyVault } from './providers/key-vault.js';
+import { trimTrailingSlashes } from './text-utils.js';
 
 /**
  * Settings → Connectors: remote MCP servers added by URL, like in Claude. One list shows everything that is connected —
@@ -47,7 +48,7 @@ export function validateConnectorUrl(raw: unknown): { url: string } | { error: s
   if (u.username || u.password) return { error: 'do not put credentials in the URL — use the token field' };
   if (u.protocol === 'http:' && !isLocalHost(u.hostname)) return { error: 'plain http is only accepted for local or private addresses — use https://' };
   u.hash = '';
-  return { url: u.toString().replace(/\/+$/, '') };
+  return { url: trimTrailingSlashes(u.toString()) };
 }
 
 /** `https://mcp.notion.com/mcp` → `notion`. Always a valid connector name, unique among `taken`. */
@@ -67,7 +68,7 @@ export function suggestConnectorName(url: string, taken: ReadonlySet<string>): s
 /** Same URL without credentials or query string — safe to show. */
 function displayUrl(raw: string | undefined): string {
   if (!raw) return '';
-  try { const u = new URL(raw); u.username = ''; u.password = ''; u.search = ''; u.hash = ''; return u.toString().replace(/\/+$/, ''); } catch { return raw; }
+  try { const u = new URL(raw); u.username = ''; u.password = ''; u.search = ''; u.hash = ''; return trimTrailingSlashes(u.toString()); } catch { return raw; }
 }
 
 type Conn = McpConnectionLike & { close?: () => Promise<void> };

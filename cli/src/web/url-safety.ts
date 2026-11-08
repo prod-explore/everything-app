@@ -16,14 +16,14 @@ export class UrlBlockedError extends Error {
   }
 }
 
-function parseIPv4(ip: string): number[] | null {
+export function parseIPv4(ip: string): number[] | null {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
   if (!m) return null;
   const bytes = m.slice(1).map(Number);
   return bytes.every(b => b >= 0 && b <= 255) ? bytes : null;
 }
 
-function parseIPv6(input: string): number[] | null {
+export function parseIPv6(input: string): number[] | null {
   let ip = input.split('%')[0]!;
   if (ip.startsWith('[') && ip.endsWith(']')) ip = ip.slice(1, -1);
   const tail = /(\d+\.\d+\.\d+\.\d+)$/.exec(ip);

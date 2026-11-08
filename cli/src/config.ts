@@ -37,7 +37,7 @@ function loadMcpServers(): McpServerConfig[] {
     const envPrefix = name.toUpperCase().replace(/[^A-Z0-9]/g, '_');
     const url = process.env[`MCP_${envPrefix}_URL`];
     if (!url) {
-      console.warn(`[config] MCP_CONNECTORS lists '${name}' but MCP_${envPrefix}_URL is unset — skipping it.`);
+      console.warn("[config] MCP_CONNECTORS lists '%s' but MCP_%s_URL is unset — skipping it.", name, envPrefix);
       continue;
     }
     servers.push({ name, url, apiKey: process.env[`MCP_${envPrefix}_API_KEY`] });

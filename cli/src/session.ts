@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import type { Request, RequestHandler, Router } from 'express';
 import type { openDb } from './db.js';
@@ -30,9 +30,19 @@ export function migrateSessions(db: Db): void {
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
-/** Compares digests, so neither the content nor the length of the secret shows in the response time. */
-function safeEqual(a: string, b: string): boolean {
-  return timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
+/**
+ * Key for {@link safeEqual}. Random per process and never stored or exported: the MAC below exists only to turn
+ * two arbitrary-length strings into equal-length buffers for timingSafeEqual, so nothing needs to survive a restart.
+ */
+const COMPARE_KEY = randomBytes(32);
+
+/**
+ * Constant-time string comparison that also hides the length. Both sides are MAC'd (HMAC-SHA256 under a random
+ * per-process key) and the fixed-size tags are compared, so neither the content nor the length of the secret shows
+ * in the response time. This is not password storage: no hash is persisted anywhere, the passwords are never kept.
+ */
+export function safeEqual(a: string, b: string): boolean {
+  return timingSafeEqual(createHmac('sha256', COMPARE_KEY).update(a).digest(), createHmac('sha256', COMPARE_KEY).update(b).digest());
 }
 
 export function parseCookies(header: string | undefined): Record<string, string> {

@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { KeyVault } from './providers/key-vault.js';
 import { getSetting, setSetting } from './db.js';
+import { allowPrivateFromEnv, assertSafeWebhookTarget, guardedPost, parseWebhookUrl, WebhookBlockedError, type WebhookGuardOptions } from './webhook-guard.js';
 
 /**
  * "Something is waiting for you" as a plain HTTP POST — deterministic, no model involved. Works with ntfy (self-hosted or
@@ -9,6 +10,10 @@ import { getSetting, setSetting } from './db.js';
  * - The URL is a secret (ntfy topics, Discord/Slack tokens): it lives in the key vault, never in the settings table.
  * - Events: an approval waiting, a question waiting (request_human_input), an urgent report. Approvals and questions are
  *   sent only if they are still waiting after a short delay, so working in the open tab does not buzz the phone.
+ * - The URL is the one thing the server POSTs to on a person's say-so, so it is SSRF-guarded (webhook-guard.ts): public
+ *   hosts only, unless NOTIFY_ALLOW_PRIVATE_NETWORK=true allows a LAN target such as ntfy on 192.168.x. Loopback and
+ *   link-local/metadata addresses are never allowed. Checked when the URL is saved and again, pinned to the vetted
+ *   address, on every send.
  * - Text is minimal by default ("An action is waiting for your approval."). Details (chat title, tool) are opt-in.
  *   A ghost chat never contributes anything but a content-free line.
  */
@@ -42,11 +47,12 @@ const FORMATS: readonly NotifyFormat[] = ['auto', 'text', 'json', 'discord', 'sl
 
 export class NotifyConfigError extends Error {}
 
+/** Syntax check: http(s) only, no credentials. Throws NotifyConfigError. The network check is {@link Notifier.checkUrl}. */
 export function normalizeWebhookUrl(raw: string): string {
-  let u: URL;
-  try { u = new URL(raw.trim()); } catch { throw new NotifyConfigError('That is not a valid URL.'); }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new NotifyConfigError('The webhook URL must start with http:// or https://.');
-  return u.toString();
+  try { return parseWebhookUrl(raw).toString(); } catch (e) {
+    if (e instanceof WebhookBlockedError) throw new NotifyConfigError(e.message);
+    throw e;
+  }
 }
 
 export function loadNotifyConfig(db: Database.Database): NotifyConfig {
@@ -151,6 +157,8 @@ export interface NotifierDeps {
   vault: KeyVault;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  /** Test seam: replaces DNS for the SSRF guard. Must return every address of the host. */
+  resolve?: WebhookGuardOptions['resolve'];
   /** Test seam for the delay timer. */
   setTimer?: (fn: () => void, ms: number) => void;
 }
@@ -168,6 +176,22 @@ export class Notifier {
     if (stored.status === 'ok') return stored.key;
     const fromEnv = ((this.deps.env ?? process.env)['NOTIFY_WEBHOOK_URL'] ?? '').trim();
     return fromEnv || null;
+  }
+
+  private guardOptions(): WebhookGuardOptions {
+    return { allowPrivateNetwork: allowPrivateFromEnv(this.deps.env ?? process.env), resolve: this.deps.resolve };
+  }
+
+  /** Validates a URL a person typed (syntax, then where it resolves to). Returns the normalised URL; throws NotifyConfigError. */
+  async checkUrl(raw: string): Promise<string> {
+    const url = normalizeWebhookUrl(raw);
+    try {
+      await assertSafeWebhookTarget(url, this.guardOptions());
+    } catch (e) {
+      if (e instanceof WebhookBlockedError) throw new NotifyConfigError(e.message);
+      throw e;
+    }
+    return url;
   }
 
   describe() {
@@ -217,8 +241,19 @@ export class Notifier {
     const cfg = loadNotifyConfig(this.deps.db);
     const req = buildRequest(url, formatOverride ?? cfg.format, p);
     try {
-      const res = await (this.deps.fetchImpl ?? fetch)(url, { method: 'POST', headers: req.headers, body: req.body, redirect: 'manual', signal: AbortSignal.timeout(8_000) });
-      if (!res.ok) throw new Error(`the server answered ${res.status}`);
+      let ok: boolean;
+      let status: number;
+      if (this.deps.fetchImpl) {
+        // Injected transport (tests): the target is still vetted first.
+        await assertSafeWebhookTarget(url, this.guardOptions());
+        const res = await this.deps.fetchImpl(url, { method: 'POST', headers: req.headers, body: req.body, redirect: 'manual', signal: AbortSignal.timeout(8_000) });
+        ({ ok, status } = res);
+      } else {
+        // Real transport: connects only to addresses vetted at connect time, never follows redirects, 8 s deadline.
+        ({ status } = await guardedPost(url, req, { ...this.guardOptions(), timeoutMs: 8_000 }));
+        ok = status >= 200 && status < 300;
+      }
+      if (!ok) throw new Error(`the server answered ${status}`);
       this.lastError = null;
     } catch (e) {
       const err = e as Error & { name?: string };

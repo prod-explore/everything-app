@@ -1,6 +1,6 @@
 import http, { type IncomingMessage, type ServerResponse, type OutgoingHttpHeaders } from 'node:http';
 import https from 'node:https';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createGunzip } from 'node:zlib';
 import { Readable } from 'node:stream';
 import { buildRejection, readCommandSection, PktLineError } from './pktline.js';
@@ -31,6 +31,20 @@ export interface ProxyConfig {
 
 const GIT_ROUTE = /^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/(info\/refs|git-upload-pack|git-receive-pack|info\/lfs\/[A-Za-z0-9_/.-]+)$/;
 const NAME_OK = /^(?!\.{1,2}$)[A-Za-z0-9_.-]+$/;
+
+/**
+ * True when every `/`-separated segment of a git endpoint is a real name: non-empty and not `.`/`..`,
+ * including their percent-encoded spellings (`%2e`, `%2E`, `.%2e`, ...). The WHATWG URL parser already
+ * collapses dot segments in req.url before we see the path, but the upstream URL is rebuilt from pieces,
+ * so we do not want the SSRF/path-traversal guarantee to depend on that parser behaviour staying put.
+ */
+export function endpointSegmentsOk(endpoint: string): boolean {
+  return endpoint.split('/').every(seg => {
+    if (seg === '') return false;
+    const decoded = seg.replace(/%2e/gi, '.');
+    return !/^\.{1,2}$/.test(decoded);
+  });
+}
 
 // Request headers we pass upstream. Authorization/Cookie/Proxy-* from the sandbox are never forwarded.
 const FORWARD_REQ_HEADERS = ['content-type', 'accept', 'accept-encoding', 'content-encoding', 'content-length', 'git-protocol', 'user-agent', 'pragma'];
@@ -78,8 +92,13 @@ export function extractProxyToken(header: string | undefined): string | null {
   return null;
 }
 
-const sha = (s: string) => createHash('sha256').update(s).digest();
-const safeEqual = (a: string, b: string) => timingSafeEqual(sha(a), sha(b));
+/**
+ * Constant-time comparison of two secrets of any length: both sides go through HMAC-SHA256 under a key that lives only in
+ * this process, so the buffers are equal-length and nothing about either secret (content or length) shows in the timing.
+ */
+const COMPARE_KEY = randomBytes(32);
+const mac = (s: string) => createHmac('sha256', COMPARE_KEY).update(s).digest();
+const safeEqual = (a: string, b: string) => timingSafeEqual(mac(a), mac(b));
 
 function readJson(req: IncomingMessage, maxBytes = 64 * 1024): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -192,7 +211,13 @@ export function createGitProxy(cfg: ProxyConfig): http.Server {
     opts: { head?: Buffer; body?: Readable; decompressed?: boolean } = {},
   ): Promise<void> {
     return new Promise(resolve => {
-      const target = new URL(`${upstreamPrefix}/${ctx.owner}/${ctx.repo}.git/${ctx.endpoint}`, upstreamOrigin);
+      // Defence in depth against SSRF / path traversal: the upstream path is rebuilt from validated pieces
+      // and then checked to still be exactly that path on exactly the configured origin. Nothing has been
+      // sent upstream (and no Authorization header built) when this throws.
+      if (!endpointSegmentsOk(ctx.endpoint)) throw new HttpError(404, 'git-proxy: not found');
+      const expectedPath = `${upstreamPrefix}/${ctx.owner}/${ctx.repo}.git/${ctx.endpoint}`;
+      const target = new URL(expectedPath, upstreamOrigin);
+      if (target.origin !== upstreamOrigin || target.pathname !== expectedPath) throw new HttpError(404, 'git-proxy: not found');
       const query = req.url?.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
       target.search = query;
 
@@ -364,6 +389,7 @@ export function createGitProxy(cfg: ProxyConfig): http.Server {
   async function handleGit(req: IncomingMessage, res: ServerResponse, url: URL, m: RegExpExecArray, audit: Record<string, unknown>): Promise<void> {
     const [, owner, repo, endpoint] = m as unknown as [string, string, string, string];
     if (!NAME_OK.test(owner) || !NAME_OK.test(repo)) throw new HttpError(404, 'git-proxy: not found');
+    if (!endpointSegmentsOk(endpoint)) throw new HttpError(404, 'git-proxy: not found');
     Object.assign(audit, { owner, repo, endpoint });
 
     const token = extractProxyToken(req.headers.authorization);

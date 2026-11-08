@@ -43,7 +43,7 @@ import { deleteSchedule, type Schedule } from './schedules.js';
 import { createTaskTool, schedulingPrompt, wakeupTool } from './schedule-tools.js';
 import { createConnectorRoutes, migrateConnectors } from './connector-routes.js';
 import { createWebRoutes } from './web-routes.js';
-import { Notifier, NotifyConfigError, NOTIFY_VAULT_KEY, normalizeWebhookUrl, saveNotifyConfig } from './notifier.js';
+import { Notifier, type NotifierDeps, NotifyConfigError, NOTIFY_VAULT_KEY, normalizeWebhookUrl, saveNotifyConfig } from './notifier.js';
 import { buildWebTools, PageCache, WEB_TOOLS_PROMPT } from './web/tools.js';
 import type { FetchOptions } from './web/http.js';
 import type { McpConnectionLike } from './mcp-client.js';
@@ -58,6 +58,8 @@ import { createAuth, type Auth } from './session.js';
 import { pruneHistory, retentionMonths } from './retention.js';
 import { SLOT_KEYS, allowPaidAgents, getSlots, isFreeModel, isSlotKey, modelsPrompt, resolveSlot, setAllowPaidAgents, setSlots } from './slots.js';
 import { servePolicy, contentDisposition, sanitizeFilename } from './artifact-http.js';
+import { trimLeadingSlashes } from './text-utils.js';
+import { createApiRateLimiter, type ApiRateLimitOptions } from './rate-limit.js';
 import {
   GhostRuleError,
   openDb,
@@ -222,9 +224,9 @@ async function main(): Promise<void> {
   for (const conn of connections) {
     try {
       await conn.connect();
-      console.log(`[mcp] connected to '${conn.name}'`);
+      console.log("[mcp] connected to '%s'", conn.name);
     } catch (err) {
-      console.error(`[mcp] failed to connect to '${conn.name}':`, (err as Error).message);
+      console.error("[mcp] failed to connect to '%s':", conn.name, (err as Error).message);
     }
   }
 
@@ -232,7 +234,7 @@ async function main(): Promise<void> {
   // startup error — the turn that needs it fails with a message saying so.
   const router = new ProviderRouter({ db });
   if (!router.vault.enabled) {
-    console.warn(`[vault] ${router.vault.disabledReason} — saving API keys from the UI is disabled until it is set.`);
+    console.warn('[vault] %s — saving API keys from the UI is disabled until it is set.', router.vault.disabledReason);
   }
 
   const { app, shutdown, auth, devices } = await buildApp({ db, connections, router, authToken, password: process.env['SERVER_PASSWORD'] || undefined, config, policyFile: policyFilePath() });
@@ -307,9 +309,11 @@ export interface BuildAppOptions {
   /** Test seams for web_fetch / web_search (fake DNS, a fetch that reaches a local server). */
   web?: { fetchOptions?: FetchOptions; fetchImpl?: typeof fetch; env?: NodeJS.ProcessEnv };
   /** Test seams for the webhook notifier (a fetch that records, a timer that fires at once). */
-  notify?: { fetchImpl?: typeof fetch; env?: NodeJS.ProcessEnv; setTimer?: (fn: () => void, ms: number) => void };
+  notify?: { fetchImpl?: typeof fetch; resolve?: NotifierDeps['resolve']; env?: NodeJS.ProcessEnv; setTimer?: (fn: () => void, ms: number) => void };
   /** Scheduled tasks start with the app; a test turns that off and calls `tick()` itself. */
   scheduler?: { autostart?: boolean };
+  /** Per-IP ceiling for /api and the web app files (default 1200 requests per minute). Tests that hammer one instance raise it. */
+  rateLimit?: ApiRateLimitOptions;
 }
 
 export interface BuiltApp {
@@ -344,7 +348,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
 
   const registry = new ToolRegistry(config.autoApproveTools);
   // A connector that is down at startup is skipped, not fatal: it shows as disconnected in Settings → Connectors and can be reconnected there.
-  for (const f of await registry.loadFrom(connections)) console.warn(`[tools] '${f.name}' unavailable: ${f.error}`);
+  for (const f of await registry.loadFrom(connections)) console.warn("[tools] '%s' unavailable: %s", f.name, f.error);
   console.log(`[tools] loaded ${registry.toLlmTools().length} tools from MCP`);
 
   // ─── Connectors added in Settings (remote MCP by URL) ─────────────────────
@@ -366,7 +370,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   const policyStore = new PolicyStore(opts.policyFile ?? null);
   const approvalGate = new WebApprovalGate(db, policyStore);
   // "Something is waiting for you" as a webhook (ntfy, Discord, Slack, …). Deterministic: no model in the path.
-  const notifier = new Notifier({ db, vault: router.vault, fetchImpl: opts.notify?.fetchImpl, env: opts.notify?.env, setTimer: opts.notify?.setTimer });
+  const notifier = new Notifier({ db, vault: router.vault, fetchImpl: opts.notify?.fetchImpl, resolve: opts.notify?.resolve, env: opts.notify?.env, setTimer: opts.notify?.setTimer });
   /** Title of a chat for the opt-in details; a ghost chat contributes nothing. */
   const notifyChat = (conversationId: string | null | undefined) => {
     const conv = conversationId ? getConversation(db, conversationId) : null;
@@ -376,7 +380,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
     kind: 'approval', ...notifyChat(entry.conversationId), detail: entry.toolLabel,
     stillWaiting: () => approvalGate.isPending(entry.id),
   });
-  if (opts.policyFile) { policyStore.get(); console.log(`[policy] always-allow/block lists and domains: ${opts.policyFile}${policyStore.lastError ? ` (INVALID: ${policyStore.lastError})` : ''}`); }
+  if (opts.policyFile) { policyStore.get(); console.log('[policy] always-allow/block lists and domains: %s%s', opts.policyFile, policyStore.lastError ? ` (INVALID: ${policyStore.lastError})` : ''); }
   const ledger = new UsageLedger(db);
   const sse = new SSEManager();
   // ─── Device bridge: the user's own machines as MCP servers (docs/devices.md, ADR 0017–0020) ───
@@ -474,7 +478,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
     const owner = origin.projectId ?? origin.convId;
     const out: Array<{ path: string; sha256?: string; artifactId?: string; error?: string }> = [];
     for (const raw of paths) {
-      const p = raw.startsWith('/workspace') ? raw : `/workspace/${raw.replace(/^\/+/, '')}`;
+      const p = raw.startsWith('/workspace') ? raw : `/workspace/${trimLeadingSlashes(raw)}`;
       try {
         const bytes = await supervisor.readFile(owner, p);
         const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -668,11 +672,17 @@ ${formatHumanResponse(response)}` };
   const jsonBody = express.json({ limit: '10mb' });
   app.use((req, res, next) => (req.method === 'POST' && req.path === '/api/artifacts' ? next() : jsonBody(req, res, next)));
 
+  // One per-IP ceiling in front of every API route (the SSE stream, auth, uploads, ...). Mounted before them so a flood is
+  // answered 429 before any handler, database or filesystem work. The web app files below reuse the same instance.
+  const apiLimiter = createApiRateLimiter(opts.rateLimit);
+
   // ─── Health (no auth) ─────────────────────────────────────────────────────
   // Only "the process is up": which connectors exist is not for anonymous callers (Settings → Connectors shows it).
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
+
+  app.use('/api', apiLimiter);
 
   // ─── Auth middleware ──────────────────────────────────────────────────────
   // The SSE stream checks its own auth: the session cookie (EventSource cannot set headers, so that is what the
@@ -705,7 +715,7 @@ ${formatHumanResponse(response)}` };
     db,
     run: (schedule, trigger, attach) => runScheduledTurn(schedule, trigger, attach),
     onChange: id => sse.emitAll('schedule:changed', { id }),
-    log: message => console.log(message),
+    log: message => console.log('%s', message),
   });
   app.use('/api', createScheduleRoutes({
     db, scheduler,
@@ -721,13 +731,13 @@ ${formatHumanResponse(response)}` };
   // The URL is a secret (topic / token in the path): it goes to the key vault and is never sent back, only its host.
   app.get('/api/notifications', (_req, res) => { res.json(notifier.describe()); });
 
-  app.put('/api/notifications', (req, res) => {
+  app.put('/api/notifications', async (req, res) => {
     const b = (req.body ?? {}) as { webhookUrl?: unknown; format?: unknown; appUrl?: unknown; events?: unknown; details?: unknown; delaySeconds?: unknown };
     try {
       // webhookUrl: a string saves it, null removes it, absent leaves it alone.
       if (typeof b.webhookUrl === 'string' && b.webhookUrl.trim()) {
         if (!router.vault.enabled) { res.status(503).json({ error: router.vault.disabledReason }); return; }
-        router.vault.set(NOTIFY_VAULT_KEY, normalizeWebhookUrl(b.webhookUrl));
+        router.vault.set(NOTIFY_VAULT_KEY, await notifier.checkUrl(b.webhookUrl));
       } else if (b.webhookUrl === null) {
         router.vault.delete(NOTIFY_VAULT_KEY);
       }
@@ -1016,7 +1026,7 @@ ${formatHumanResponse(response)}` };
         }
       }
       // The tokens lived in the removed sandboxes only; revoking them is tidiness, so a git-proxy hiccup does not block.
-      for (const owner of owners) await github.revokeSandboxGit(owner).catch(err => console.warn(`[delete] revoking git-proxy tokens of ${owner}: ${(err as Error).message}`));
+      for (const owner of owners) await github.revokeSandboxGit(owner).catch(err => console.warn('[delete] revoking git-proxy tokens of %s: %s', owner, (err as Error).message));
 
       const removed = deleteOwned(db, targetKey(target));
       if (!removed) { res.status(404).json({ error: `${target.kind} not found` }); return; }
@@ -1388,7 +1398,7 @@ ${formatHumanResponse(response)}` };
             return r.compacted;
           } catch (err) {
             if (controller.signal.aborted) throw err;
-            console.warn(`[context] compaction failed: ${router.redact((err as Error).message)}`);
+            console.warn('[context] compaction failed: %s', router.redact((err as Error).message));
             return false;
           }
         };
@@ -2275,6 +2285,8 @@ ${formatHumanResponse(response)}`;
   const webDistPath = webDistCandidates.find((p) => fs.existsSync(path.join(p, 'index.html'))) ?? webDistCandidates[webDistCandidates.length - 1]!;
   // An unknown API path is a 404 in JSON, not the web app's index.html with status 200.
   app.use('/api', (_req, res) => { res.status(404).json({ error: 'not found' }); });
+  // Same per-IP ceiling for the app's own files: sendFile/static do filesystem work per request.
+  app.use(apiLimiter);
   app.use(express.static(webDistPath));
   // SPA fallback: everything not handled above (every /api/* route, static assets from webDistPath) gets index.html.
   // Express 5 rejects a bare '*'; '/{*splat}' is its pattern for "any path".
@@ -2328,7 +2340,7 @@ ${formatHumanResponse(response)}`;
     try {
       const r = pruneHistory(db, retention);
       if (r.usage + r.audit + r.toolMeta > 0) console.log(`[retention] removed ${r.usage} usage, ${r.audit} audit, ${r.toolMeta} replay rows older than ${retention} months`);
-    } catch (err) { console.warn(`[retention] ${(err as Error).message}`); }
+    } catch (err) { console.warn('[retention] %s', (err as Error).message); }
   };
   prune();
   const pruneInterval = setInterval(prune, 24 * 60 * 60 * 1000);

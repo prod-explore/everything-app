@@ -14,6 +14,7 @@ import {
   loadSearchConfig,
   normalizeSearxngUrl,
   saveSearchConfig,
+  stripTags,
 } from '../web/search.js';
 import { buildWebTools } from '../web/tools.js';
 import { browserInjectionSignal } from '../llm-loop.js';
@@ -71,6 +72,25 @@ describe('Brave backend', () => {
     assert.equal(asked.searchParams.get('freshness'), 'pd');
     assert.equal(asked.searchParams.get('count'), '20');
     assert.equal((f.seen[0]!.headers as Record<string, string>)['X-Subscription-Token'], 'KEY123');
+  });
+
+  it('stripTags leaves no tag behind, even when removing one tag would assemble another', () => {
+    assert.equal(stripTags('a <strong>bold</strong> claim'), 'a bold claim');
+    assert.equal(stripTags('<scr<b>ipt>alert(1)</scr</b>ipt>'), 'alert(1)');
+    assert.equal(stripTags('<<b>script>x<</b>/script>'), 'x');
+    assert.equal(stripTags('<a<a<a<b>b>b>b>text'), 'text');
+    assert.equal(stripTags('1 < 2 > 0'), '1  2  0', 'stray brackets are dropped');
+    for (const evil of ['<scr<b>ipt>', '<im<i>g src=x>', '<<<<a>']) assert.ok(!/[<>]/.test(stripTags(evil)), evil);
+    // Unclosed tags in bulk must stay linear.
+    const t0 = performance.now();
+    stripTags('<a'.repeat(50_000));
+    assert.ok(performance.now() - t0 < 500);
+  });
+
+  it('the Brave snippet goes through stripTags', async () => {
+    const f = fakeFetch(() => ({ body: { web: { results: [{ title: 'T', url: 'https://t.example/', description: 'x <scr<b>ipt>y' }] } } }));
+    const hits = await createBraveSearcher('K', f).search({ query: 'q', count: 1 });
+    assert.equal(hits[0]!.snippet, 'x y');
   });
 
   it('turns 401 and 429 into actionable messages', async () => {

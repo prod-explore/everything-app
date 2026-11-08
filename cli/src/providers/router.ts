@@ -7,6 +7,7 @@ import { OpenAiCompatClient, type RetryInfo } from './openai-compat.js';
 import { getModelInfo, isLocalModel, parseModelId, supportsTools, type ModelInfo, type ProviderId, type ProviderRecord } from './registry.js';
 import { getSlots, isFreeModel } from '../slots.js';
 import { DESCRIBE_SYSTEM, DescriptionCache, withImageDescriptions, type Describer } from '../vision.js';
+import { trimTrailingSlashes } from '../text-utils.js';
 
 export class ProviderNotConfiguredError extends Error {
   constructor(
@@ -180,7 +181,7 @@ export class ProviderRouter {
   private makeClient(provider: ProviderRecord, apiKey: string, withMeta = true): OpenAiCompatClient {
     return new OpenAiCompatClient({
       label: provider.label,
-      baseUrl: provider.baseUrl.replace(/\/+$/, ''),
+      baseUrl: trimTrailingSlashes(provider.baseUrl),
       apiKey,
       fetchImpl: this.opts.fetchImpl,
       ...(provider.retryMin ? { retryBudgetMs: provider.retryMin * 60_000 } : {}),

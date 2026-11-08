@@ -1,6 +1,7 @@
 import path from 'node:path';
 import tar from 'tar-stream';
 import type { Readable } from 'node:stream';
+import { trimTrailingSlashes } from './text-utils.js';
 
 /**
  * Workspace Explorer: read-only access to a sandbox's /workspace for the UI.
@@ -86,7 +87,7 @@ export function normalizeWorkspacePath(input: unknown): string {
   if (input.length > 4096 || input.includes('\0')) throw new ExplorerError('invalid path', 400);
   const raw = input.replace(/\\/g, '/');
   if (raw.split('/').includes('..')) throw new ExplorerError('path must not contain ".."', 400);
-  const abs = path.posix.normalize(raw.startsWith('/') ? raw : `${WORKSPACE}/${raw}`).replace(/\/+$/, '') || '/';
+  const abs = trimTrailingSlashes(path.posix.normalize(raw.startsWith('/') ? raw : `${WORKSPACE}/${raw}`)) || '/';
   if (abs !== WORKSPACE && !abs.startsWith(`${WORKSPACE}/`)) {
     throw new ExplorerError(`path must be inside ${WORKSPACE}`, 400);
   }
@@ -186,7 +187,7 @@ export function parseDirectoryTar(stream: Readable, abs: string, opts: ListOptio
     });
     extract.on('entry', (header, body, next) => {
       if (done) return;
-      const parts = header.name.replace(/\/+$/, '').split('/');
+      const parts = trimTrailingSlashes(header.name).split('/');
       if (parts.length === 2 && parts[0] === base && parts[1] && !(atRoot && parts[1] === META_DIR_NAME)) {
         const type = entryType(header.type);
         entries.push({
@@ -243,7 +244,7 @@ export function summarizeDirectoryTar(stream: Readable, abs: string): Promise<Wo
       reject(err);
     });
     extract.on('entry', (header, body, next) => {
-      const parts = header.name.replace(/\/+$/, '').split('/');
+      const parts = trimTrailingSlashes(header.name).split('/');
       if (parts[0] === base && parts[1]) {
         const bytes = entryType(header.type) === 'file' ? (header.size ?? 0) : 0;
         const entry = byName.get(parts[1]) ?? { name: parts[1], type: parts.length === 2 ? entryType(header.type) : 'directory', bytes: 0 };

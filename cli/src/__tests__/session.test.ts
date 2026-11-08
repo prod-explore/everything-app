@@ -4,7 +4,7 @@ import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { openDb, runMigrations } from '../db.js';
-import { createAuth, parseCookies, LoginLimiter } from '../session.js';
+import { createAuth, parseCookies, LoginLimiter, safeEqual } from '../session.js';
 
 let server: http.Server;
 let base: string;
@@ -85,5 +85,16 @@ describe('helpers', () => {
     assert.equal(l.blocked('ip'), true);
     l.reset('ip');
     assert.equal(l.blocked('ip'), false);
+  });
+});
+
+describe('safeEqual', () => {
+  it('is true only for identical strings, whatever the lengths', () => {
+    assert.equal(safeEqual('hunter2', 'hunter2'), true);
+    assert.equal(safeEqual('', ''), true);
+    assert.equal(safeEqual('hunter2', 'hunter3'), false);
+    assert.equal(safeEqual('hunter2', 'hunter22'), false);
+    assert.equal(safeEqual('a', ''), false);
+    assert.equal(safeEqual('Bearer x', 'bearer x'), false);
   });
 });

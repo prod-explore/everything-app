@@ -395,7 +395,7 @@ function snapshotBeforeMigration(db: Database.Database, file: string, version: n
   try {
     db.prepare('VACUUM INTO ?').run(target);
   } catch (err) {
-    console.warn(`[db] could not write the pre-migration backup ${target}: ${(err as Error).message}`);
+    console.warn('[db] could not write the pre-migration backup %s: %s', target, (err as Error).message);
   }
 }
 
