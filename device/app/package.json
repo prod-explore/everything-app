@@ -1,0 +1,20 @@
+{
+  "name": "everythingapp-device-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tray app of the EverythingApp device bridge (Tauri v2). The package exists only to pin the Tauri CLI.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icons": "python3 scripts/gen-tray-icons.py && tauri icon icons/source.png -o icons/app && rm -rf icons/app/android icons/app/ios",
+    "fetch-node": "node scripts/fetch-node.mjs",
+    "stage-agent": "node scripts/stage-agent.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

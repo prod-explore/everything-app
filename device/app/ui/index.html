@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EverythingApp Device</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>EverythingApp Device</h1>
+    <nav role="tablist">
+      <button role="tab" data-tab="settings" aria-selected="true">Settings</button>
+      <button role="tab" data-tab="json" aria-selected="false">JSON</button>
+      <button role="tab" data-tab="status" aria-selected="false">Status</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tab-settings" role="tabpanel">
+      <form id="form" autocomplete="off" spellcheck="false">
+        <fieldset>
+          <legend>Server</legend>
+          <label>Server URL <input type="text" data-path="server" placeholder="https://evvapp.example.com"></label>
+          <label>Device name <input type="text" data-path="deviceName" maxlength="40"></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Terminal</legend>
+          <label class="check"><input type="checkbox" data-path="shell.enabled"> Enabled</label>
+          <label>Shell path <input type="text" data-path="shell.path" data-nullable placeholder="auto-detect"></label>
+          <label>Start directory <input type="text" data-path="shell.cwd" data-nullable placeholder="home directory"></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Files</legend>
+          <label class="check"><input type="checkbox" data-path="files.enabled"> Enabled</label>
+          <label class="check"><input type="checkbox" data-path="files.write"> Allow writing</label>
+          <div class="roots">
+            <span class="label">Folders the agent may access</span>
+            <ul id="roots"></ul>
+            <button type="button" id="add-root">Add folder&hellip;</button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Browser</legend>
+          <label class="check"><input type="checkbox" data-path="browser.enabled"> Enabled</label>
+          <label>Mode
+            <select data-path="browser.mode">
+              <option value="profile">Profile (your own, browser must be closed)</option>
+              <option value="dedicated">Dedicated (separate profile)</option>
+            </select>
+          </label>
+          <label>Browser
+            <select data-path="browser.product">
+              <option value="brave">Brave</option>
+              <option value="chrome">Chrome</option>
+              <option value="edge">Edge</option>
+              <option value="chromium">Chromium</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label>Executable <input type="text" data-path="browser.executable" data-nullable placeholder="auto-detect"></label>
+          <label>User data directory <input type="text" data-path="browser.userDataDir" data-nullable placeholder="browser default"></label>
+          <label>Profile directory <input type="text" data-path="browser.profileDirectory" placeholder="Default"></label>
+          <label class="check"><input type="checkbox" data-path="browser.allowPrivateNetwork"> Allow private network addresses (localhost, LAN)</label>
+        </fieldset>
+
+        <div class="bar">
+          <button type="submit" class="primary" id="save">Save</button>
+          <span id="form-msg" class="msg" role="status"></span>
+        </div>
+      </form>
+    </section>
+
+    <section id="tab-json" role="tabpanel" hidden>
+      <p class="hint">The raw <code>config.json</code>. Saving validates it and applies it at once.</p>
+      <textarea id="json" spellcheck="false" rows="22"></textarea>
+      <div class="bar">
+        <button type="button" class="primary" id="save-json">Save JSON</button>
+        <button type="button" id="reload-json">Reload from disk</button>
+        <span id="json-msg" class="msg" role="status"></span>
+      </div>
+    </section>
+
+    <section id="tab-status" role="tabpanel" hidden>
+      <dl id="status"></dl>
+      <div class="bar">
+        <button type="button" class="primary" id="btn-pair">Pair device</button>
+        <button type="button" id="btn-pause">Pause</button>
+        <button type="button" id="btn-unpair">Unpair</button>
+        <span id="status-msg" class="msg" role="status"></span>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
