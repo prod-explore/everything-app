@@ -1,7 +1,8 @@
 import {
   Bot, Camera, ClipboardList, Clock, FilePen, FileText, Flag, Globe, GitBranch, HelpCircle, MessageSquare, MousePointerClick,
-  ListChecks, Search, Square, Terminal, Wrench, type LucideIcon,
+  ListChecks, Monitor, Search, Square, Terminal, Wrench, type LucideIcon,
 } from 'lucide-react';
+import { parseDeviceTool } from './devices';
 
 export type ToolLabel = { icon: LucideIcon; label: string; detail?: string };
 
@@ -41,6 +42,8 @@ function baseName(toolName: string): string {
  * so a new connector never renders as nothing. Past tense once finished, present while running.
  */
 export function toolLabel(toolName: string, args: Args, running: boolean): ToolLabel {
+  const dev = parseDeviceTool(toolName);
+  if (dev) return deviceToolLabel(dev.device, dev.tool, args);
   const name = baseName(toolName);
   const r = (done: string, doing: string) => (running ? doing : done);
   switch (name) {
@@ -93,4 +96,18 @@ export function toolLabel(toolName: string, args: Args, running: boolean): ToolL
     default:
       return { icon: Wrench, label: toolName };
   }
+}
+
+/** Tools of a paired device: "PC · Terminal", "PC · Files", "PC · Browser", with the command, path or site as detail. */
+function deviceToolLabel(device: string, tool: string, args: Args): ToolLabel {
+  if (tool.startsWith('shell_')) {
+    return { icon: Terminal, label: `${device} · Terminal`, detail: clip(str(args, 'command', 'input', 'session')) };
+  }
+  if (tool.startsWith('fs_') || tool.startsWith('_fs_')) {
+    return { icon: FileText, label: `${device} · Files`, detail: clip(str(args, 'path')) };
+  }
+  if (tool.startsWith('browser_')) {
+    return { icon: Globe, label: `${device} · Browser`, detail: tool === 'browser_open' ? host(str(args, 'url')) : clip(str(args, 'label', 'action', 'url')) };
+  }
+  return { icon: Monitor, label: `${device} · ${tool}` };
 }

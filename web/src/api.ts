@@ -3,6 +3,9 @@ import type {
   ApprovalScope,
   ConnectorInfo,
   ConnectorTestResult,
+  DeviceInfo,
+  DevicePolicy,
+  PendingPairing,
   WebSearchSettings,
   NotificationSettings,
   WebSearchTestResult,
@@ -592,3 +595,21 @@ export function runScheduleNow(id: string): Promise<{ ok: true }> {
 export function listScheduleRuns(id: string): Promise<{ runs: ScheduleRun[] }> {
   return request(`/api/schedules/${encodeURIComponent(id)}/runs?limit=20`);
 }
+
+// ─── Devices (Settings → Devices, /devices/pair) ──────────────────────────
+
+export const devicesApi = {
+  list: (): Promise<{ devices: DeviceInfo[] }> => request('/api/devices'),
+  update: (id: string, patch: { name?: string; policy?: Partial<DevicePolicy> }): Promise<DeviceInfo> =>
+    request(`/api/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  /** Revokes: the device's socket is closed, its tools and grants are removed. */
+  revoke: (id: string): Promise<Record<string, never>> =>
+    request(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /** A 404 (ApiError.status) means the code is unknown or expired. */
+  pairing: (userCode: string): Promise<PendingPairing> =>
+    request(`/api/devices/pair/${encodeURIComponent(userCode)}`),
+  approve: (userCode: string, name?: string): Promise<{ deviceId: string }> =>
+    request(`/api/devices/pair/${encodeURIComponent(userCode)}/approve`, { method: 'POST', body: JSON.stringify(name ? { name } : {}) }),
+  deny: (userCode: string): Promise<Record<string, never>> =>
+    request(`/api/devices/pair/${encodeURIComponent(userCode)}/deny`, { method: 'POST' }),
+};

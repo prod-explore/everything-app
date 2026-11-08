@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { getProject, listApprovalGrants, revokeApprovalGrant, updateProject } from '../../api';
 import type { ApprovalGrantRow, CommandMode } from '../../types';
+import { grantText } from '../../lib/devices';
 import { Button } from '../shared/Button';
 import { Modal } from '../shared/Modal';
 import { DeletionDialog } from './DeletionDialog';
@@ -107,7 +108,7 @@ export function ProjectSettingsModal({ projectId, onClose, onChanged, onDeleted 
               <ul className="divide-y divide-border rounded-button border border-border">
                 {grants.map(g => (
                   <li key={g.id} className="flex items-center gap-2 px-3 py-1.5 text-xs">
-                    <span className="min-w-0 flex-1 truncate font-mono text-fg">{g.toolLabel.replace(/^cmd:/, '$ ')}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-fg">{grantText(g.toolLabel)}</span>
                     {g.subjectType && <span className="text-fg-tertiary">{g.subjectType}: {g.subjectId}</span>}
                     <button onClick={() => void revoke(g.id)} className="rounded p-1 text-fg-tertiary hover:text-danger" aria-label={`Revoke ${g.toolLabel}`}>
                       <Trash2 size={13} />

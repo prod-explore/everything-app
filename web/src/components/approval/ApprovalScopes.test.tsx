@@ -75,3 +75,12 @@ describe('ApprovalModal: scope picker', () => {
     expect(screen.getByText(/Remembering this covers/)).toHaveTextContent('all git commit … commands');
   });
 });
+
+describe('ApprovalCard: device tools', () => {
+  it('shows which device and the command', () => {
+    render(<ApprovalCard approval={shell({ toolLabel: 'device-pc/shell_run', args: { command: 'git push origin main' } })} respond={vi.fn()} />);
+    expect(screen.getByText('PC · Terminal')).toBeInTheDocument();
+    expect(screen.getByTitle('Runs on your device')).toHaveTextContent('PC');
+    expect(screen.getByText('git push origin main')).toBeInTheDocument();
+  });
+});

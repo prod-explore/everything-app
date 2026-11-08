@@ -499,3 +499,52 @@ export interface ScheduleInput {
 }
 
 export type SchedulePreview = { ok: true; next: string[] } | { ok: false; error: string };
+
+// ─── Devices (docs/devices.md) ────────────────────────────────────────────
+
+export type DevicePlatform = 'windows' | 'macos' | 'linux';
+
+export interface DevicePolicy {
+  shell: 'allowlist' | 'strict' | 'auto';
+  filesWrite: 'ask' | 'auto';
+  browserAct: 'ask' | 'auto';
+}
+
+export interface DeviceReport {
+  name: string;
+  platform: DevicePlatform;
+  arch: string;
+  hostname: string;
+  agentVersion: string;
+  shell: { enabled: boolean; kind: 'posix' | 'powershell'; path: string };
+  files: { enabled: boolean; roots: string[]; write: boolean };
+  browser: { enabled: boolean; mode: 'profile' | 'dedicated'; product: 'brave' | 'chrome' | 'edge' | 'chromium' | 'custom'; executable: string | null };
+}
+
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  connectionName: string;
+  platform: DevicePlatform;
+  agentVersion: string;
+  online: boolean;
+  connectedAt: string | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+  policy: DevicePolicy;
+  /** The last evvapp://device/info the device sent; null before its first connection. */
+  report: DeviceReport | null;
+  /** Real tool names currently exposed (empty when offline). */
+  tools: string[];
+}
+
+/** A pairing waiting for approval, as the device announced it. */
+export interface PendingPairing {
+  userCode: string;
+  name: string;
+  platform: DevicePlatform;
+  agentVersion: string;
+  ip: string;
+  createdAt: string;
+  expiresAt: string;
+}

@@ -32,4 +32,16 @@ describe('toolLabel', () => {
   it('shows an unknown tool under its own name, with no guessed summary', () => {
     expect(toolLabel('crm__find_contact', { query: 'x' }, false)).toEqual({ icon: expect.anything(), label: 'crm__find_contact' });
   });
+
+  it('labels tools of a paired device with the device and the kind of tool', () => {
+    expect(toolLabel('device-pc__shell_run', { command: 'git status' }, false)).toMatchObject({ label: 'PC · Terminal', detail: 'git status' });
+    expect(toolLabel('device-pc__shell_send', { session: 'main', input: 'y' }, false)).toMatchObject({ label: 'PC · Terminal', detail: 'y' });
+    expect(toolLabel('device-pc__fs_read', { path: 'C:\\a.txt' }, false)).toMatchObject({ label: 'PC · Files', detail: 'C:\\a.txt' });
+    expect(toolLabel('device-my-laptop__browser_open', { url: 'https://www.example.com/x' }, true)).toMatchObject({ label: 'My laptop · Browser', detail: 'example.com' });
+    expect(toolLabel('device-pc__browser_act', { action: 'click' }, false)).toMatchObject({ label: 'PC · Browser', detail: 'click' });
+  });
+
+  it('shows an unknown device tool under the device name', () => {
+    expect(toolLabel('device-pc__whatever', undefined, false).label).toBe('PC · whatever');
+  });
 });

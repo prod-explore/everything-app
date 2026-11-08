@@ -12,6 +12,7 @@ import type { SidebarView } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { Layout } from './components/layout/Layout';
 import { Login } from './components/Login';
+import { PairPage } from './components/devices/PairPage';
 import type { SettingsTab } from './components/settings/SettingsModal';
 const SettingsModal = lazy(() => import('./components/settings/SettingsModal').then(m => ({ default: m.SettingsModal })));
 const BrowserPanel = lazy(() => import('./components/browser/BrowserPanel').then(m => ({ default: m.BrowserPanel })));
@@ -61,6 +62,8 @@ export default function App() {
 
   if (authed === null) return <div className="h-full bg-bg" />;
   if (!authed) return <Login onSuccess={() => setAuthed(true)} />;
+  // The page a device's tray app opens; after the login above, so the code in the query survives signing in.
+  if (window.location.pathname === '/devices/pair') return <PairPage />;
   return <MainApp />;
 }
 

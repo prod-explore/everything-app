@@ -3,6 +3,7 @@ import { AlertTriangle, Shield } from 'lucide-react';
 import type { ApprovalScope, PendingApproval } from '../../types';
 import { Button } from '../shared/Button';
 import { GrantCoverage } from './GrantCoverage';
+import { parseDeviceTool } from '../../lib/devices';
 
 /** Worker approvals are labelled "[agent researcher] srv/tool" by the server. */
 function agentOf(label: string): string | null {
@@ -85,6 +86,11 @@ export function ApprovalModal({
         <div className="mb-2 flex items-center gap-2 font-mono text-sm text-fg">
           {agentOf(approval.toolLabel) && (
             <span className="rounded bg-accent/15 px-1.5 py-0.5 font-sans text-xs text-accent">{agentOf(approval.toolLabel)}</span>
+          )}
+          {parseDeviceTool(approval.toolLabel.replace(/^\[(agent [^\]]+|subagent)\]\s*/, '')) && (
+            <span className="rounded bg-accent/15 px-1.5 py-0.5 font-sans text-xs text-accent">
+              {parseDeviceTool(approval.toolLabel.replace(/^\[(agent [^\]]+|subagent)\]\s*/, ''))!.device}
+            </span>
           )}
           <span className="min-w-0 break-all">{approval.toolLabel.replace(/^\[(agent [^\]]+|subagent)\]\s*/, '')}</span>
         </div>

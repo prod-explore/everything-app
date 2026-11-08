@@ -3,6 +3,7 @@ import { AlertTriangle, ClipboardList, Globe, Shield } from 'lucide-react';
 import type { ApprovalScope, PendingApproval } from '../../types';
 import { Button } from '../shared/Button';
 import { toolLabel } from '../../lib/toolLabels';
+import { parseDeviceTool } from '../../lib/devices';
 import { MarkdownText } from '../chat/MarkdownText';
 import { GrantCoverage } from './GrantCoverage';
 
@@ -93,7 +94,8 @@ export function ApprovalCard({ approval, respond }: { approval: PendingApproval;
   const [busy, setBusy] = useState(false);
   const { agent, tool } = splitLabel(approval.toolLabel);
   if (tool.startsWith('web:')) return <DomainCard approval={approval} agent={agent} respond={respond} />;
-  const friendly = toolLabel(tool.split('/').pop() ?? tool, approval.args, false);
+  const onDevice = parseDeviceTool(tool);
+  const friendly = toolLabel(onDevice ? tool : (tool.split('/').pop() ?? tool), approval.args, false);
   // A plan proposal is asked every time (so it can never be pre-approved), but it is not a dangerous action.
   const isPlan = tool.split('/').pop() === 'propose_plan' || tool === 'propose_plan';
   const danger = approval.dangerous && !isPlan;
@@ -143,9 +145,14 @@ export function ApprovalCard({ approval, respond }: { approval: PendingApproval;
       <div className="mb-2 flex items-center gap-2 text-fg">
         <friendly.icon size={14} className="shrink-0" />
         <span className="text-xs">{friendly.label}</span>
+        {onDevice && <span className="rounded bg-accent/15 px-1.5 py-0.5 text-xs text-accent" title="Runs on your device">{onDevice.device}</span>}
         <span className="min-w-0 truncate font-mono text-xs text-fg-tertiary">{tool}</span>
       </div>
-      {approval.commands ? (
+      {onDevice && !approval.commands && typeof (approval.args['command'] ?? approval.args['input']) === 'string' ? (
+        <code className="mb-3 block max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-bg p-2 font-mono text-xs text-fg">
+          {String(approval.args['command'] ?? approval.args['input'])}
+        </code>
+      ) : approval.commands ? (
         <div className="mb-3 max-h-48 space-y-1 overflow-auto rounded-lg bg-bg p-2">
           {approval.commands.map((c, i) => (
             <div key={i} className="flex items-start gap-2 text-xs">

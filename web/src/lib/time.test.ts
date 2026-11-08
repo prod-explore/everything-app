@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatStoredTime } from './time';
+import { formatStoredTime, relativeTime } from './time';
 
 describe('formatStoredTime', () => {
   const warsaw = { timeZone: 'Europe/Warsaw', locale: 'en-GB' };
@@ -21,5 +21,19 @@ describe('formatStoredTime', () => {
     expect(formatStoredTime('yesterday-ish', warsaw)).toBe('yesterday-ish');
     expect(formatStoredTime(null, warsaw)).toBe('');
     expect(formatStoredTime(undefined, warsaw)).toBe('');
+  });
+});
+
+describe('relativeTime', () => {
+  const now = Date.parse('2026-11-08T12:00:00Z');
+  it('counts in the largest sensible unit', () => {
+    expect(relativeTime('2026-11-08T11:59:50Z', now)).toBe('just now');
+    expect(relativeTime('2026-11-08T11:55:00Z', now)).toBe('5 min ago');
+    expect(relativeTime('2026-11-08 09:00:00', now)).toBe('3 h ago');
+    expect(relativeTime('2026-11-06T12:00:00Z', now)).toBe('2 d ago');
+  });
+  it('handles nothing and unreadable text', () => {
+    expect(relativeTime(null, now)).toBe('');
+    expect(relativeTime('soon', now)).toBe('soon');
   });
 });
