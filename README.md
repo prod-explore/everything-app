@@ -223,7 +223,7 @@ do so ask first, but once approved they run.
   [git-proxy/README.md](git-proxy/README.md#limitations-v1)).
 - **Checkpoints skip nested repositories** inside the workspace (git records them as gitlinks).
 - **`web_fetch` reads HTML, JSON and text only**, and runs no JavaScript; the browser covers the rest. The server browser's
-  profiles are ephemeral, so logins do not persist there; a paired computer's browser uses your own profile instead.
+  profiles are ephemeral, so logins do not persist there; a paired computer's browser can use your own profile instead.
 - **The network guard is IPv4 iptables on Linux.**
 - **A ghost chat is only as local as its labels.** A provider or gateway that marks a cloud model as local defeats it.
 - **Device tools exist only while the device is online**, and a device's browser serves one chat at a time. The user's own

@@ -69,6 +69,8 @@ type DeviceReport = {
 };
 ```
 
+A capability switched on but unable to work (files with no folders, no browser found, no shell found) is reported with `enabled: false` and logged on the device, so the server never offers a tool that cannot run.
+
 ## Device tools
 
 Exposed only when their capability is on. Tools whose name starts with `_` are internal: the server calls them, `DeviceConnection.listTools()` hides them from models. `_conversation_id` is injected by the orchestrator into every `shell_*` and `browser_*` call (never offered to the model).
@@ -76,7 +78,7 @@ Exposed only when their capability is on. Tools whose name starts with `_` are i
 | Tool | Input | Approval (ADR 0019) |
 |---|---|---|
 | `shell_run` | `command`, `session?` (`[A-Za-z0-9_-]{1,32}`, default `main`), `cwd?` (new session only), `timeout_s?` (1–600, default 120), `background?` | command policy, device mode |
-| `shell_send` | `session`, `input` (written to stdin + `\n`) | command policy on `input` |
+| `shell_send` | `session`, `input` (written to stdin + `\n`; refused in PowerShell sessions, where the shell itself reads stdin) | command policy on `input` |
 | `shell_read` | `session`, `max_chars?` | none |
 | `shell_list` | — | none |
 | `shell_close` | `session`, `interrupt_only?` | none |
