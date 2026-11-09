@@ -16,9 +16,10 @@ impl Paths {
     pub fn resolve(app: &AppHandle) -> Result<Self, String> {
         let r = app.path();
         let p = Paths {
-            config_dir: r.app_config_dir().map_err(|e| e.to_string())?,
-            data_dir: r.app_data_dir().map_err(|e| e.to_string())?,
-            log_dir: r.app_log_dir().map_err(|e| e.to_string())?,
+            // Plain paths: these are handed to the Node agent, which mishandles verbatim `\\?\` paths.
+            config_dir: plain(r.app_config_dir().map_err(|e| e.to_string())?),
+            data_dir: plain(r.app_data_dir().map_err(|e| e.to_string())?),
+            log_dir: plain(r.app_log_dir().map_err(|e| e.to_string())?),
         };
         for d in [&p.config_dir, &p.data_dir, &p.log_dir] {
             std::fs::create_dir_all(d).map_err(|e| format!("cannot create {}: {e}", d.display()))?;
@@ -34,4 +35,8 @@ impl Paths {
     pub fn autostart_marker(&self) -> PathBuf {
         self.data_dir.join(".autostart-initialised")
     }
+}
+
+fn plain(p: PathBuf) -> PathBuf {
+    dunce::simplified(&p).to_path_buf()
 }

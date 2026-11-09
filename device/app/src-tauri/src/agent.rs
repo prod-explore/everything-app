@@ -494,7 +494,7 @@ fn node_path(_app: &AppHandle) -> PathBuf {
     };
     if let Some(p) = std::env::current_exe()
         .ok()
-        .and_then(|e| e.parent().map(|d| d.join(name)))
+        .and_then(|e| e.parent().map(|d| dunce::simplified(&d.join(name)).to_path_buf()))
     {
         if p.exists() {
             return p;
@@ -512,6 +512,9 @@ fn agent_main(app: &AppHandle) -> Result<PathBuf, String> {
         .resource_dir()
         .map_err(|e| e.to_string())?
         .join("agent/dist/main.mjs");
+    // On Windows the resource directory is a verbatim path (`\\?\C:\...`). Node's module loader resolves the entry
+    // point with realpath, which fails on that form (`EISDIR: lstat 'C:'`), so the agent gets the plain form.
+    let bundled = dunce::simplified(&bundled).to_path_buf();
     if bundled.exists() {
         return Ok(bundled);
     }

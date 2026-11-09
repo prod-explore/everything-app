@@ -1,7 +1,7 @@
 {
   "name": "everythingapp-device-app",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Tray app of the EverythingApp device bridge (Tauri v2). The package exists only to pin the Tauri CLI.",
   "scripts": {
     "tauri": "tauri",
