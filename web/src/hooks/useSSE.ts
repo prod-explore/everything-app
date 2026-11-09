@@ -184,12 +184,12 @@ export function useSSE(conversationId: string | null, onSideEvent?: (event: Side
     // Same-origin EventSource sends the HttpOnly session cookie by itself — no credential in the URL.
     const id = conversationId;
     const url = `/api/conversations/${id}/stream`;
-    let closed = false;
+    const life = { closed: false }; // an object, not a reassigned local: flipped by the cleanup, read by callbacks
     let source: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
     function connect() {
-      if (closed) return;
+      if (life.closed) return;
       source = new EventSource(url);
 
       source.addEventListener('turn:start', () => dispatch({ type: 'start' }));
@@ -250,17 +250,17 @@ export function useSSE(conversationId: string | null, onSideEvent?: (event: Side
       // server that we never saw start. Without this the composer looked idle and a sent message was refused (409).
       source.onopen = () => {
         void getTurnStatus(id)
-          .then(s => { if (!closed && s.status === 'running') dispatch({ type: 'resume' }); })
+          .then(s => { if (!life.closed && s.status === 'running') dispatch({ type: 'resume' }); })
           .catch(() => { /* the next event or reconnect sorts it out */ });
         // Messages queued before the reload (or from another device) are still waiting on the server.
         void getMessageQueue(id)
-          .then(q => { if (!closed) dispatch({ type: 'queue', queue: q }); })
+          .then(q => { if (!life.closed) dispatch({ type: 'queue', queue: q }); })
           .catch(() => { /* the next queue:changed sets it */ });
       };
 
       source.onerror = () => {
         source?.close();
-        if (closed) return;
+        if (life.closed) return;
         // Browsers already retry EventSource automatically, but on a fatal
         // server-side close (e.g. a deploy) that stops — a manual retry
         // loop is the difference between "reconnects in 2s" and "silently
@@ -272,7 +272,7 @@ export function useSSE(conversationId: string | null, onSideEvent?: (event: Side
     connect();
 
     return () => {
-      closed = true;
+      life.closed = true;
       clearTimeout(reconnectTimer);
       source?.close();
     };

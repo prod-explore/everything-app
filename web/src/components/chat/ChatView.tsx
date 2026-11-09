@@ -24,12 +24,13 @@ function useFollowBottom(conversationId: string) {
     const inner = content.current;
     const scroller = inner?.parentElement;
     if (!inner || !scroller) return;
-    let following = true;
+    // Per-subscription state lives in an object, not a reassigned local: it changes from event handlers only.
+    const view = { following: true };
     const onScroll = () => {
-      following = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < STICK_PX;
+      view.following = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < STICK_PX;
     };
     const follow = () => {
-      if (following) scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+      if (view.following) scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
     const mo = new MutationObserver(follow);

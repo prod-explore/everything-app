@@ -20,8 +20,8 @@
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.3",
     "helmet": "^8.3.0",
-    "linkedom": "^0.18.14",
-    "turndown": "^7.2.4",
+    "linkedom": "^0.18.15",
+    "turndown": "^7.2.5",
     "ws": "^8.22.1"
   },
   "devDependencies": {

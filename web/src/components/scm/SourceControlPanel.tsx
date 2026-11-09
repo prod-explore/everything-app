@@ -408,14 +408,14 @@ function HistoryView({ projectId, dir }: { projectId: string; dir: string }) {
 
   const rows = useMemo(() => {
     if (!commits) return [];
-    let lanes: (string | null)[] = [];
+    const lanes: (string | null)[] = [];
     return commits.map(c => {
       let lane = lanes.indexOf(c.sha);
       if (lane === -1) { lane = lanes.indexOf(null); if (lane === -1) lane = lanes.length; }
       lanes[lane] = c.parents[0] ?? null;
       for (const p of c.parents.slice(1)) if (!lanes.includes(p)) { const free = lanes.indexOf(null); if (free === -1) lanes.push(p); else lanes[free] = p; }
       // Collapse duplicate lanes waiting for the same parent.
-      lanes = lanes.map((l, i) => (l && lanes.indexOf(l) !== i ? null : l));
+      for (let i = 0; i < lanes.length; i++) { const l = lanes[i]; if (l && lanes.indexOf(l) !== i) lanes[i] = null; }
       return { c, lane, width: lanes.length };
     });
   }, [commits]);
