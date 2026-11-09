@@ -115,15 +115,15 @@ export function BrowserPanel({
   useEffect(() => {
     const box = frameBoxRef.current;
     if (!sessionLive || !box) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const debounce: { timer?: ReturnType<typeof setTimeout> } = {};
     const report = () => {
       const { width, height } = box.getBoundingClientRect();
       if (width > 0 && height > 0) sendEvent({ type: 'viewport', width: Math.round(width), height: Math.round(height) });
     };
-    const ro = new ResizeObserver(() => { clearTimeout(timer); timer = setTimeout(report, 250); });
+    const ro = new ResizeObserver(() => { clearTimeout(debounce.timer); debounce.timer = setTimeout(report, 250); });
     ro.observe(box);
     report();
-    return () => { clearTimeout(timer); ro.disconnect(); };
+    return () => { clearTimeout(debounce.timer); ro.disconnect(); };
   }, [sessionLive, sendEvent]);
 
   useEffect(() => {
