@@ -94,7 +94,7 @@ Exposed only when their capability is on. Tools whose name starts with `_` are i
 
 Shell sessions are per `(conversation, session)`: at most 8 per device, closed after 30 min idle. Output per call is capped at 30 000 chars (head and tail kept). A command that times out is interrupted; the session survives. `background: true` starts the command in its own session (named by `session`) and returns at once; `shell_read` collects its output.
 
-The server-side virtual tool `device_transfer` (`from`, `to`, each `device-<slug>:<path>` or `workspace:<path>`) copies a file between a device and the chat's sandbox workspace through `_fs_read_b64` / `_fs_write_b64` and the workspace write path. Approval: `filesWrite` of the target device; into the workspace needs none (ADR 0010). A copy the device's own settings rule out (files off, or read-only as a target) is refused before any card is shown.
+The server-side virtual tool `device_transfer` (`from`, `to`, each `device-<slug>:<path>` or `workspace:<path>`) copies a file between a device and the chat's sandbox workspace through `_fs_read_b64` / `_fs_write_b64` and the workspace write path. Approval: `filesWrite` of the target device; into the workspace needs none (ADR 0010). A copy that the device's own settings rule out (files off, or read-only as a target) is refused before any card is shown.
 
 ## Device config (`config.json` in the app's config dir)
 

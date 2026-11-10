@@ -3,7 +3,8 @@
 [![CI](https://github.com/prod-explore/everything-app/actions/workflows/ci.yml/badge.svg)](https://github.com/prod-explore/everything-app/actions/workflows/ci.yml)
 
 A self-hosted AI workspace for one person: chat with any OpenAI-compatible model using your own keys, and let it run
-shell commands in a Docker sandbox, drive a browser, push to GitHub and work on a schedule. Every action with a side effect
+shell commands in a Docker sandbox, drive a browser, push to GitHub and work on a schedule, or on your own computers once you have
+paired them. Every action with a side effect
 waits for your approval unless you have allowed it. API keys, the Docker socket and GitHub credentials never enter the
 sandbox.
 
@@ -20,6 +21,10 @@ Status: early; I have just started using it day to day.
 | A question from the agent, answered in the chat or later in the inbox | Providers and model slots |
 | ![Search across all chats](docs/img/search.png) | ![The phone layout](docs/img/mobile.png) |
 | Full-text search across chats | Phone layout (installable as a web app) |
+| ![Pairing a computer: the code to compare and the name to give it](docs/img/pair.png) | ![An approval card for a command on a paired laptop](docs/img/device-approval.png) |
+| Approving a new computer in the browser | A command on a paired computer waits for approval like any other |
+| ![Settings, Devices: what a paired laptop offers and how each capability is gated](docs/img/devices.png) | |
+| Settings → Devices: what the laptop exposes, how each capability is gated, remembered commands | |
 
 All screenshots were taken against the scripted mock model in `tools/mock-llm` (see the quick start).
 
@@ -113,6 +118,20 @@ Before the app is reachable from other machines, read [docs/deployment.md](docs/
 (`/internal/` must stay private), the egress guard that keeps the browser and sandboxes off your LAN, GitHub access from
 sandboxes, backups and sizing.
 
+## Pair a computer
+
+The tray app lets agents use a computer of yours: its terminal, folders you choose and, optionally, your browser profile.
+Everything is off until you switch it on, on that computer. See [docs/devices.md](docs/devices.md) for the model.
+
+1. Install the tray app for your system from the [releases page](https://github.com/prod-explore/everything-app/releases)
+   (latest `device-v0.1.1`): Windows `.exe` or `.msi`, macOS `.dmg` (arm64 and x64), Linux `.deb` or `.AppImage`. The
+   installers are unsigned, so Windows SmartScreen and macOS Gatekeeper will warn the first time.
+2. Enter the address of your server in the app's settings and choose *Pair device*.
+3. The browser opens a page with a code. Check that it matches the one in the app, name the device and approve.
+
+Without a desktop, or on a server, run the agent directly: `evvapp-device pair`, then `evvapp-device run`
+(`node dist/main.mjs …` from a checkout; [device/agent/README.md](device/agent/README.md)). Both ways end up as a device under *Settings → Devices*.
+
 ## How it works
 
 ```mermaid
@@ -143,7 +162,8 @@ flowchart LR
 
 The web service (`cli/`, Express 5 and SQLite) is the orchestrator: it runs the agent loop, asks for approvals, stores
 everything and serves the React UI from `web/`. Tools come from MCP servers. Two of them ship in this repository: the
-sandbox (`sandbox-mcp` in front of `sandbox-supervisor`) and the browser (`playwright-mcp`). The rest of the stack exists so
+sandbox (`sandbox-mcp` in front of `sandbox-supervisor`) and the browser (`playwright-mcp`); a paired computer serves a third
+set over its own connection (`device/agent`). The rest of the stack exists so
 that the process holding your keys never runs agent code and the processes running agent code hold no keys.
 
 | Directory | What it is |
