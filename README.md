@@ -8,7 +8,7 @@ paired them. Every action with a side effect
 waits for your approval unless you have allowed it. API keys, the Docker socket and GitHub credentials never enter the
 sandbox.
 
-Status: early; I have just started using it day to day.
+Status: in daily use on my own server since November 2026.
 
 ![A chat that started a worker agent; the Agents panel shows its run](docs/img/agents.png)
 
