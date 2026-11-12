@@ -3,12 +3,11 @@
 [![CI](https://github.com/prod-explore/everything-app/actions/workflows/ci.yml/badge.svg)](https://github.com/prod-explore/everything-app/actions/workflows/ci.yml)
 
 A self-hosted AI workspace for one person: chat with any OpenAI-compatible model using your own keys, and let it run
-shell commands in a Docker sandbox, drive a browser, push to GitHub and work on a schedule, or on your own computers once you have
-paired them. Every action with a side effect
-waits for your approval unless you have allowed it. API keys, the Docker socket and GitHub credentials never enter the
-sandbox.
+shell commands in a Docker sandbox, drive a browser, push to GitHub and work on a schedule, or on your own computers once
+you have paired them. Every action with a side effect waits for your approval unless you have allowed it. API keys, the
+Docker socket and GitHub credentials never enter the sandbox.
 
-Status: in daily use on my own server since November 2026.
+Status: in daily use on my own server since early November 2026.
 
 ![A chat that started a worker agent; the Agents panel shows its run](docs/img/agents.png)
 
@@ -108,8 +107,9 @@ docker build -t everything-sandbox:latest ./sandbox-supervisor/sandbox-image/
 docker compose up -d --build
 ```
 
-Compose refuses to start while a required secret is empty, and every service refuses a weak one. Open
-<http://127.0.0.1:3000>, add a provider, and ask for something that needs a shell: the first command shows an approval card.
+Compose refuses to start while a required secret is empty, and every service refuses a weak one. The web UI and every
+other port are published on `127.0.0.1` by default. Open <http://127.0.0.1:3000>, add a provider, and ask for something
+that needs a shell: the first command shows an approval card.
 
 Instead of building, `deploy/deploy.sh` pulls the images CI publishes for amd64 and arm64, starts them and rolls back a
 service that does not become healthy. The images are public, so this works without logging in.
@@ -224,7 +224,7 @@ What the design claims, and what [SECURITY.md](SECURITY.md) treats as a vulnerab
   the same at the network layer for the browser and the sandboxes.
 - **Authentication everywhere.** The UI uses an HttpOnly, `SameSite=Strict` session cookie (only its hash is stored); the
   API also takes a bearer token for scripts. Each internal service has its own token, compared in constant time. Services
-  refuse weak secrets at startup, and every port is published on `127.0.0.1` only.
+  refuse weak secrets at startup, and every port, the web UI included, is published on `127.0.0.1` by default.
 - **Side effects need a human or a rule.** Tools are default-deny except a short list of read-only and browser tools. The
   decision, by rule, grant or person, is written to an audit log.
 
