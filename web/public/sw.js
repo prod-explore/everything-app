@@ -6,8 +6,8 @@
  * - Never touches /api, /internal, SSE streams or the live-view proxy: those carry the session and
  *   live data, and must always hit the server.
  */
-const CACHE = 'ea-shell-v1';
-const SHELL = ['/', '/index.html', '/manifest.json', '/favicon.svg'];
+const CACHE = 'ea-shell-v2';
+const SHELL = ['/', '/index.html', '/manifest.json', '/favicon.ico', '/apple-touch-icon.png', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -56,7 +56,7 @@ self.addEventListener('fetch', event => {
 self.addEventListener('push', event => {
   let data = { title: 'EverythingApp', body: '', url: '/' };
   try { data = { ...data, ...event.data.json() }; } catch { /* keep defaults */ }
-  event.waitUntil(self.registration.showNotification(data.title, { body: data.body, icon: '/favicon.svg', tag: 'ea-urgent', data: { url: data.url } }));
+  event.waitUntil(self.registration.showNotification(data.title, { body: data.body, icon: '/icons/icon-192.png', tag: 'ea-urgent', data: { url: data.url } }));
 });
 
 self.addEventListener('notificationclick', event => {
