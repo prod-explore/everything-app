@@ -7,7 +7,7 @@ shell commands in a Docker sandbox, drive a browser, push to GitHub and work on 
 you have paired them. Every action with a side effect waits for your approval unless you have allowed it. API keys, the
 Docker socket and GitHub credentials never enter the sandbox.
 
-Status: in production on my own Raspberry Pi 5 since early November 2026; 21 ADRs, 1,300+ tests, five containerised services.
+Status: in production on my own Raspberry Pi 5 since late September 2026; 21 ADRs, 1,300+ tests, five containerised services.
 
 ![A chat that started a worker agent; the Agents panel shows its run](docs/img/agents.png)
 
