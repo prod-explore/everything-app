@@ -7,7 +7,7 @@ shell commands in a Docker sandbox, drive a browser, push to GitHub and work on 
 you have paired them. Every action with a side effect waits for your approval unless you have allowed it. API keys, the
 Docker socket and GitHub credentials never enter the sandbox.
 
-Status: in daily use on my own server since early November 2026.
+Status: in production on my own Raspberry Pi 5 since early November 2026; 21 ADRs, 1,300+ tests, five containerised services.
 
 ![A chat that started a worker agent; the Agents panel shows its run](docs/img/agents.png)
 
@@ -163,8 +163,7 @@ flowchart LR
 The web service (`cli/`, Express 5 and SQLite) is the orchestrator: it runs the agent loop, asks for approvals, stores
 everything and serves the React UI from `web/`. Tools come from MCP servers. Two of them ship in this repository: the
 sandbox (`sandbox-mcp` in front of `sandbox-supervisor`) and the browser (`playwright-mcp`); a paired computer serves a third
-set over its own connection (`device/agent`). The rest of the stack exists so
-that the process holding your keys never runs agent code and the processes running agent code hold no keys.
+set over its own connection (`device/agent`). The rest of the stack exists so that agent code runs in sandboxes with no access to secrets.
 
 | Directory | What it is |
 |---|---|
