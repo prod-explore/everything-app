@@ -18,10 +18,13 @@ export default defineConfig({
     },
   },
   build: {
+    // The server's CSP (font-src 'self') refuses data: fonts, and KaTeX has a few small ones Vite would inline.
+    assetsInlineLimit: file => (/\.(woff2?|ttf)$/.test(file) ? false : undefined),
     rolldownOptions: {
       output: {
         codeSplitting: {
           groups: [
+            { name: 'katex', test: /node_modules[/]katex[/]/ },
             { name: 'markdown', test: /node_modules[/](react-markdown|remark|rehype|unified|micromark|mdast|hast|highlight\.js|lowlight|vfile|unist|property-information|space-separated|comma-separated|decode-named|character-|trim-lines|bail|trough|devlop|is-plain)/ },
             { name: 'assistant-ui', test: /node_modules[/]@assistant-ui/ },
             { name: 'react', test: /node_modules[/](react|react-dom|scheduler)[/]/ },

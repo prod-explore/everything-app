@@ -32,7 +32,7 @@ describe('liveTurnReducer', () => {
 
   it('merges consecutive thinking deltas', () => {
     const s = run([{ type: 'start' }, { type: 'thinking_delta', text: 'a' }, { type: 'thinking_delta', text: 'b' }]);
-    expect(s.parts).toEqual([{ type: 'reasoning', text: 'ab' }]);
+    expect(s.parts).toMatchObject([{ type: 'reasoning', text: 'ab' }]);
   });
 
   it('attaches each tool result to the oldest call still waiting for one', () => {
@@ -68,6 +68,64 @@ describe('liveTurnReducer', () => {
     const s = run([{ type: 'context', used: 100, limit: 1000 }, { type: 'compacted' }, { type: 'start' }]);
     expect(s.context).toEqual({ used: 100, limit: 1000 });
     expect(s.compactedCount).toBe(1);
+  });
+
+  it('stamps when the turn started and when it last showed life', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    let s = run([{ type: 'start' }]);
+    expect(s).toMatchObject({ startedAt: 1000, lastEventAt: 1000, continuing: false, startedCount: 1 });
+    vi.setSystemTime(6000);
+    s = run([{ type: 'text_delta', block: 0, text: 'a' }], s);
+    expect(s).toMatchObject({ startedAt: 1000, lastEventAt: 6000 });
+    vi.useRealTimers();
+  });
+
+  it('times the model reasoning: it ends when anything else arrives', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    let s = run([{ type: 'start' }, { type: 'thinking_delta', text: 'hm' }]);
+    expect(s.parts[0]).toMatchObject({ type: 'reasoning', startedAt: 1000 });
+    expect((s.parts[0] as { endedAt?: number }).endedAt).toBeUndefined();
+    vi.setSystemTime(4000);
+    s = run([{ type: 'text_delta', block: 0, text: 'x' }], s);
+    expect(s.parts[0]).toMatchObject({ type: 'reasoning', startedAt: 1000, endedAt: 4000 });
+    vi.useRealTimers();
+  });
+
+  it('a start can mark the turn as carrying on a cut-short reply', () => {
+    expect(run([{ type: 'start', continuing: true }]).continuing).toBe(true);
+  });
+
+  it('keeps what the turn showed in `held` after it ends, until released', () => {
+    let s = run([{ type: 'start' }, { type: 'text', text: 'partial' }, { type: 'finish', error: 'cut', kind: 'aborted' }]);
+    expect(s).toMatchObject({ running: false, parts: [], held: [{ type: 'text', text: 'partial' }], startedAt: null, lastEventAt: null });
+    s = run([{ type: 'release' }], s);
+    expect(s.held).toEqual([]);
+    expect(run([{ type: 'start' }], s).held).toEqual([]);
+  });
+
+  it('a snapshot joins a running turn with its text and puts the clocks back', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    const s = run([{
+      type: 'snapshot',
+      snapshot: {
+        turnId: 3, userMessageId: 9, continuing: true, elapsedMs: 12_000, idleMs: 4000, at: 555,
+        parts: [{ type: 'reasoning', text: 'r', startedAt: 500, endedAt: 540 }, { type: 'text', text: 'so far' }],
+      },
+    }]);
+    expect(s).toMatchObject({ running: true, continuing: true, startedAt: 88_000, lastEventAt: 96_000, startedCount: 1 });
+    expect(s.parts[0]).toMatchObject({ startedAt: 100_000 - 55, endedAt: 100_000 - 15 });
+    expect(s.parts[1]).toEqual({ type: 'text', text: 'so far' });
+    vi.useRealTimers();
+  });
+
+  it('restores the error of a turn this page never saw, but never over a running turn or a known error', () => {
+    expect(run([{ type: 'restore_error', error: 'gone', kind: 'unknown' }])).toMatchObject({ error: 'gone', errorKind: 'unknown' });
+    expect(run([{ type: 'start' }, { type: 'restore_error', error: 'gone' }]).error).toBeUndefined();
+    const known = run([{ type: 'finish', error: 'first' }, { type: 'restore_error', error: 'second' }]);
+    expect(known.error).toBe('first');
   });
 
   it('resume starts a turn we never saw start, and leaves a turn we already follow untouched', () => {
@@ -174,6 +232,36 @@ describe('useSSE', () => {
     expect(result.current.parts).toMatchObject([{ type: 'text', text: 'Hi' }]);
     act(() => es.emit('turn:error', { error: 'boom', kind: 'other' }));
     expect(result.current).toMatchObject({ running: false, error: 'boom', finishedCount: 1 });
+  });
+
+  it('follows the server snapshot sent when the stream connects mid-turn', () => {
+    const { result } = renderHook(() => useSSE('c1'));
+    act(() => FakeEventSource.instances[0]!.emit('turn:snapshot', {
+      turnId: 1, userMessageId: 2, continuing: false, elapsedMs: 3000, idleMs: 0, at: 10, parts: [{ type: 'text', text: 'abc' }],
+    }));
+    expect(result.current).toMatchObject({ running: true, parts: [{ type: 'text', text: 'abc' }], startedCount: 1 });
+  });
+
+  it('passes `continuing` from turn:start, and counts starts', () => {
+    const { result } = renderHook(() => useSSE('c1'));
+    act(() => FakeEventSource.instances[0]!.emit('turn:start', { turnId: 1, userMessageId: 2, continuing: true }));
+    expect(result.current).toMatchObject({ running: true, continuing: true, startedCount: 1 });
+  });
+
+  it('shows why the last turn failed when the page was reloaded after it', async () => {
+    getTurnStatus.mockResolvedValue({ id: 4, status: 'error', error: 'provider down', kind: 'busy', usage: '' });
+    const { result } = renderHook(() => useSSE('c1'));
+    await act(async () => { FakeEventSource.instances[0]!.onopen?.(); });
+    expect(result.current).toMatchObject({ running: false, error: 'provider down', errorKind: 'busy' });
+  });
+
+  it('an aborted turn finishes with the aborted kind, and release empties what it held', () => {
+    const { result } = renderHook(() => useSSE('c1'));
+    const es = FakeEventSource.instances[0]!;
+    act(() => { es.emit('turn:start'); es.emit('turn:text', { text: 'kept' }); es.emit('turn:aborted', { error: 'Stopped' }); });
+    expect(result.current).toMatchObject({ running: false, errorKind: 'aborted', held: [{ type: 'text', text: 'kept' }] });
+    act(() => result.current.release());
+    expect(result.current.held).toEqual([]);
   });
 
   it('shows messages waiting on the server, from the stream and after a reconnect', async () => {

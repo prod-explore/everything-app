@@ -191,34 +191,50 @@ export function killTurn(conversationId: string): Promise<{ ok: true }> {
 }
 
 /**
- * Edit/regenerate/retry — message branching. `parentId` is the id
- * of the message immediately before the one being replaced (null for the
- * very first message); server.ts figures out the rest. See lib/runtime.ts
- * for how assistant-ui's onEdit/onReload map onto these.
+ * Edit/regenerate/retry — message branching. Edit names the message being replaced by its id (`messageId`); the older
+ * `parentId` form (the message just before it, null for the very first) still works. `model` answers with that model for
+ * this turn only. See lib/runtime.ts for how assistant-ui's onEdit/onReload map onto these.
  */
 export function editMessage(
   conversationId: string,
-  parentId: number | null,
+  target: { messageId: number } | { parentId: number | null },
   content: string,
+  model?: string,
 ): Promise<{ ok: true; turnId: number }> {
   return request(`/api/conversations/${conversationId}/edit`, {
     method: 'POST',
-    body: JSON.stringify({ parentId, content }),
+    body: JSON.stringify({ ...target, content, ...(model ? { model } : {}) }),
   });
 }
 
 export function regenerateMessage(
   conversationId: string,
   parentId: number | null,
+  model?: string,
 ): Promise<{ ok: true; turnId: number }> {
   return request(`/api/conversations/${conversationId}/regenerate`, {
     method: 'POST',
-    body: JSON.stringify({ parentId }),
+    body: JSON.stringify({ parentId, ...(model ? { model } : {}) }),
   });
 }
 
-export function retryLastMessage(conversationId: string): Promise<{ ok: true; turnId: number }> {
-  return request(`/api/conversations/${conversationId}/retry`, { method: 'POST' });
+export function retryLastMessage(conversationId: string, model?: string): Promise<{ ok: true; turnId: number }> {
+  return request(`/api/conversations/${conversationId}/retry`, { method: 'POST', body: JSON.stringify(model ? { model } : {}) });
+}
+
+/** Carries on a reply that was cut short; what the model writes is appended to that same message. */
+export function continueReply(conversationId: string, model?: string): Promise<{ ok: true; turnId: number }> {
+  return request(`/api/conversations/${conversationId}/continue`, { method: 'POST', body: JSON.stringify(model ? { model } : {}) });
+}
+
+/** Shows another version of an edited / regenerated message (and the chat that followed it). */
+export function selectVersion(conversationId: string, messageId: number): Promise<{ ok: true }> {
+  return request(`/api/conversations/${conversationId}/versions/select`, { method: 'POST', body: JSON.stringify({ messageId }) });
+}
+
+/** Rewrites one text block of a reply in place (default: the last one) without asking the model again. */
+export function editReplyText(conversationId: string, messageId: number, text: string, index?: number): Promise<{ ok: true }> {
+  return request(`/api/conversations/${conversationId}/messages/${messageId}`, { method: 'PATCH', body: JSON.stringify({ text, ...(index === undefined ? {} : { index }) }) });
 }
 
 /** Hard delete of one message and everything after it — distinct from clearMessages() above. */

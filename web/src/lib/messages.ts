@@ -3,6 +3,31 @@ import type { LivePart } from '../hooks/useSSE';
 import type { ContentBlock, RawMessage, ToolResultPart } from '../types';
 import { parseStoredTime } from './answerPlacement';
 
+/**
+ * What the chat view knows about a message beyond its parts, carried on `metadata.custom` (assistant-ui hands it to every
+ * component of the message).
+ */
+export interface MessageMeta {
+  /** Every version of this message (ids of the typed user message), oldest first; on a reply, those of the message it answers. */
+  versions?: number[];
+  /** Which of `versions` is the one shown. */
+  currentVersion?: number;
+  /** A reply that was cut short, and the sentence saying why when it was a failure. */
+  incomplete?: 'stopped' | 'error';
+  errorText?: string;
+  /** How long each reasoning part ran, in the order of the reasoning parts (null = unknown). */
+  thoughtMs?: Array<number | null>;
+  /** Where an edit of the reply's text goes: the stored row and the index of the text block in it. */
+  textEdit?: { rowId: number; index: number };
+  /** The id of the stored row this message starts with / ends with. */
+  firstRowId?: number;
+  lastRowId?: number;
+}
+
+const thoughtsOf = (m: MessageMeta): Array<number | null> => m.thoughtMs ?? [];
+
+const metaOf = (custom: MessageMeta): { metadata: { custom: Record<string, unknown> } } => ({ metadata: { custom: custom as Record<string, unknown> } });
+
 /** `{ createdAt }` for a stored row, or nothing when the API sent no (valid) time — so existing shapes stay unchanged. */
 function storedAt(msg: RawMessage): { createdAt?: Date } {
   const t = parseStoredTime(msg.createdAt);
@@ -32,6 +57,10 @@ export function splitToolResult(content: string | ToolResultPart[] | undefined):
  */
 export function foldRawMessages(raw: RawMessage[]): ThreadMessageLike[] {
   const result: ThreadMessageLike[] = [];
+  // The versions of the user message the reply being folded answers (a reply has no versions of its own: a new version of
+  // the question brings a new reply).
+  let versions: number[] | undefined;
+  let currentVersion: number | undefined;
 
   for (let i = 0; i < raw.length; i++) {
     const msg = raw[i];
@@ -66,7 +95,12 @@ export function foldRawMessages(raw: RawMessage[]): ThreadMessageLike[] {
             ? { type: 'text' as const, text: b.text }
             : { type: 'image' as const, image: `data:${b.source.media_type};base64,${b.source.data}` },
         );
-      result.push({ id, role: 'user', content: parts.length > 0 ? parts : [{ type: 'text', text: '' }], ...storedAt(msg) });
+      versions = msg.versions && msg.versions.length > 1 ? msg.versions : undefined;
+      currentVersion = msg.id;
+      result.push({
+        id, role: 'user', content: parts.length > 0 ? parts : [{ type: 'text', text: '' }], ...storedAt(msg),
+        ...(versions ? metaOf({ versions, currentVersion: msg.id }) : {}),
+      });
       continue;
     }
 
@@ -88,11 +122,18 @@ export function foldRawMessages(raw: RawMessage[]): ThreadMessageLike[] {
     }
 
     const parts: ThreadAssistantMessagePart[] = [];
+    const thoughtMs: Array<number | null> = [];
+    let textBlocks = 0;
+    let textEdit: MessageMeta['textEdit'];
     for (const block of blocks) {
       if (block.type === 'text') {
         parts.push({ type: 'text', text: block.text });
+        textEdit = { rowId: msg.id, index: textBlocks++ };
       } else if (block.type === 'thinking') {
-        if (block.thinking) parts.push({ type: 'reasoning', text: block.thinking });
+        if (block.thinking) {
+          parts.push({ type: 'reasoning', text: block.thinking });
+          thoughtMs.push(block.durationMs ?? null);
+        }
       } else if (block.type === 'tool_use') {
         const res = resultsByCallId.get(block.id);
         parts.push({
@@ -116,10 +157,27 @@ export function foldRawMessages(raw: RawMessage[]): ThreadMessageLike[] {
     // assistant → tool_result → assistant …, but reads as a single response (like Claude/ChatGPT).
     // The tool_result-only user messages were skipped above, so the previous entry is the same turn.
     const prev = result[result.length - 1];
+    const prevMeta = ((prev?.metadata?.custom ?? {}) as MessageMeta);
     if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
-      result[result.length - 1] = { ...prev, content: [...(prev.content as ThreadAssistantMessagePart[]), ...parts] };
+      const joined = [...thoughtsOf(prevMeta), ...thoughtMs];
+      result[result.length - 1] = {
+        ...prev,
+        content: [...(prev.content as ThreadAssistantMessagePart[]), ...parts],
+        ...metaOf({
+          ...prevMeta,
+          thoughtMs: joined,
+          textEdit: textEdit ?? prevMeta.textEdit,
+          lastRowId: msg.id,
+          // A later row of the same reply decides how it ended.
+          incomplete: msg.incomplete,
+          errorText: msg.errorText,
+        }),
+      };
     } else {
-      result.push({ id: String(msg.id), role: 'assistant', content: parts, ...storedAt(msg) });
+      result.push({
+        id: String(msg.id), role: 'assistant', content: parts, ...storedAt(msg),
+        ...metaOf({ versions, currentVersion, incomplete: msg.incomplete, errorText: msg.errorText, thoughtMs, textEdit, firstRowId: msg.id, lastRowId: msg.id }),
+      });
     }
   }
 
@@ -138,11 +196,15 @@ export function foldRawMessages(raw: RawMessage[]): ThreadMessageLike[] {
  * finishes and the authoritative persisted version (with real ids) takes
  * over on the next messages refetch.
  */
-export function liveTurnToMessage(parts: LivePart[]): ThreadMessageLike | null {
+export function liveTurnToMessage(parts: LivePart[], running = true): ThreadMessageLike | null {
   if (parts.length === 0) return null;
+  const thoughtMs: Array<number | null> = [];
   const content: ThreadMessageLike['content'] = parts.map((part, index) => {
     if (part.type === 'text') return { type: 'text', text: part.text };
-    if (part.type === 'reasoning') return { type: 'reasoning', text: part.text };
+    if (part.type === 'reasoning') {
+      thoughtMs.push(part.startedAt !== undefined && part.endedAt !== undefined ? part.endedAt - part.startedAt : null);
+      return { type: 'reasoning', text: part.text };
+    }
     return {
       type: 'tool-call',
       toolCallId: `live-${index}`,
@@ -153,5 +215,32 @@ export function liveTurnToMessage(parts: LivePart[]): ThreadMessageLike | null {
       isError: part.call.result?.isError,
     };
   });
-  return { id: 'live-turn', role: 'assistant', content, status: { type: 'running' } };
+  return {
+    id: 'live-turn',
+    role: 'assistant',
+    content,
+    status: running ? { type: 'running' } : { type: 'complete', reason: 'unknown' },
+    ...metaOf({ thoughtMs }),
+  };
+}
+
+/**
+ * The turn that carries on a reply that was cut short, shown as the end of that same message: the live message's parts follow
+ * the stored ones, and its first text runs on from the stored text.
+ */
+export function appendToLastReply(persisted: ThreadMessageLike[], live: ThreadMessageLike): ThreadMessageLike[] {
+  const last = persisted[persisted.length - 1];
+  if (!last || last.role !== 'assistant' || !Array.isArray(last.content) || !Array.isArray(live.content)) return [...persisted, live];
+  const before = last.content as ThreadAssistantMessagePart[];
+  const after = [...(live.content as ThreadAssistantMessagePart[])];
+  const tail = before[before.length - 1];
+  const head = after[0];
+  const content = tail?.type === 'text' && head?.type === 'text' ? [...before.slice(0, -1), { type: 'text' as const, text: tail.text + head.text }, ...after.slice(1)] : [...before, ...after];
+  const meta = (last.metadata?.custom ?? {}) as MessageMeta;
+  const liveMeta = (live.metadata?.custom ?? {}) as MessageMeta;
+  return [
+    ...persisted.slice(0, -1),
+    // The stored mark ("Stopped" / "Interrupted") goes while the turn runs: it is carried on again, not over.
+    { ...last, content, status: live.status, ...metaOf({ ...meta, incomplete: undefined, errorText: undefined, thoughtMs: [...thoughtsOf(meta), ...thoughtsOf(liveMeta)] }) },
+  ];
 }

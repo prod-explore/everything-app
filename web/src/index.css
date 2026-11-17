@@ -125,3 +125,10 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--color-fg); }
     overflow-wrap: anywhere;
   }
 }
+
+/* Tables: a hairline grid, so rows and columns read as a table (the typography plugin only draws the header rule). */
+.prose :where(table) { border-collapse: collapse; margin: 0; font-size: 0.95em; }
+.prose :where(th, td) { border: 1px solid var(--color-border-hover); padding: 0.4em 0.75em; }
+.prose :where(thead th) { background: var(--color-bg-secondary); border-bottom-color: var(--color-fg-tertiary); }
+/* Formulas: display math scrolls sideways instead of widening the page. */
+.prose .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.25em 0; }

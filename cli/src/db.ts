@@ -68,6 +68,19 @@ export function runMigrations(db: Database.Database): void {
   if (!columnExists(db, 'messages', 'is_active')) {
     db.exec(`ALTER TABLE messages ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1`);
   }
+  // A reply that was cut short (stopped by the person, or the provider failed mid-answer) is kept with what it had so
+  // far: `incomplete` is 'stopped' | 'error', `error_text` the plain sentence for the latter.
+  // `version_of`: edit/regenerate/retry store the new message as another version of the one they replace — every version
+  // of a message names the first one (null for a message that has never been replaced), which is what the version picker groups by.
+  if (!columnExists(db, 'messages', 'incomplete')) {
+    db.exec(`ALTER TABLE messages ADD COLUMN incomplete TEXT`);
+  }
+  if (!columnExists(db, 'messages', 'error_text')) {
+    db.exec(`ALTER TABLE messages ADD COLUMN error_text TEXT`);
+  }
+  if (!columnExists(db, 'messages', 'version_of')) {
+    db.exec(`ALTER TABLE messages ADD COLUMN version_of INTEGER`);
+  }
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_messages_active ON messages(conversation_id, is_active, id);
 
@@ -540,6 +553,8 @@ export interface FullMessageRow {
   parentId: number | null;
   isActive: boolean;
   createdAt: string;
+  versionOf: number | null;
+  incomplete: string | null;
 }
 
 /** Only the currently-active branch, in order — what the chat view and exports show. A turn starts from loadLlmHistory. */
@@ -550,25 +565,68 @@ export function getMessages(db: Database.Database, conversationId: string): Mess
   return rows.map(r => ({ id: r.id, role: r.role, content: JSON.parse(r.content) }));
 }
 
-/**
- * getMessages plus each row's creation time (SQLite UTC, "YYYY-MM-DD HH:MM:SS") — for the chat view, which places
- * things such as answered questions by time. Not used to build a turn, so the extra field never reaches a model.
- */
-export function getMessagesTimed(db: Database.Database, conversationId: string): Array<MessageParam & { createdAt: string }> {
+/** What the chat view needs to know about a stored message beyond its content. */
+export interface MessageExtras {
+  /** SQLite UTC, "YYYY-MM-DD HH:MM:SS". */
+  createdAt: string;
+  /** Set on a reply that was cut short; `errorText` is the plain sentence when it was a failure. */
+  incomplete?: 'stopped' | 'error';
+  errorText?: string;
+  /** On a typed user message that exists in several versions: the ids of all of them, oldest first (this one included). */
+  versions?: number[];
+}
+
+/** The ids of every version of each replaced message, by the id of its first version. */
+function versionGroups(db: Database.Database, conversationId: string): Map<number, number[]> {
   const rows = db
-    .prepare(`SELECT id, role, content, created_at as createdAt FROM messages WHERE conversation_id = ? AND is_active = 1 ORDER BY id ASC`)
-    .all(conversationId) as Array<{ id: number; role: string; content: string; createdAt: string }>;
-  return rows.map(r => ({ id: r.id, role: r.role, content: JSON.parse(r.content), createdAt: r.createdAt }));
+    .prepare(
+      `SELECT id, COALESCE(version_of, id) AS grp FROM messages
+       WHERE conversation_id = ? AND role = 'user'
+         AND (version_of IS NOT NULL OR id IN (SELECT version_of FROM messages WHERE conversation_id = ? AND version_of IS NOT NULL))
+       ORDER BY id ASC`,
+    )
+    .all(conversationId, conversationId) as Array<{ id: number; grp: number }>;
+  const groups = new Map<number, number[]>();
+  for (const r of rows) groups.set(r.grp, [...(groups.get(r.grp) ?? []), r.id]);
+  return groups;
+}
+
+/**
+ * getMessages plus each row's creation time (SQLite UTC, "YYYY-MM-DD HH:MM:SS"), its "cut short" mark and the other
+ * versions of it — for the chat view, which places things such as answered questions by time. Not used to build a turn,
+ * so the extra fields never reach a model.
+ */
+export function getMessagesTimed(db: Database.Database, conversationId: string): Array<MessageParam & MessageExtras> {
+  const rows = db
+    .prepare(
+      `SELECT id, role, content, created_at as createdAt, incomplete, error_text as errorText, COALESCE(version_of, id) AS grp
+       FROM messages WHERE conversation_id = ? AND is_active = 1 ORDER BY id ASC`,
+    )
+    .all(conversationId) as Array<{ id: number; role: string; content: string; createdAt: string; incomplete: string | null; errorText: string | null; grp: number }>;
+  const groups = versionGroups(db, conversationId);
+  return rows.map(r => {
+    const versions = r.role === 'user' ? groups.get(r.grp) : undefined;
+    return {
+      id: r.id,
+      role: r.role,
+      content: JSON.parse(r.content),
+      createdAt: r.createdAt,
+      ...(r.incomplete === 'stopped' || r.incomplete === 'error' ? { incomplete: r.incomplete } : {}),
+      ...(r.errorText ? { errorText: r.errorText } : {}),
+      ...(versions && versions.length > 1 ? { versions } : {}),
+    };
+  });
 }
 
 /** Every message including inactive branches — for history/debugging, not for building a turn. */
 export function getAllMessagesFull(db: Database.Database, conversationId: string): FullMessageRow[] {
   const rows = db
     .prepare(
-      `SELECT id, role, content, parent_id as parentId, is_active as isActive, created_at as createdAt
+      `SELECT id, role, content, parent_id as parentId, is_active as isActive, created_at as createdAt,
+              version_of as versionOf, incomplete
        FROM messages WHERE conversation_id = ? ORDER BY id ASC`,
     )
-    .all(conversationId) as Array<{ id: number; role: string; content: string; parentId: number | null; isActive: number; createdAt: string }>;
+    .all(conversationId) as Array<{ id: number; role: string; content: string; parentId: number | null; isActive: number; createdAt: string; versionOf: number | null; incomplete: string | null }>;
   return rows.map(r => ({
     id: r.id,
     role: r.role,
@@ -576,6 +634,8 @@ export function getAllMessagesFull(db: Database.Database, conversationId: string
     parentId: r.parentId,
     isActive: Boolean(r.isActive),
     createdAt: r.createdAt,
+    versionOf: r.versionOf,
+    incomplete: r.incomplete,
   }));
 }
 
@@ -656,16 +716,24 @@ export function setConversationState(db: Database.Database, conversationId: stri
   return next;
 }
 
+export interface MessageMark {
+  incomplete?: 'stopped' | 'error';
+  errorText?: string;
+  /** This message replaces another one: the id of the first version of it. */
+  versionOf?: number;
+}
+
 export function appendMessage(
   db: Database.Database,
   conversationId: string,
   role: string,
   content: unknown,
   parentId: number | null = null,
+  mark: MessageMark = {},
 ): number {
   const result = db
-    .prepare(`INSERT INTO messages (conversation_id, role, content, parent_id) VALUES (?, ?, ?, ?)`)
-    .run(conversationId, role, JSON.stringify(content), parentId);
+    .prepare(`INSERT INTO messages (conversation_id, role, content, parent_id, incomplete, error_text, version_of) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(conversationId, role, JSON.stringify(content), parentId, mark.incomplete ?? null, mark.errorText ?? null, mark.versionOf ?? null);
   db.prepare(`UPDATE conversations SET updated_at = datetime('now') WHERE id = ?`).run(conversationId);
   return result.lastInsertRowid as number;
 }
@@ -722,6 +790,71 @@ export function getLastActiveMessage(
   return { id: row.id, role: row.role, content: JSON.parse(row.content), parentId: row.parentId };
 }
 
+/** The newest active message that is part of the conversation proper (a compaction summary is not). */
+export function getLastChainRow(db: Database.Database, conversationId: string): { id: number; role: string; content: unknown; incomplete: string | null } | null {
+  const row = db
+    .prepare(
+      `SELECT id, role, content, incomplete FROM messages
+       WHERE conversation_id = ? AND is_active = 1 AND role != 'summary' ORDER BY id DESC LIMIT 1`,
+    )
+    .get(conversationId) as { id: number; role: string; content: string; incomplete: string | null } | undefined;
+  return row ? { id: row.id, role: row.role, content: JSON.parse(row.content), incomplete: row.incomplete } : null;
+}
+
+/** Rewrites the content of a stored message (and its "cut short" mark: pass `null` to clear it). */
+export function updateMessageContent(
+  db: Database.Database,
+  conversationId: string,
+  id: number,
+  content: unknown,
+  mark?: { incomplete: 'stopped' | 'error' | null; errorText?: string | null },
+): boolean {
+  const r = mark
+    ? db.prepare(`UPDATE messages SET content = ?, incomplete = ?, error_text = ? WHERE conversation_id = ? AND id = ?`)
+        .run(JSON.stringify(content), mark.incomplete, mark.errorText ?? null, conversationId, id)
+    : db.prepare(`UPDATE messages SET content = ? WHERE conversation_id = ? AND id = ?`).run(JSON.stringify(content), conversationId, id);
+  if (r.changes > 0) db.prepare(`UPDATE conversations SET updated_at = datetime('now') WHERE id = ?`).run(conversationId);
+  return r.changes > 0;
+}
+
+/** A stored message by id, any branch. */
+export function getMessageRow(
+  db: Database.Database,
+  conversationId: string,
+  id: number,
+): { id: number; role: string; content: unknown; parentId: number | null; isActive: boolean; versionOf: number | null; incomplete: string | null } | null {
+  const row = db
+    .prepare(
+      `SELECT id, role, content, parent_id as parentId, is_active as isActive, version_of as versionOf, incomplete
+       FROM messages WHERE conversation_id = ? AND id = ?`,
+    )
+    .get(conversationId, id) as { id: number; role: string; content: string; parentId: number | null; isActive: number; versionOf: number | null; incomplete: string | null } | undefined;
+  return row ? { ...row, content: JSON.parse(row.content), isActive: Boolean(row.isActive) } : null;
+}
+
+/**
+ * Makes another version of a replaced message the visible one: the branch below the current version is retired and the
+ * branch below `targetId` takes its place (at each fork inside it, the newest child — the one last worked on).
+ * Returns false when `targetId` is not a version of a message that has several.
+ */
+export function selectVersion(db: Database.Database, conversationId: string, targetId: number): boolean {
+  const target = getMessageRow(db, conversationId, targetId);
+  if (!target || target.role !== 'user') return false;
+  const group = versionGroups(db, conversationId).get(target.versionOf ?? target.id);
+  if (!group || group.length < 2 || !group.includes(targetId)) return false;
+  if (target.isActive) return true;
+  const current = group.find(id => getMessageRow(db, conversationId, id)?.isActive);
+  const children = db.prepare(`SELECT id FROM messages WHERE conversation_id = ? AND parent_id = ? AND role != 'summary' ORDER BY id DESC LIMIT 1`);
+  db.transaction(() => {
+    if (current !== undefined) deactivateMessagesFrom(db, conversationId, current);
+    const path: number[] = [];
+    for (let at: number | undefined = targetId; at !== undefined && path.length < 100_000; at = (children.get(conversationId, at) as { id: number } | undefined)?.id) path.push(at);
+    const mark = db.prepare(`UPDATE messages SET is_active = 1 WHERE conversation_id = ? AND id = ?`);
+    for (const id of path) mark.run(conversationId, id);
+  })();
+  return true;
+}
+
 /**
  * Walks backward from (and including) `fromId` through the active branch to
  * find the nearest user message — the "anchor" a regenerate/retry re-sends.
@@ -734,19 +867,19 @@ export function findRegenerationAnchor(
   db: Database.Database,
   conversationId: string,
   fromId: number | null,
-): { id: number; content: unknown; parentId: number | null } | null {
+): { id: number; content: unknown; parentId: number | null; versionOf: number | null } | null {
   // Rows with role 'user' also carry tool results, and a turn that was killed leaves such a row at its end:
   // the anchor must be a message the person typed.
   const rows = db
     .prepare(
-      `SELECT id, content, parent_id as parentId FROM messages
+      `SELECT id, content, parent_id as parentId, version_of as versionOf FROM messages
        WHERE conversation_id = ? AND is_active = 1 AND role = 'user' AND (? IS NULL OR id <= ?)
        ORDER BY id DESC`,
     )
-    .iterate(conversationId, fromId, fromId) as Iterable<{ id: number; content: string; parentId: number | null }>;
+    .iterate(conversationId, fromId, fromId) as Iterable<{ id: number; content: string; parentId: number | null; versionOf: number | null }>;
   for (const row of rows) {
     const content = JSON.parse(row.content) as unknown;
-    if (isUserTurn({ role: 'user', content })) return { id: row.id, content, parentId: row.parentId };
+    if (isUserTurn({ role: 'user', content })) return { id: row.id, content, parentId: row.parentId, versionOf: row.versionOf };
   }
   return null;
 }

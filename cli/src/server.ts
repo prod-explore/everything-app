@@ -27,7 +27,7 @@ import { SSEManager } from './sse.js';
 import { classifyError } from './providers/errors.js';
 import { compactConversation, llmHistory } from './compaction.js';
 import { editQueuedMessage, enqueueMessage, listQueue, promoteQueuedMessage, removeQueuedMessage, takeNextQueued, toPublic } from './message-queue.js';
-import { COMPACT_AT, estimateTokens } from './context.js';
+import { COMPACT_AT, estimateTokens, isUserTurn } from './context.js';
 import { AGENTS_FILE, WORKING_STYLE_PROMPT, projectInstructionsPrompt, proposePlanTool, todoTool } from './chat-tools.js';
 import { REQUEST_HUMAN_INPUT_TOOL, POST_REPORT_TOOL, formatHumanResponse, handleRequestHumanInput, resolveHumanInput, awaitHumanInput, DISMISSED_RESPONSE, isDismissedResponse, type GazetaField } from './gazeta.js';
 import { parseCommandPolicy } from './command-policy.js';
@@ -60,6 +60,9 @@ import { SLOT_KEYS, allowPaidAgents, getSlots, isFreeModel, isSlotKey, modelsPro
 import { servePolicy, contentDisposition, sanitizeFilename } from './artifact-http.js';
 import { trimLeadingSlashes } from './text-utils.js';
 import { createApiRateLimiter, type ApiRateLimitOptions } from './rate-limit.js';
+import { LiveTurn } from './live-turn.js';
+import { CONTINUE_PROMPT, joinReply } from './continue-reply.js';
+import { classifyTurnError, firstByteTimeoutMs } from './turn-errors.js';
 import {
   GhostRuleError,
   openDb,
@@ -82,6 +85,10 @@ import {
   deleteMessagesFrom,
   deactivateMessagesFrom,
   getLastActiveMessage,
+  getLastChainRow,
+  getMessageRow,
+  updateMessageContent,
+  selectVersion,
   findRegenerationAnchor,
   getSetting,
   listGrantedWebHosts,
@@ -112,6 +119,7 @@ import {
   deleteOwned,
   ownedRecords,
   type DeletionTarget,
+  type MessageMark,
   listProjectConversations,
 } from './db.js';
 
@@ -314,6 +322,8 @@ export interface BuildAppOptions {
   scheduler?: { autostart?: boolean };
   /** Per-IP ceiling for /api and the web app files (default 1200 requests per minute). Tests that hammer one instance raise it. */
   rateLimit?: ApiRateLimitOptions;
+  /** How long a streamed model request may stay silent before the attempt fails (default FIRST_BYTE_TIMEOUT_S, 90 s; 0 = no limit). */
+  firstByteTimeoutMs?: number;
 }
 
 export interface BuiltApp {
@@ -640,6 +650,16 @@ ${formatHumanResponse(response)}` };
   const turnCounters = new Map<string, number>();
   const turnStates = new Map<string, TurnState>();
   const abortControllers = new Map<string, AbortController>();
+  /** What each running turn has produced so far (see live-turn.ts). */
+  const liveTurns = new Map<string, LiveTurn>();
+  const firstByte = opts.firstByteTimeoutMs ?? firstByteTimeoutMs();
+  // While a provider adapter backs off before retrying a busy error, the first-byte clock of that conversation's turn does not run.
+  const providerWaitUntil = new Map<string, number>();
+  const onRetryBase = router.onProviderRetry;
+  router.onProviderRetry = info => {
+    if (info.conversationId) providerWaitUntil.set(info.conversationId, Date.now() + info.delayMs);
+    onRetryBase?.(info);
+  };
   /** Turns that are still running; shutdown waits for them so that what they did is stored. */
   const turnsInFlight = new Set<Promise<void>>();
   /** The running turn of each conversation, so a scheduled run can wait for its end. */
@@ -700,6 +720,9 @@ ${formatHumanResponse(response)}` };
     const conv = getConversation(db, req.params.id);
     if (!conv) { res.status(404).json({ error: 'conversation not found' }); return; }
     sse.addClient(req.params.id, res);
+    // A turn that is already running: catch this client up with what it has produced, then the live events follow.
+    const running = liveTurns.get(req.params.id);
+    if (running) sse.sendTo(res, 'turn:snapshot', running.snapshot());
   });
 
   // git-proxy → orchestrator (own bearer secret, GIT_PROXY_ADMIN_TOKEN) — must sit above the user auth.
@@ -1279,7 +1302,13 @@ ${formatHumanResponse(response)}` };
     content: Llm.MessageParam['content'],
     userMessageId: number,
     /** `unattended`: nobody is watching (a scheduled run) — see unattendedPrompt and ConfirmCtx.unattended. */
-    opts: { unattended?: boolean; maxSteps?: number; schedule?: Schedule; wakeChain?: number } = {},
+    opts: {
+      unattended?: boolean; maxSteps?: number; schedule?: Schedule; wakeChain?: number;
+      /** Answer with this model instead of the chat's own, for this turn only. */
+      model?: string;
+      /** The turn continues this reply (a stored message that was cut short): what the model writes is appended to it. */
+      continueFrom?: number;
+    } = {},
   ): number {
     const counter = (turnCounters.get(convId) ?? 0) + 1;
     turnCounters.set(convId, counter);
@@ -1289,7 +1318,10 @@ ${formatHumanResponse(response)}` };
     const controller = new AbortController();
     abortControllers.set(convId, controller);
     turnStates.set(convId, { id: turnId, status: 'running' });
-    sse.emit(convId, 'turn:start', { turnId });
+    const live = new LiveTurn(turnId, userMessageId, opts.continueFrom !== undefined);
+    liveTurns.set(convId, live);
+    // The message that started the turn is in the database already: a second tab showing this chat fetches it now.
+    sse.emit(convId, 'turn:start', { turnId, userMessageId, continuing: opts.continueFrom !== undefined });
 
     const turnDone = (async () => {
       // Everything from here on is inside the try: an exception while preparing the turn (database, skills, model list)
@@ -1297,7 +1329,7 @@ ${formatHumanResponse(response)}` };
       let startedRun: ReturnType<typeof createRun> | undefined;
       let releaseRoot: () => void = () => {};
       try {
-        const effectiveModel = modelOf(conv);
+        const effectiveModel = opts.model ?? modelOf(conv);
         const goalText = typeof content === 'string' ? content : (content as Array<{ type: string; text?: string }>).filter(b => b.type === 'text').map(b => b.text).join(' ') || '(attachment)';
         const rootRun = createRun(db, { projectId: conv.projectId, conversationId: convId, label: 'assistant', model: effectiveModel, goal: goalText });
         startedRun = rootRun;
@@ -1418,6 +1450,8 @@ ${formatHumanResponse(response)}` };
         // so the whole turn, tool-loop plumbing included, hangs off the user message as one branch.
         let previousId = userMessageId;
         let storedAny = false;
+        // Continuing a reply that was cut short: the first message the model writes is joined to it instead of becoming a new row.
+        const continuation = opts.continueFrom !== undefined ? { id: opts.continueFrom, joined: false } : null;
         const runDeps: ConversationDeps = {
             llm: client,
             model: effectiveModel,
@@ -1435,9 +1469,25 @@ ${formatHumanResponse(response)}` };
             drainInbox: () => drainRunMessages(db, rootRun.id).map(m => `[message from ${m.fromLabel}]
 ${m.body}`),
             onStep: () => heartbeatRun(db, rootRun.id),
+            firstByteTimeoutMs: opts.unattended ? 0 : firstByte,
+            waitingUntil: () => providerWaitUntil.get(convId) ?? 0,
             onMessages: batch => {
               db.transaction(() => {
-                for (const msg of batch) previousId = appendMessage(db, convId, msg.role, msg.content, previousId);
+                for (const msg of batch) {
+                  const mark: MessageMark = msg.incomplete
+                    ? { incomplete: msg.incomplete.reason, ...(msg.incomplete.reason === 'error' ? { errorText: classifyTurnError(msg.incomplete.error, s => router.redact(s)).message } : {}) }
+                    : {};
+                  if (continuation && !continuation.joined && msg.role === 'assistant') {
+                    continuation.joined = true;
+                    const stored = getMessageRow(db, convId, continuation.id);
+                    if (stored) {
+                      updateMessageContent(db, convId, stored.id, joinReply(stored.content, msg.content), { incomplete: mark.incomplete ?? null, errorText: mark.errorText ?? null });
+                      previousId = stored.id;
+                      continue;
+                    }
+                  }
+                  previousId = appendMessage(db, convId, msg.role, msg.content, previousId, mark);
+                }
               })();
               storedAny = true;
             },
@@ -1457,11 +1507,12 @@ ${m.body}`),
               sse.emit(convId, 'approval:resolved', { toolLabel: label, approved: decision.approved, reason: decision.reason });
               return decision;
             },
-            onAssistantText: text => sse.emit(convId, 'turn:text', { text }),
-            onTextDelta: delta => sse.emit(convId, 'turn:text_delta', delta),
-            onThinkingDelta: delta => sse.emit(convId, 'turn:thinking_delta', delta),
-            onToolStart: (label: string) => { toolRan = true; sse.emit(convId, 'turn:tool_use', { label }); },
+            onAssistantText: text => { live.text(text); sse.emit(convId, 'turn:text', { text }); },
+            onTextDelta: delta => { live.textDelta(delta.block, delta.text); sse.emit(convId, 'turn:text_delta', delta); },
+            onThinkingDelta: delta => { live.thinkingDelta(delta.text); sse.emit(convId, 'turn:thinking_delta', delta); },
+            onToolStart: (label: string) => { toolRan = true; live.toolUse(label); sse.emit(convId, 'turn:tool_use', { label }); },
             onToolResult: (toolName, fullOutput, truncatedOutput, isError) => {
+              live.toolResult(toolName, truncatedOutput, isError, fullOutput !== truncatedOutput);
               sse.emit(convId, 'turn:tool_result', { toolName, truncatedOutput, isError, wasTruncated: fullOutput !== truncatedOutput });
             },
             onUsage: usage => {
@@ -1476,7 +1527,7 @@ ${m.body}`),
           // "Context too long" on a request that ran no tool yet is safe to repeat once on a compacted history;
           // after tools ran, repeating could redo their effects, so that case is reported instead.
           // Nothing of this attempt may be stored yet, or the repeat would store the same steps twice.
-          if (classifyError(err).kind === 'context_too_long' && !toolRan && !storedAny && !controller.signal.aborted && (await compactNow(true))) {
+          if (classifyTurnError(err).kind === 'context_too_long' && !toolRan && !storedAny && !controller.signal.aborted && (await compactNow(true))) {
             history = llmHistory(db, convId, userMessageId);
             updatedHistory = await runTurn(runDeps, history, content);
           } else {
@@ -1487,15 +1538,17 @@ ${m.body}`),
         // Auto-title after first exchange
         const conv2 = getConversation(db, convId);
         if (conv2 && conv2.title === 'New conversation') {
-          const titleSource = typeof content === 'string' ? content : '(attachment)';
-          const plainTitle = typeof content === 'string' ? fallbackTitle(titleSource) : titleSource;
+          // Carrying on a cut-short reply: the chat is named after what the person asked, not after the instruction to continue.
+          const asked = opts.continueFrom !== undefined ? history.find(m => m.role === 'user')?.content ?? content : content;
+          const titleSource = typeof asked === 'string' ? asked : '(attachment)';
+          const plainTitle = typeof asked === 'string' ? fallbackTitle(titleSource) : titleSource;
           updateConversation(db, convId, { title: plainTitle });
           // Upgrade the plain title to a proper one with the helper model; best-effort, never blocks the turn, and if the helper is down the plain one stays.
           const assistantText = textOfHistory(updatedHistory.slice(history.length + 1));
           // A ghost chat's title is only ever written by a local model; without one the plain slice stays.
           const bg = backgroundModel(db, router, { localOnly: conv.ghost });
-          if (bg && typeof content === 'string' && assistantText) {
-            void generateTitle(bg, content, assistantText, usage => ledger.record({ conversationId: convId, provider: bg.provider, model: bg.model, usage }))
+          if (bg && typeof asked === 'string' && assistantText) {
+            void generateTitle(bg, asked, assistantText, usage => ledger.record({ conversationId: convId, provider: bg.provider, model: bg.model, usage }))
               .then(title => {
                 const cur = getConversation(db, convId);
                 // Only replace our own plain title — a title the user renamed in the meantime wins.
@@ -1512,7 +1565,7 @@ ${m.body}`),
         turnStates.set(convId, { id: turnId, status: 'done' });
         sse.emit(convId, 'turn:done', { turnId, usage: ledger.headline() });
       } catch (err) {
-        const incident = classifyError(err, s => router.redact(s));
+        const incident = classifyTurnError(err, s => router.redact(s));
         // A request cancelled in flight fails with the HTTP client's own wording, not ours: the signal tells.
         const aborted = incident.kind === 'aborted' || controller.signal.aborted;
         // The person reads the plain sentence; the provider's own words stay available as `detail`.
@@ -1532,6 +1585,7 @@ ${m.body}`),
         sse.emit(convId, aborted ? 'turn:aborted' : 'turn:error', { turnId, error, kind: incident.kind, transient: incident.transient, ...(detail ? { detail } : {}) });
       } finally {
         abortControllers.delete(convId);
+        liveTurns.delete(convId);
         // Workers belong to the turn that started them: when it ends, whatever is still running stops.
         if (startedRun) agents.stopTree(startedRun.id, 'the chat turn that started this agent ended', { includeRoot: false });
         releaseRoot();
@@ -1566,6 +1620,9 @@ ${m.body}`),
     sse.emit(convId, 'queue:changed', { items, paused: items.length > 0 && !isBusy(convId) && queuePaused(convId) });
   }
 
+  /** The row a new typed message hangs off: the end of the visible conversation, so every version of a message has a place in the tree. */
+  const endOfChat = (convId: string): number | null => getLastChainRow(db, convId)?.id ?? null;
+
   /** Starts the oldest queued message as a new turn, if the conversation is free and not waiting for the person. */
   function drainQueue(convId: string): void {
     if (isBusy(convId)) return;
@@ -1576,7 +1633,7 @@ ${m.body}`),
     queueForced.delete(convId);
     if (!next) return;
     const historyBeforeTurn = llmHistory(db, convId);
-    const userMessageId = appendMessage(db, convId, 'user', next.content);
+    const userMessageId = appendMessage(db, convId, 'user', next.content, endOfChat(convId));
     kickoffLiveTurn(convId, conv, historyBeforeTurn, next.content, userMessageId);
     publishQueue(convId);
   }
@@ -1727,7 +1784,7 @@ ${m.body}`),
 
     const content = `⏰ Wake-up you set earlier: ${s.prompt}`;
     const historyBeforeTurn = llmHistory(db, convId);
-    const userMessageId = appendMessage(db, convId, 'user', content);
+    const userMessageId = appendMessage(db, convId, 'user', content, endOfChat(convId));
     kickoffLiveTurn(convId, conv, historyBeforeTurn, content, userMessageId, { unattended: true, maxSteps: SCHEDULE_MAX_STEPS, schedule: s, wakeChain: s.chain });
     await turnPromises.get(convId);
     const state = getTurnState(convId);
@@ -1744,6 +1801,7 @@ ${m.body}`),
     convId: string,
     conv: NonNullable<ReturnType<typeof getConversation>>,
     fromId: number | null,
+    model?: string,
   ): { ok: true; turnId: number } | { ok: false; status: number; error: string } {
     const anchor = findRegenerationAnchor(db, convId, fromId);
     if (!anchor) return { ok: false, status: 404, error: 'no prior user message found to regenerate from' };
@@ -1751,9 +1809,20 @@ ${m.body}`),
     deactivateMessagesFrom(db, convId, anchor.id);
     const historyBeforeTurn = llmHistory(db, convId);
     const resendContent = anchor.content as Llm.MessageParam['content'];
-    const userMessageId = appendMessage(db, convId, 'user', resendContent, anchor.parentId);
-    const turnId = kickoffLiveTurn(convId, conv, historyBeforeTurn, resendContent, userMessageId);
+    const userMessageId = appendMessage(db, convId, 'user', resendContent, anchor.parentId, { versionOf: anchor.versionOf ?? anchor.id });
+    const turnId = kickoffLiveTurn(convId, conv, historyBeforeTurn, resendContent, userMessageId, model ? { model } : {});
     return { ok: true, turnId };
+  }
+
+  /** The model a request asks to answer with, if it names one this server can use now; a string is the problem. */
+  function requestedModel(body: unknown): { model?: string } | { problem: string } {
+    const raw = (body as { model?: unknown } | undefined)?.model;
+    if (raw === undefined || raw === null || raw === '') return {};
+    if (typeof raw !== 'string') return { problem: 'model must be a string' };
+    const known = router.chatCandidates().find(m => m.id === raw);
+    if (!known) return { problem: `unknown model "${raw}"` };
+    if (!known.available) return { problem: `"${raw}" has no API key configured` };
+    return { model: raw };
   }
 
   // ─── Send message ─────────────────────────────────────────────────────────
@@ -1778,7 +1847,7 @@ ${m.body}`),
     // read BEFORE the optimistic append below, so it never includes the
     // message we're about to store.
     const historyBeforeTurn = llmHistory(db, convId);
-    const userMessageId = appendMessage(db, convId, 'user', content);
+    const userMessageId = appendMessage(db, convId, 'user', content, endOfChat(convId));
     const turnId = kickoffLiveTurn(convId, conv, historyBeforeTurn, content, userMessageId);
     res.json({ ok: true, turnId });
   });
@@ -1797,11 +1866,29 @@ ${m.body}`),
       return;
     }
     if (refuseGhostTurn(conv, res)) return;
-    const { parentId, content } = req.body ?? {};
+    const { parentId, content, messageId } = req.body ?? {};
     if (typeof content !== 'string' || !content.trim()) {
-      res.status(400).json({ error: 'expected { content: string, parentId: number | null }' });
+      res.status(400).json({ error: 'expected { content: string, messageId: number } (or the older { parentId: number | null })' });
       return;
     }
+    const wanted = requestedModel(req.body);
+    if ('problem' in wanted) { res.status(400).json({ error: wanted.problem }); return; }
+
+    // The message being edited, by its id: it is replaced by a new version and everything after it is retired with it.
+    if (messageId !== undefined && messageId !== null) {
+      const target = Number.isInteger(Number(messageId)) ? getMessageRow(db, convId, Number(messageId)) : null;
+      if (!target || !target.isActive || target.role !== 'user' || !isUserTurn(target)) {
+        res.status(400).json({ error: 'messageId does not refer to a message you wrote in this conversation' });
+        return;
+      }
+      deactivateMessagesFrom(db, convId, target.id);
+      const historyBeforeTurn = llmHistory(db, convId);
+      const userMessageId = appendMessage(db, convId, 'user', content, target.parentId, { versionOf: target.versionOf ?? target.id });
+      const turnId = kickoffLiveTurn(convId, conv, historyBeforeTurn, content, userMessageId, wanted.model ? { model: wanted.model } : {});
+      res.json({ ok: true, turnId });
+      return;
+    }
+
     const afterId = parentId === null || parentId === undefined ? null : Number(parentId);
     if (afterId !== null && !Number.isInteger(afterId)) {
       res.status(400).json({ error: 'parentId must be an integer or null' });
@@ -1816,7 +1903,7 @@ ${m.body}`),
     deactivateMessagesFrom(db, convId, afterId !== null ? afterId + 1 : 0);
     const historyBeforeTurn = llmHistory(db, convId);
     const userMessageId = appendMessage(db, convId, 'user', content, afterId);
-    const turnId = kickoffLiveTurn(convId, conv, historyBeforeTurn, content, userMessageId);
+    const turnId = kickoffLiveTurn(convId, conv, historyBeforeTurn, content, userMessageId, wanted.model ? { model: wanted.model } : {});
     res.json({ ok: true, turnId });
   });
 
@@ -1835,7 +1922,9 @@ ${m.body}`),
       res.status(400).json({ error: 'parentId must be an integer or null' });
       return;
     }
-    const result = regenerateFrom(convId, conv, fromId);
+    const wanted = requestedModel(req.body);
+    if ('problem' in wanted) { res.status(400).json({ error: wanted.problem }); return; }
+    const result = regenerateFrom(convId, conv, fromId, wanted.model);
     if (!result.ok) { res.status(result.status).json({ error: result.error }); return; }
     res.json({ ok: true, turnId: result.turnId });
   });
@@ -1851,9 +1940,74 @@ ${m.body}`),
     if (refuseGhostTurn(conv, res)) return;
     const last = getLastActiveMessage(db, convId);
     if (!last) { res.status(404).json({ error: 'conversation has no messages yet' }); return; }
-    const result = regenerateFrom(convId, conv, last.id);
+    const wanted = requestedModel(req.body);
+    if ('problem' in wanted) { res.status(400).json({ error: wanted.problem }); return; }
+    const result = regenerateFrom(convId, conv, last.id, wanted.model);
     if (!result.ok) { res.status(result.status).json({ error: result.error }); return; }
     res.json({ ok: true, turnId: result.turnId });
+  });
+
+  // Carries on a reply that was cut short (stopped, or the provider failed part-way): the model is asked to continue
+  // from the stored text and what it writes is appended to that same message.
+  app.post('/api/conversations/:id/continue', (req, res) => {
+    const convId = req.params.id;
+    const conv = getConversation(db, convId);
+    if (!conv) { res.status(404).json({ error: 'conversation not found' }); return; }
+    if (isBusy(convId)) {
+      res.status(409).json({ error: 'a turn is already running in this conversation' });
+      return;
+    }
+    if (refuseGhostTurn(conv, res)) return;
+    const last = getLastChainRow(db, convId);
+    const hasText = last?.role === 'assistant' && Array.isArray(last.content) && (last.content as Array<{ type: string; text?: string }>).some(b => b.type === 'text' && b.text?.trim());
+    if (!last || !last.incomplete || !hasText) {
+      res.status(409).json({ error: 'the last reply is not one that was cut short' });
+      return;
+    }
+    const wanted = requestedModel(req.body);
+    if ('problem' in wanted) { res.status(400).json({ error: wanted.problem }); return; }
+    const turnId = kickoffLiveTurn(convId, conv, llmHistory(db, convId), CONTINUE_PROMPT, last.id, { continueFrom: last.id, ...(wanted.model ? { model: wanted.model } : {}) });
+    res.json({ ok: true, turnId });
+  });
+
+  // Another version of an edited / regenerated message becomes the visible one (its branch of the chat with it).
+  app.post('/api/conversations/:id/versions/select', (req, res) => {
+    const convId = req.params.id;
+    if (!getConversation(db, convId)) { res.status(404).json({ error: 'conversation not found' }); return; }
+    if (isBusy(convId)) {
+      res.status(409).json({ error: 'a turn is running — stop it first' });
+      return;
+    }
+    const id = Number(req.body?.messageId);
+    if (!Number.isInteger(id) || !selectVersion(db, convId, id)) {
+      res.status(400).json({ error: 'messageId is not a version of a message that has several' });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  // Rewrites one text block of a stored reply in place — no new turn, no new version. `index` counts the text blocks of
+  // that message (default: the last one, the answer itself).
+  app.patch('/api/conversations/:id/messages/:messageId', (req, res) => {
+    const convId = req.params.id;
+    if (!getConversation(db, convId)) { res.status(404).json({ error: 'conversation not found' }); return; }
+    if (isBusy(convId)) {
+      res.status(409).json({ error: 'a turn is running — stop it first' });
+      return;
+    }
+    const row = Number.isInteger(Number(req.params.messageId)) ? getMessageRow(db, convId, Number(req.params.messageId)) : null;
+    const text = req.body?.text;
+    if (!row || row.role !== 'assistant' || typeof text !== 'string' || !text.trim() || !Array.isArray(row.content)) {
+      res.status(400).json({ error: 'expected { text: string } for a reply of this conversation' });
+      return;
+    }
+    const blocks = row.content as Array<{ type: string; text?: string }>;
+    const textAt = blocks.flatMap((b, i) => (b.type === 'text' ? [i] : []));
+    const which = req.body?.index === undefined ? textAt.length - 1 : Number(req.body.index);
+    const at = textAt[which];
+    if (at === undefined) { res.status(400).json({ error: 'this reply has no such text block' }); return; }
+    updateMessageContent(db, convId, row.id, blocks.map((b, i) => (i === at ? { ...b, text } : b)));
+    res.json({ ok: true });
   });
 
   // Hard delete of a single message and everything after it — distinct from

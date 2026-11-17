@@ -1,29 +1,23 @@
 import { AttachmentPrimitive, ComposerPrimitive, ThreadPrimitive } from '@assistant-ui/react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, Minimize2, Paperclip, RotateCw, Send, X } from 'lucide-react';
-import type { TurnErrorKind } from '../../types';
+import { AlertTriangle, Paperclip, Send, X } from 'lucide-react';
+import { useComposerDraft } from '../../hooks/useComposerDraft';
+import { useTouchPrimary } from '../../hooks/useMedia';
 import { StopButton } from './StopButton';
 import { SlashMenu } from './SlashMenu';
 import { QueuedMessages, type MessageQueueControls } from './QueuedMessages';
 
 export function Composer({
+  conversationId,
   error,
-  errorKind,
-  errorDetail,
-  onRetry,
-  onCompactAndRetry,
   leading,
   trailing,
   queue,
 }: {
-  /** Set when the last turn ended in an error or was aborted — see lib/runtime.ts. */
+  /** The chat this box belongs to: its unsent text is kept per chat. */
+  conversationId: string;
+  /** Why the last message could not be sent (it never reached the server). How a turn failed is shown under the message instead. */
   error?: string;
-  errorKind?: TurnErrorKind;
-  /** The provider's own words (shown on hover). */
-  errorDetail?: string;
-  onRetry?: () => void;
-  /** Offered when the conversation no longer fits the model's window. */
-  onCompactAndRetry?: () => void;
   /** First control of the row, before the attach button (reasoning effort). */
   leading?: ReactNode;
   /** Controls between the message box and the send button (context meter). */
@@ -31,32 +25,15 @@ export function Composer({
   /** Messages waiting for their turn; without it the box is locked while the assistant works. */
   queue?: MessageQueueControls;
 }) {
+  useComposerDraft(conversationId);
+  // On a touch screen Enter is a line break and the Send button sends (there is no Shift key to hold, and Escape is not a key).
+  const touch = useTouchPrimary();
   return (
     <div className="border-t border-border bg-bg">
       {error && (
-        <div className="flex items-center gap-2 border-b border-border bg-bg-secondary px-3 py-2 text-xs text-fg-secondary">
+        <div role="alert" className="flex items-center gap-2 border-b border-border bg-bg-secondary px-3 py-2 text-xs text-fg-secondary">
           <AlertTriangle size={13} className="shrink-0 text-fg-tertiary" />
-          <span className="flex-1" title={errorDetail ?? error}>
-            {error}
-          </span>
-          {errorKind === 'context_too_long' && onCompactAndRetry && (
-            <button
-              type="button"
-              onClick={onCompactAndRetry}
-              className="flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 hover:bg-bg-tertiary hover:text-fg"
-            >
-              <Minimize2 size={12} /> Compact &amp; retry
-            </button>
-          )}
-          {errorKind !== 'auth' && errorKind !== 'not_configured' && errorKind !== 'budget_exhausted' && errorKind !== 'send_failed' && (
-            <button
-              type="button"
-              onClick={onRetry}
-              className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-bg-tertiary hover:text-fg"
-            >
-              <RotateCw size={12} /> Retry
-            </button>
-          )}
+          <span className="flex-1">{error}</span>
         </div>
       )}
 
@@ -90,25 +67,29 @@ export function Composer({
         )}
       </ComposerPrimitive.Attachments>
 
-      {/* One row on a wide screen. On a phone the message box gets its own full-width row and the controls sit under it. */}
-      <ComposerPrimitive.Root className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 p-3 sm:flex-nowrap sm:items-end">
-        {leading}
+      {/* One row, on a phone too: attach · message box (grows with what is typed) · send. The effort picker, when the model has
+          one, takes a thin row of its own above on a phone; the context ring sits next to send. */}
+      <ComposerPrimitive.Root className="mx-auto flex w-full max-w-3xl flex-wrap items-end gap-2 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:flex-nowrap sm:p-3">
+        <div className="empty:hidden max-sm:order-first max-sm:flex max-sm:basis-full max-sm:justify-end">{leading}</div>
 
         <ComposerPrimitive.AddAttachment aria-label="Attach image" title="Attach image" className="flex size-[42px] shrink-0 items-center justify-center rounded-button border border-border text-fg-tertiary transition-colors hover:text-fg-secondary disabled:opacity-30">
           <Paperclip size={16} />
         </ComposerPrimitive.AddAttachment>
 
-        <span className="flex-1 sm:hidden" aria-hidden />
-
         <ComposerPrimitive.Input
           id="composer-input"
           rows={1}
           placeholder="Message…"
+          enterKeyHint="enter"
+          // Touch: Enter inserts a line break, only the Send button sends; Escape must not stop the running turn while typing.
+          unstable_insertNewlineOnTouchEnter
+          cancelOnEscape={!touch}
           // Enter queues the message while the assistant works; Ctrl/Cmd+Enter makes it go out now (see lib/runtime.ts).
           onKeyDown={e => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) queue?.interruptNext();
           }}
-          className="max-h-32 min-w-0 flex-1 resize-none rounded-button border border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-border-hover max-sm:order-first max-sm:max-h-52 max-sm:min-h-[84px] max-sm:basis-full"
+          // 16px on a touch screen: iOS zooms into any field below that when it gets focus.
+          className="max-h-32 min-h-[42px] min-w-0 flex-1 resize-none rounded-button border border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-border-hover [@media(pointer:coarse)]:max-h-40 [@media(pointer:coarse)]:text-base"
         />
 
         {trailing}

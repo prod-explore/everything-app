@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ThreadAssistantMessagePart } from '@assistant-ui/react';
-import { foldRawMessages, liveTurnToMessage, splitToolResult } from './messages';
+import { appendToLastReply, foldRawMessages, liveTurnToMessage, splitToolResult, type MessageMeta } from './messages';
 import type { RawMessage } from '../types';
 
+const meta = (m: { metadata?: { custom?: unknown } } | undefined) => (m?.metadata?.custom ?? {}) as MessageMeta;
 const parts = (m: { content: unknown } | undefined) => (m?.content ?? []) as ThreadAssistantMessagePart[];
 
 describe('foldRawMessages', () => {
@@ -133,5 +134,91 @@ describe('liveTurnToMessage', () => {
     expect(p.map(x => x.type)).toEqual(['reasoning', 'text', 'tool-call', 'tool-call']);
     expect(p[2]).toMatchObject({ toolName: 'run_bash', result: 'ok', isError: false });
     expect(p[3]).toMatchObject({ toolName: 'Reading a file', result: undefined });
+  });
+});
+
+describe('foldRawMessages: chat-ux metadata', () => {
+  it('gives a message that exists in versions its list and the one shown, on the question and on its answer', () => {
+    const out = foldRawMessages([
+      { id: 5, role: 'user', content: 'q v2', versions: [2, 5] },
+      { id: 6, role: 'assistant', content: [{ type: 'text', text: 'a' }] },
+    ]);
+    expect(meta(out[0])).toMatchObject({ versions: [2, 5], currentVersion: 5 });
+    expect(meta(out[1])).toMatchObject({ versions: [2, 5], currentVersion: 5 });
+  });
+
+  it('has no version picker for a single version', () => {
+    const out = foldRawMessages([{ id: 1, role: 'user', content: 'q', versions: [1] }]);
+    expect(meta(out[0]).versions).toBeUndefined();
+  });
+
+  it('carries the cut-short mark and the reason of the last row of a reply', () => {
+    const out = foldRawMessages([
+      { id: 1, role: 'user', content: 'q' },
+      { id: 2, role: 'assistant', content: [{ type: 'text', text: 'half' }], incomplete: 'error', errorText: 'terminated' },
+    ]);
+    expect(meta(out[1])).toMatchObject({ incomplete: 'error', errorText: 'terminated', firstRowId: 2, lastRowId: 2 });
+  });
+
+  it('a reply continued over several rows is complete when its last row is', () => {
+    const out = foldRawMessages([
+      { id: 1, role: 'user', content: 'q' },
+      { id: 2, role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'read_file', input: {} }], incomplete: 'stopped' },
+      { id: 3, role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'x' }] },
+      { id: 4, role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+    ]);
+    expect(meta(out[1])).toMatchObject({ firstRowId: 2, lastRowId: 4 });
+    expect(meta(out[1]).incomplete).toBeUndefined();
+  });
+
+  it('keeps how long each thought took, in order, and where an edit of the text goes', () => {
+    const out = foldRawMessages([
+      { id: 1, role: 'user', content: 'q' },
+      { id: 2, role: 'assistant', content: [{ type: 'thinking', thinking: 'a', durationMs: 3000 }, { type: 'text', text: 'one' }, { type: 'text', text: 'two' }] },
+      { id: 3, role: 'assistant', content: [{ type: 'thinking', thinking: 'b' }, { type: 'text', text: 'three' }] },
+    ]);
+    expect(meta(out[1])).toMatchObject({ thoughtMs: [3000, null], textEdit: { rowId: 3, index: 0 } });
+    expect(parts(out[1]).filter(p => p.type === 'reasoning')).toHaveLength(2);
+  });
+});
+
+describe('liveTurnToMessage: timing and end state', () => {
+  it('measures a finished reasoning part, leaves an open one unknown', () => {
+    const m = liveTurnToMessage([
+      { type: 'reasoning', text: 'a', startedAt: 1000, endedAt: 4500 },
+      { type: 'reasoning', text: 'b', startedAt: 5000 },
+    ])!;
+    expect(meta(m).thoughtMs).toEqual([3500, null]);
+  });
+
+  it('is complete, not running, for what a stopped turn left behind', () => {
+    expect(liveTurnToMessage([{ type: 'text', text: 'x' }], false)).toMatchObject({ status: { type: 'complete' } });
+  });
+});
+
+describe('appendToLastReply', () => {
+  const stored = foldRawMessages([
+    { id: 1, role: 'user', content: 'q' },
+    { id: 2, role: 'assistant', content: [{ type: 'thinking', thinking: 't', durationMs: 2000 }, { type: 'text', text: 'Hello wor' }], incomplete: 'stopped' },
+  ]);
+
+  it('runs the first new text on from the stored text and drops the stopped mark while it runs', () => {
+    const live = liveTurnToMessage([{ type: 'text', text: 'ld!' }])!;
+    const out = appendToLastReply(stored, live);
+    expect(out).toHaveLength(2);
+    expect(parts(out[1]).map(p => (p.type === 'text' ? p.text : p.type))).toEqual(['reasoning', 'Hello world!']);
+    expect(meta(out[1]).incomplete).toBeUndefined();
+    expect(meta(out[1]).thoughtMs).toEqual([2000]);
+    expect(out[1]!.status).toEqual({ type: 'running' });
+  });
+
+  it('adds a separate part when the new turn starts with something other than text', () => {
+    const live = liveTurnToMessage([{ type: 'tool', call: { label: 'x' } }])!;
+    expect(parts(appendToLastReply(stored, live)[1]).map(p => p.type)).toEqual(['reasoning', 'text', 'tool-call']);
+  });
+
+  it('is plain appending when the chat does not end in a reply', () => {
+    const live = liveTurnToMessage([{ type: 'text', text: 'x' }])!;
+    expect(appendToLastReply(stored.slice(0, 1), live)).toHaveLength(2);
   });
 });

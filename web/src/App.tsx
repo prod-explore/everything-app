@@ -400,7 +400,7 @@ function MainApp() {
       />
       <div className="flex flex-1 overflow-hidden">
         <div className="relative min-w-0 flex-1 overflow-hidden">
-          <ChatView conversationId={selectedId} onOpenSettings={() => openSettings('models')} approvals={approvals} />
+          <ChatView key={selectedId} conversationId={selectedId} onOpenSettings={() => openSettings('models')} approvals={approvals} models={models} model={fullConv ? fullConv.model || fullConv.effectiveModel || null : null} ghost={fullConv?.ghost ?? selected?.ghost ?? false} />
         </div>
 
         {/* Right dock: browser on top, the open tools (agents, files, git) below, sharing the height. Side column on desktop, sheet on mobile. */}

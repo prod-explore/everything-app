@@ -149,19 +149,51 @@ export interface ConversationDeps {
    * error result first, so every `tool_use` handed over has its `tool_result`. Lets the caller store a turn as it
    * happens instead of only when it completes. The user message that started the turn is not included.
    */
-  onMessages?: (messages: Llm.MessageParam[]) => void;
+  onMessages?: (messages: TurnMessage[]) => void;
   /** The model's context window in tokens, when known: old tool outputs are dropped from the request as it fills up. */
   contextWindow?: number;
   /** Called with the provider-measured prompt size after every response. */
   onContext?: (info: { used: number; limit?: number }) => void;
   /** Passed to the model on every request; the adapter drops it for models that do not support it. */
   reasoningEffort?: 'low' | 'medium' | 'high';
+  /**
+   * How long a streamed request may stay completely silent (no text, no reasoning) before the attempt fails with a
+   * FirstByteTimeoutError. Unset or 0: no limit. Only streamed requests are watched; a whole non-streamed answer
+   * legitimately takes as long as it takes.
+   */
+  firstByteTimeoutMs?: number;
+  /**
+   * Epoch ms until which the provider adapter is deliberately waiting (a back-off before it retries a busy error).
+   * The first-byte clock does not run while that is in the future, so the adapter's own retry window is not cut short.
+   */
+  waitingUntil?: () => number;
 }
+
+/** A message the turn produced; `incomplete` marks a reply that was cut short and carries what it had so far. */
+export type TurnMessage = Llm.MessageParam & {
+  incomplete?: { reason: 'stopped' | 'error'; error?: unknown };
+};
 
 export class StepLimitError extends Error {
   constructor(public readonly limit: number) {
     super(`Tool loop exceeded the ${limit}-step limit`);
     this.name = 'StepLimitError';
+  }
+}
+
+/** The model finished without writing anything and without calling a tool. */
+export class EmptyAnswerError extends Error {
+  constructor() {
+    super('The model returned an empty answer');
+    this.name = 'EmptyAnswerError';
+  }
+}
+
+/** A streamed request produced nothing at all within the first-byte limit. */
+export class FirstByteTimeoutError extends Error {
+  constructor(public readonly ms: number) {
+    super(`The model did not start answering within ${Math.round(ms / 1000)} s`);
+    this.name = 'FirstByteTimeoutError';
   }
 }
 
@@ -219,10 +251,30 @@ function needsConversationId(exposedName: string): boolean {
  * gets dropped here instead of surfacing as an opaque 400 from the provider mid-turn.
  */
 export function sanitizeHistory(history: Llm.MessageParam[]): Llm.MessageParam[] {
-  return history.map(msg => ({
-    role: msg.role,
-    content: typeof msg.content === 'string' ? msg.content : msg.content.map(sanitizeBlock),
-  }));
+  const out: Llm.MessageParam[] = [];
+  // Set when the previous message was dropped (see below), so that a user message right after it joins the one before.
+  let droppedReply = false;
+  for (const msg of history) {
+    const content = typeof msg.content === 'string' ? msg.content : msg.content.map(sanitizeBlock);
+    // A reply cut short while it was still only reasoning has nothing the model can be shown. Dropping it would leave two
+    // user messages in a row, so the next one is joined to the previous and the roles keep alternating.
+    if (msg.role === 'assistant' && typeof content !== 'string' && !content.some(b => b.type === 'text' || b.type === 'tool_use')) {
+      droppedReply = true;
+      continue;
+    }
+    const prev = out[out.length - 1];
+    if (droppedReply && msg.role === 'user' && prev?.role === 'user') {
+      out[out.length - 1] = { role: 'user', content: [...asBlocks(prev.content), ...asBlocks(content)] };
+    } else {
+      out.push({ role: msg.role, content });
+    }
+    droppedReply = false;
+  }
+  return out;
+}
+
+function asBlocks(content: Llm.MessageParam['content']): Llm.ContentBlockParam[] {
+  return typeof content === 'string' ? [{ type: 'text', text: content }] : content;
 }
 
 function sanitizeBlock(block: Llm.ContentBlockParam): Llm.ContentBlockParam {
@@ -247,17 +299,37 @@ export const INTERRUPTED_TOOL_RESULT = 'Interrupted: the turn ended before this 
 
 /** Bookkeeping that lets `runTurn` hand over (and, on failure, repair) the messages produced so far. */
 interface TurnTrace {
-  messages: Llm.MessageParam[];
+  messages: TurnMessage[];
   /** How many of `messages` have already been passed to `onMessages` (the history and the user message count as passed). */
   persisted: number;
   /** Results collected for the tool calls of the step in progress. */
   pending: Llm.ToolResultBlockParam[];
+  /** What the model request in flight has streamed so far (cleared when the response is complete). */
+  inflight: { thinking: string; thinkingMs?: number; text: Map<number, string> } | null;
 }
 
 function flushNew(deps: ConversationDeps, trace: TurnTrace): void {
   if (trace.messages.length <= trace.persisted) return;
   deps.onMessages?.(trace.messages.slice(trace.persisted));
   trace.persisted = trace.messages.length;
+}
+
+/**
+ * The reply the failed request had streamed so far, as a message of its own marked as cut short. It carries text and
+ * reasoning only — a tool call is never half-sent — so it is always valid history for the next request.
+ */
+function partialReply(trace: TurnTrace, err: unknown, stopped: boolean): TurnMessage | null {
+  const inflight = trace.inflight;
+  trace.inflight = null;
+  if (!inflight) return null;
+  const blocks: Llm.ContentBlockParam[] = [];
+  if (inflight.thinking) blocks.push({ type: 'thinking', thinking: inflight.thinking, ...(inflight.thinkingMs !== undefined ? { durationMs: inflight.thinkingMs } : {}) });
+  for (const index of [...inflight.text.keys()].sort((a, b) => a - b)) {
+    const text = inflight.text.get(index)!;
+    if (text) blocks.push({ type: 'text', text });
+  }
+  if (blocks.length === 0) return null;
+  return { role: 'assistant', content: blocks, incomplete: stopped ? { reason: 'stopped' } : { reason: 'error', error: err } };
 }
 
 /** If the turn stopped between a `tool_use` and its results, finish the pair with error results. */
@@ -291,12 +363,14 @@ export async function runTurn(
   history: Llm.MessageParam[],
   userContent: Llm.MessageParam['content'],
 ): Promise<Llm.MessageParam[]> {
-  const trace: TurnTrace = { messages: [], persisted: 0, pending: [] };
+  const trace: TurnTrace = { messages: [], persisted: 0, pending: [], inflight: null };
   try {
     return await runLoop(deps, history, userContent, trace);
   } catch (err) {
     try {
       closeOpenToolCalls(trace);
+      const partial = partialReply(trace, err, deps.signal?.aborted === true);
+      if (partial) trace.messages.push(partial);
       flushNew(deps, trace);
     } catch (storeErr) {
       // The original failure is the one worth reporting.
@@ -306,13 +380,40 @@ export async function runTurn(
   }
 }
 
+/**
+ * The first-byte guard of one streamed request: aborts it when nothing (no text, no reasoning) has arrived within
+ * `firstByteTimeoutMs`, not counting the time the adapter spends deliberately waiting before a retry. The abort signal it
+ * hands out also follows the turn's own (kill switch).
+ */
+function watchFirstByte(deps: ConversationDeps): { signal: AbortSignal | undefined; sawByte(): void; timedOut(): boolean; stop(): void } {
+  const limit = deps.firstByteTimeoutMs;
+  if (!limit || limit <= 0) return { signal: deps.signal, sawByte() {}, timedOut: () => false, stop() {} };
+  const guard = new AbortController();
+  const state = { fired: false, timer: undefined as ReturnType<typeof setTimeout> | undefined };
+  const arm = (ms: number) => {
+    state.timer = setTimeout(() => {
+      const waitLeft = (deps.waitingUntil?.() ?? 0) - Date.now();
+      if (waitLeft > 0) { arm(waitLeft + limit); return; }
+      state.fired = true;
+      guard.abort(new FirstByteTimeoutError(limit));
+    }, ms);
+  };
+  arm(limit);
+  return {
+    signal: deps.signal ? AbortSignal.any([deps.signal, guard.signal]) : guard.signal,
+    sawByte: () => clearTimeout(state.timer),
+    timedOut: () => state.fired,
+    stop: () => clearTimeout(state.timer),
+  };
+}
+
 async function runLoop(
   deps: ConversationDeps,
   history: Llm.MessageParam[],
   userContent: Llm.MessageParam['content'],
   trace: TurnTrace,
 ): Promise<Llm.MessageParam[]> {
-  const messages: Llm.MessageParam[] = [...sanitizeHistory(history), { role: 'user', content: userContent }];
+  const messages: TurnMessage[] = [...sanitizeHistory(history), { role: 'user', content: userContent }];
   trace.messages = messages;
   trace.persisted = messages.length;
   const virtualByName = new Map((deps.virtualTools ?? []).map(v => [v.definition.name, v]));
@@ -360,16 +461,45 @@ async function runLoop(
     const { onTextDelta, onThinkingDelta } = deps;
     let response: Llm.Message;
     if ((onTextDelta || onThinkingDelta) && deps.llm.messages.stream) {
-      const stream = deps.llm.messages.stream(params, options);
-      stream.on('streamEvent', event => {
-        if (event.type !== 'content_block_delta') return;
-        if (event.delta.type === 'text_delta' && event.delta.text) onTextDelta?.({ block: event.index, text: event.delta.text });
-        else if (event.delta.type === 'thinking_delta' && event.delta.thinking) onThinkingDelta?.({ text: event.delta.thinking });
-      });
-      response = await stream.finalMessage();
+      const inflight: NonNullable<TurnTrace['inflight']> = { thinking: '', text: new Map<number, string>() };
+      // When the reasoning began, and how long it ran before the answer started (or the response ended).
+      const clock: { thinkingFrom?: number } = {};
+      const closeThinking = () => {
+        if (clock.thinkingFrom !== undefined && inflight.thinkingMs === undefined) inflight.thinkingMs = Date.now() - clock.thinkingFrom;
+      };
+      trace.inflight = inflight;
+      const watch = watchFirstByte(deps);
+      try {
+        const stream = deps.llm.messages.stream(params, { signal: watch.signal });
+        stream.on('streamEvent', event => {
+          if (event.type !== 'content_block_delta') return;
+          if (event.delta.type === 'text_delta' && event.delta.text) {
+            watch.sawByte();
+            closeThinking();
+            inflight.text.set(event.index, (inflight.text.get(event.index) ?? '') + event.delta.text);
+            onTextDelta?.({ block: event.index, text: event.delta.text });
+          } else if (event.delta.type === 'thinking_delta' && event.delta.thinking) {
+            watch.sawByte();
+            clock.thinkingFrom ??= Date.now();
+            inflight.thinking += event.delta.thinking;
+            onThinkingDelta?.({ text: event.delta.thinking });
+          }
+        });
+        response = await stream.finalMessage();
+        closeThinking();
+        const thought = response.content.find((b): b is Llm.ThinkingBlock => b.type === 'thinking');
+        if (thought && inflight.thinkingMs !== undefined) thought.durationMs = inflight.thinkingMs;
+      } catch (err) {
+        closeThinking();
+        // The guard aborted the request: report that, not whatever the HTTP client says about being aborted.
+        throw watch.timedOut() ? new FirstByteTimeoutError(deps.firstByteTimeoutMs ?? 0) : err;
+      } finally {
+        watch.stop();
+      }
     } else {
       response = await deps.llm.messages.create(params, options);
     }
+    trace.inflight = null;
 
     messages.push({ role: 'assistant', content: response.content });
     deps.onUsage?.(response.usage);
@@ -387,6 +517,9 @@ async function runLoop(
     );
 
     if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
+      // Nothing to show and nothing to run: a silent success would leave the person staring at no reply. Whatever the
+      // response did carry (reasoning only) is stored first, so the turn's history stays what the model produced.
+      if (toolUses.length === 0 && !response.content.some(b => b.type === 'text' && b.text.trim())) throw new EmptyAnswerError();
       flushNew(deps, trace);
       return messages;
     }

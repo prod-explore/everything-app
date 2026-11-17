@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatStoredTime, relativeTime } from './time';
+import { formatMessageTime, formatStoredTime, relativeTime } from './time';
 
 describe('formatStoredTime', () => {
   const warsaw = { timeZone: 'Europe/Warsaw', locale: 'en-GB' };
@@ -35,5 +35,20 @@ describe('relativeTime', () => {
   it('handles nothing and unreadable text', () => {
     expect(relativeTime(null, now)).toBe('');
     expect(relativeTime('soon', now)).toBe('soon');
+  });
+});
+
+describe('formatMessageTime', () => {
+  const o = { timeZone: 'Europe/Warsaw', locale: 'en-GB' };
+  const now = new Date('2026-11-17T12:00:00Z');
+  it('is just the clock for today', () => {
+    expect(formatMessageTime(new Date('2026-11-17T09:05:00Z'), now, o)).toBe('10:05');
+  });
+  it('adds the date for another day this year, and the year before that', () => {
+    expect(formatMessageTime(new Date('2026-10-02T09:05:00Z'), now, o)).toBe('2 Oct, 11:05');
+    expect(formatMessageTime(new Date('2025-12-31T09:05:00Z'), now, o)).toBe('31 Dec 2025, 10:05');
+  });
+  it('judges the day in the given zone, not UTC', () => {
+    expect(formatMessageTime(new Date('2026-11-16T23:30:00Z'), now, o)).toBe('00:30');
   });
 });

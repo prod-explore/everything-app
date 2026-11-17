@@ -8,7 +8,12 @@
 export interface TextBlock { type: 'text'; text: string }
 export interface ToolUseBlock { type: 'tool_use'; id: string; name: string; input: unknown }
 /** The model's visible reasoning (`reasoning_content` / `reasoning`). Stored and shown, never sent back to a provider. */
-export interface ThinkingBlock { type: 'thinking'; thinking: string }
+export interface ThinkingBlock {
+  type: 'thinking';
+  thinking: string;
+  /** How long the model reasoned, when the reply was streamed (UI only; never sent back to a provider). */
+  durationMs?: number;
+}
 /** What a model can answer with. */
 export type ContentBlock = ThinkingBlock | TextBlock | ToolUseBlock;
 

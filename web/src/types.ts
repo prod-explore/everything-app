@@ -29,7 +29,7 @@ export interface Conversation {
 /** Content blocks as stored (JSON.parse'd) by db.ts's getMessages(). */
 export type ContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'thinking'; thinking: string }
+  | { type: 'thinking'; thinking: string; /** How long the model reasoned (ms), when it was streamed. */ durationMs?: number }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; tool_use_id: string; content: string | ToolResultPart[]; is_error?: boolean }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
@@ -43,6 +43,11 @@ export interface RawMessage {
   content: string | ContentBlock[] | { text: string; upTo: number; replaced: number };
   /** When the row was stored (SQLite UTC, "YYYY-MM-DD HH:MM:SS"). */
   createdAt?: string;
+  /** A reply that was cut short: stopped by the person, or the provider failed part-way (`errorText` says how). */
+  incomplete?: 'stopped' | 'error';
+  errorText?: string;
+  /** On a message that exists in several versions (edited / regenerated): the ids of all of them, oldest first. */
+  versions?: number[];
 }
 
 export type ReasoningEffort = 'low' | 'medium' | 'high';
@@ -62,7 +67,7 @@ export interface ConversationStateInfo {
 /** Why a turn failed (cli/src/providers/errors.ts). */
 export type TurnErrorKind =
   | 'context_too_long' | 'auth' | 'budget_exhausted' | 'rate_limited' | 'busy' | 'timeout'
-  | 'tool_parse' | 'not_configured' | 'aborted' | 'unknown'
+  | 'tool_parse' | 'not_configured' | 'aborted' | 'unknown' | 'empty_answer' | 'first_byte_timeout'
   /** Client-side only: the message never reached the server (e.g. a turn was still running). Nothing to retry. */
   | 'send_failed';
 

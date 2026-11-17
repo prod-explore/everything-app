@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Brain, ChevronDown, ChevronRight } from 'lucide-react';
+import { thoughtLabel } from '../../lib/activity';
 
-/** The model's reasoning, collapsed once the answer is done and open while it is still thinking. */
-export function Reasoning({ text, running }: { text: string; running: boolean }) {
+/** The model's reasoning, collapsed once the answer is done and open while it is still thinking. `ms`: how long it thought, when known. */
+export function Reasoning({ text, running, ms }: { text: string; running: boolean; ms?: number | null }) {
   const [open, setOpen] = useState<boolean | null>(null);
   const expanded = open ?? running;
   return (
@@ -14,7 +15,7 @@ export function Reasoning({ text, running }: { text: string; running: boolean })
       >
         {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         <Brain size={13} className={running ? 'animate-pulse' : ''} />
-        <span>{running ? 'Thinking…' : 'Thought process'}</span>
+        <span>{running ? 'Thinking…' : thoughtLabel(ms)}</span>
       </button>
       {expanded && (
         <div className="mt-1 max-h-80 overflow-y-auto whitespace-pre-wrap border-l border-border pl-3 text-xs text-fg-tertiary">{text}</div>

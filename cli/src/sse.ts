@@ -2,6 +2,7 @@ import type { Response } from 'express';
 
 export type SSEEventName =
   | 'turn:start'
+  | 'turn:snapshot'
   | 'turn:text'
   | 'turn:text_delta'
   | 'turn:thinking_delta'
@@ -84,6 +85,11 @@ export class SSEManager {
         this.removeClient(conversationId, res);
       }
     }
+  }
+
+  /** One event for one client only (what a newly connected stream is caught up with). */
+  sendTo(res: Response, event: SSEEventName, data: unknown): void {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* the client is gone; its close handler cleans up */ }
   }
 
   /** Broadcast to ALL connected clients (e.g. gazeta updates). */

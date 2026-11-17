@@ -1,9 +1,14 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import type { TextMessagePartComponent } from '@assistant-ui/react';
 import { Check, Copy } from 'lucide-react';
 import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import 'katex/dist/katex.min.css';
+import { escapeCurrencyDollars } from '../../lib/markdownMath';
+import { useThrottledText } from '../../hooks/useThrottledText';
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -32,35 +37,45 @@ function extractText(node: unknown): string {
   return '';
 }
 
-export const MarkdownText: TextMessagePartComponent = ({ text }) => <MarkdownBody text={text} />;
+export const MarkdownText: TextMessagePartComponent = ({ text, status }) => <MarkdownBody text={useThrottledText(text, status?.type === 'running')} />;
+
+/** Errors in a formula show as the plain source in a quiet grey, never as an alarming red box. */
+const KATEX = { throwOnError: false, errorColor: 'currentColor' } as const;
 
 /** The same renderer outside assistant-ui's message-part context (Gazeta reports, agent transcripts). */
-export const MarkdownBody = ({ text }: { text: string }) => (
-  <Markdown
-    remarkPlugins={[remarkGfm]}
-    rehypePlugins={[rehypeHighlight]}
-    components={{
-      a: props => <a {...props} target="_blank" rel="noreferrer" className="underline decoration-fg-tertiary" />,
-      pre: ({ children, ...props }) => (
-        <pre {...props} className="group relative">
-          <CopyButton text={extractText(children)} />
-          {children}
-        </pre>
-      ),
-      code: ({ className, children, ...props }) => {
-        const isBlock = Boolean(className); // rehype-highlight only sets a className on fenced blocks
-        return isBlock ? (
-          <code className={className} {...props}>
+export const MarkdownBody = memo(function MarkdownBody({ text }: { text: string }) {
+  return (
+    <Markdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[[rehypeKatex, KATEX], rehypeHighlight]}
+      components={{
+        table: ({ children, ...props }) => (
+          <div className="my-3 overflow-x-auto">
+            <table {...props}>{children}</table>
+          </div>
+        ),
+        a: props => <a {...props} target="_blank" rel="noreferrer" className="underline decoration-fg-tertiary" />,
+        pre: ({ children, ...props }) => (
+          <pre {...props} className="group relative">
+            <CopyButton text={extractText(children)} />
             {children}
-          </code>
-        ) : (
-          <code className="rounded bg-bg px-1 py-0.5 font-mono text-xs" {...props}>
-            {children}
-          </code>
-        );
-      },
-    }}
-  >
-    {text}
-  </Markdown>
-);
+          </pre>
+        ),
+        code: ({ className, children, ...props }) => {
+          const isBlock = Boolean(className); // rehype-highlight only sets a className on fenced blocks
+          return isBlock ? (
+            <code className={className} {...props}>
+              {children}
+            </code>
+          ) : (
+            <code className="rounded bg-bg px-1 py-0.5 font-mono text-xs" {...props}>
+              {children}
+            </code>
+          );
+        },
+      }}
+    >
+      {escapeCurrencyDollars(text)}
+    </Markdown>
+  );
+});

@@ -1,10 +1,10 @@
 import { SimpleImageAttachmentAdapter, useExternalStoreRuntime } from '@assistant-ui/react';
 import type { AppendMessage, ThreadMessageLike } from '@assistant-ui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, editMessage, editQueuedMessage, getMessages, deleteMessageFrom, killTurn, queueMessage, regenerateMessage, removeQueuedMessage, retryLastMessage, sendMessage, sendQueuedMessageNow } from '../api';
+import { ApiError, continueReply, editMessage, editQueuedMessage, editReplyText, getMessages, deleteMessageFrom, killTurn, queueMessage, regenerateMessage, removeQueuedMessage, retryLastMessage, selectVersion, sendMessage, sendQueuedMessageNow } from '../api';
 import type { OutgoingAttachment, TurnErrorKind } from '../types';
 import { useSSE } from '../hooks/useSSE';
-import { foldRawMessages, liveTurnToMessage } from './messages';
+import { appendToLastReply, foldRawMessages, liveTurnToMessage } from './messages';
 
 /** What to tell the person when their message could not be sent (the server refuses with 409 while a turn is running). */
 export function sendFailureMessage(e: unknown): string {
@@ -55,31 +55,40 @@ export function useEverythingAppRuntime(conversationId: string | null) {
   const interruptNext = useRef(false);
   const runningRef = useRef(false);
 
-  const refetch = useCallback(() => {
+  // Answers can come back out of order (a fetch started when a turn began, one when it ended): only the newest is used.
+  const fetchSeq = useRef(0);
+  const { release } = live;
+  /** Loads the stored messages. `thenRelease`: in the same render, stop showing the finished turn's own copy of them. */
+  const refetch = useCallback((thenRelease = false): Promise<void> => {
     if (!conversationId) {
       setPersisted([]);
-      return;
+      return Promise.resolve();
     }
-    getMessages(conversationId)
-      .then(({ messages }) => setPersisted(foldRawMessages(messages)))
+    const mine = ++fetchSeq.current;
+    return getMessages(conversationId)
+      .then(({ messages }) => {
+        if (mine !== fetchSeq.current) return;
+        setPersisted(foldRawMessages(messages));
+        if (thenRelease) release();
+      })
       .catch(() => {
         // Transient — the next natural refetch (conversation switch, turn
         // finishing) will pick it up. Nothing actionable to show here.
+        if (mine === fetchSeq.current && thenRelease) release();
       });
-  }, [conversationId]);
+  }, [conversationId, release]);
 
-  // Refetch on conversation switch, and again every time a turn finishes —
-  // finishedCount (not `running`) is the trigger because it changes exactly
-  // once per completed turn even if two turns somehow finish back to back,
-  // where a boolean could stay `false` across both and never fire the effect.
+  // Refetch on conversation switch, when a turn starts (the message that started it may have been sent from another tab)
+  // and every time one finishes — finishedCount (not `running`) is the trigger because it changes exactly once per
+  // completed turn even if two turns somehow finish back to back, where a boolean could stay `false` across both.
   useEffect(() => {
-    refetch();
-  }, [refetch, live.finishedCount, live.compactedCount]);
+    void refetch(true);
+  }, [refetch, live.finishedCount, live.compactedCount, live.startedCount]);
 
-  const liveMessage = useMemo(() => liveTurnToMessage(live.parts), [live.parts]);
+  const liveMessage = useMemo(() => liveTurnToMessage(live.parts.length > 0 ? live.parts : live.held, live.running), [live.parts, live.held, live.running]);
   const messages = useMemo(
-    () => (liveMessage ? [...persisted, liveMessage] : persisted),
-    [persisted, liveMessage],
+    () => (!liveMessage ? persisted : live.continuing ? appendToLastReply(persisted, liveMessage) : [...persisted, liveMessage]),
+    [persisted, liveMessage, live.continuing],
   );
 
   const onNew = useCallback(
@@ -135,16 +144,17 @@ export function useEverythingAppRuntime(conversationId: string | null) {
         .map(c => c.text)
         .join('');
       if (!text.trim()) return;
-      const parentId = message.parentId ?? null;
+      const messageId = Number(message.sourceId);
+      if (!Number.isInteger(messageId)) return; // an optimistic ("opt-...") message is not stored yet: there is nothing to replace
 
-      // Optimistic: drop everything from the edited message onward, show
-      // the new text immediately, let the live turn stream in after it —
-      // same reasoning as onNew's optimistic append above.
-      const before = truncateToAnchor(persisted, parentId);
+      // Optimistic: everything from the edited message onward goes, the new text shows at once and the live turn streams in
+      // after it — same reasoning as onNew's optimistic append above.
+      const at = persisted.findIndex(m => m.id === message.sourceId);
+      const before = at < 0 ? persisted : persisted.slice(0, at);
       setPersisted([...before, { id: `opt-${Date.now()}`, role: 'user', content: [{ type: 'text', text }] }]);
 
       try {
-        await editMessage(conversationId, parentId === null ? null : Number(parentId), text);
+        await editMessage(conversationId, { messageId }, text);
       } catch {
         setPersisted(persisted); // revert to the pre-edit list — the edit never happened server-side
       }
@@ -152,13 +162,17 @@ export function useEverythingAppRuntime(conversationId: string | null) {
     [conversationId, persisted],
   );
 
+  // "Regenerate with…" picks a model for this one answer: it is stored here for the onReload the library calls next.
+  const reloadModel = useRef<string | undefined>(undefined);
   const onReload = useCallback(
     async (parentId: string | null) => {
       if (!conversationId) return;
+      const model = reloadModel.current;
+      reloadModel.current = undefined;
       const before = truncateToAnchor(persisted, parentId);
       setPersisted(before);
       try {
-        await regenerateMessage(conversationId, parentId === null ? null : Number(parentId));
+        await regenerateMessage(conversationId, parentId === null ? null : Number(parentId), model);
       } catch {
         setPersisted(persisted);
       }
@@ -270,16 +284,48 @@ export function useEverythingAppRuntime(conversationId: string | null) {
   // A new turn (or a finished one) makes an old "wasn't sent" notice stale.
   useEffect(() => { setSendError(null); }, [conversationId, live.finishedCount]);
 
-  const retry = useCallback(async () => {
+  const retry = useCallback(async (model?: string) => {
     if (!conversationId) return;
     try {
-      await retryLastMessage(conversationId);
+      await retryLastMessage(conversationId, model);
     } catch {
       // Nothing new to show — the error banner (driven by live.error) stays as-is until the next attempt.
     }
   }, [conversationId]);
 
+  /** What a message's own controls can do (see lib/chatActions.tsx). Each one starts a turn or changes the stored chat. */
+  const actions = useMemo(
+    () => ({
+      retry,
+      /** The next regenerate the library runs (from any message's own button) answers with this model. */
+      setReloadModel: (model: string | undefined) => { reloadModel.current = model; },
+      /** Ask again for the answer to the last message, optionally with another model for this answer only. */
+      regenerate: async (model?: string) => {
+        if (!conversationId) return;
+        try { await regenerateMessage(conversationId, null, model); } catch (e) { setSendError(sendFailureMessage(e)); }
+      },
+      /** Carry on a reply that was cut short; what the model adds goes at the end of that message. */
+      continueReply: async (model?: string) => {
+        if (!conversationId) return;
+        try { await continueReply(conversationId, model); } catch (e) { setSendError(sendFailureMessage(e)); }
+      },
+      /** Show another version of an edited / regenerated message. */
+      selectVersion: async (id: number) => {
+        if (!conversationId) return;
+        try { await selectVersion(conversationId, id); } catch (e) { setSendError(sendFailureMessage(e)); }
+        await refetch();
+      },
+      /** Change the text of a reply in place, without asking the model again. */
+      editReply: async (rowId: number, text: string, index: number) => {
+        if (!conversationId) return;
+        try { await editReplyText(conversationId, rowId, text, index); } catch (e) { setSendError(sendFailureMessage(e)); }
+        await refetch();
+      },
+    }),
+    [conversationId, retry, refetch],
+  );
+
   const error = live.error ?? sendError ?? undefined;
   const errorKind: TurnErrorKind | undefined = live.error ? live.errorKind : sendError ? 'send_failed' : undefined;
-  return { runtime, refetch, live, error, errorKind, retry, queue };
+  return { runtime, refetch, live, error, errorKind, retry, queue, actions, persisted };
 }
