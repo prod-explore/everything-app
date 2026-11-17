@@ -35,6 +35,11 @@ All screenshots were taken against the scripted mock model in `tools/mock-llm` (
   vLLM or LM Studio on your LAN. Models come from the provider's `/models` list, and a chat can switch models at any point
   because history is stored in one format of the app's own. Models that cannot call tools are not offered.
   [Providers, models and slots](docs/providers.md).
+- **A chat that survives failures.** A busy or rate-limited provider is retried for up to two minutes, at the pace it
+  asks for, with a countdown in the chat; a reply that breaks off or is stopped keeps its text and can be continued.
+  Edits and regenerations keep every version (← 1/2 →), any reply can be regenerated with another model, and reloading
+  mid-answer catches up on the text so far. Markdown with math, a phone composer where Enter is a newline, drafts per chat.
+  [ADR 0022](docs/adr/0022-retries-and-cut-short-replies.md).
 - **A sandbox per project.** One container per project (or per standalone chat) with a persistent `/workspace`: a shell,
   git, terminals, a file explorer, a Source Control panel, and a checkpoint before every turn that you can roll back to.
   Deleting a project or a chat lists exactly what goes (chats, running agents, scheduled tasks, Gazeta items, processes,
@@ -236,7 +241,8 @@ do so ask first, but once approved they run.
 - **One user.** One password, no accounts or roles.
 - **Tool-calling models only**, over chat-completions. No prices are tracked, only tokens; spending limits belong to the
   provider or gateway.
-- **Runs are not resumed.** A restart marks running turns and workers as interrupted. git-proxy keeps its tokens in memory,
+- **Runs are not resumed after a restart.** A server restart marks running turns and workers as interrupted (a reply that
+  broke off keeps its text and can be continued by hand). git-proxy keeps its tokens in memory,
   so a restart revokes them (the orchestrator issues new ones).
 - **GitHub only** for git through the proxy. Signed pushes are refused; force pushes are not always detectable (see
   [git-proxy/README.md](git-proxy/README.md#limitations-v1)).
