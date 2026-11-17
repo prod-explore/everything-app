@@ -390,9 +390,10 @@ export interface UsageReport {
   byDay: Array<{ day: string; calls: number; tokens: number }>;
 }
 
-/** A provider answered 429/5xx (e.g. Gemini free tier at peak hours); the server is waiting and will retry on its own. */
+/** A provider answered 429/5xx (e.g. a free tier at peak hours); the server is waiting and will retry on its own. Sent to the conversation that waits. */
 export interface ProviderRetry {
   provider: string;
+  conversationId?: string;
   attempt: number;
   status: number | 'network';
   delayMs: number;

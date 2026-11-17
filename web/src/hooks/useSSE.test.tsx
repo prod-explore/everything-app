@@ -76,6 +76,27 @@ describe('liveTurnReducer', () => {
     expect(liveTurnReducer(following, { type: 'resume' })).toBe(following);
   });
 
+  it('a retry notice lives until the first sign of the answer or the end of the turn', () => {
+    const notice = { provider: 'P', attempt: 1, status: 429 as const, delayMs: 5000, remainingMs: 100_000, receivedAt: 1 };
+    const waiting = run([{ type: 'start' }, { type: 'retry', retry: notice }]);
+    expect(waiting.retry).toEqual(notice);
+    for (const action of [
+      { type: 'text_delta', block: 0, text: 'x' },
+      { type: 'thinking_delta', text: 'x' },
+      { type: 'text', text: 'x' },
+      { type: 'tool_use', label: 'x' },
+      { type: 'context', used: 1, limit: null },
+      { type: 'finish' },
+      { type: 'finish', error: 'boom' },
+      { type: 'compacted' },
+      { type: 'clear' },
+      { type: 'start' },
+    ] as LiveTurnAction[]) {
+      expect(liveTurnReducer(waiting, action).retry, action.type).toBeUndefined();
+    }
+    expect(liveTurnReducer(waiting, { type: 'retry', retry: { ...notice, attempt: 2 } }).retry?.attempt).toBe(2);
+  });
+
   it('a clear forgets the turn but not the counters consumers watch', () => {
     const s = run([{ type: 'start' }, { type: 'finish' }, { type: 'compacted' }, { type: 'clear' }]);
     expect(s).toMatchObject({ running: false, parts: [], finishedCount: 1, compactedCount: 1 });
@@ -117,6 +138,19 @@ describe('useSSE', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('shows a provider:retry event in the conversation it was sent to, stamped on arrival', () => {
+    vi.setSystemTime(10_000);
+    const { result } = renderHook(() => useSSE('c1'));
+    const es = FakeEventSource.instances[0]!;
+    act(() => {
+      es.emit('turn:start');
+      es.emit('provider:retry', { provider: 'P', attempt: 1, status: 503, delayMs: 2000, remainingMs: 90_000, conversationId: 'c1' });
+    });
+    expect(result.current.retry).toMatchObject({ provider: 'P', attempt: 1, status: 503, receivedAt: 10_000 });
+    act(() => es.emit('turn:text_delta', { block: 0, text: 'Hi' }));
+    expect(result.current.retry).toBeUndefined();
   });
 
   it('does not connect without a conversation', () => {

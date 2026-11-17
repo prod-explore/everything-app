@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef } from 'react';
 import { getMessageQueue, getTurnStatus, type MessageQueueInfo } from '../api';
-import type { ConversationStateInfo, TurnErrorKind } from '../types';
+import type { ConversationStateInfo, ProviderRetry, TurnErrorKind } from '../types';
 
 /**
  * One entry per tool call made during the currently-running turn, in the
@@ -34,6 +34,8 @@ export interface LiveTurnState {
   errorKind?: TurnErrorKind;
   /** The provider's own words, for a tooltip. */
   errorDetail?: string;
+  /** The provider is busy and the server is waiting to try again (see RetryStatus). Cleared by the first sign of the answer or the end of the turn. */
+  retry?: RetryNotice;
   /** Prompt size the provider measured on the latest request (live; the state endpoint has the stored one). */
   context?: { used: number; limit: number | null };
   /** Pushed by the server when the effort / the todo list change. */
@@ -45,6 +47,9 @@ export interface LiveTurnState {
   /** Bumped on every turn:done/error/aborted — lets consumers notice "a turn just finished" even if `running` briefly reads false in both the old and new state. */
   finishedCount: number;
 }
+
+/** A provider:retry event with the moment it arrived, which is what the countdown counts from. */
+export type RetryNotice = ProviderRetry & { receivedAt: number };
 
 const EMPTY_QUEUE: MessageQueueInfo = { items: [], paused: false };
 export const INITIAL_STATE: LiveTurnState = { running: false, parts: [], finishedCount: 0, compactedCount: 0, queue: EMPTY_QUEUE };
@@ -63,7 +68,8 @@ export type LiveTurnAction =
   | { type: 'context'; used: number; limit: number | null }
   | { type: 'conv_state'; state: ConversationStateInfo }
   | { type: 'queue'; queue: MessageQueueInfo }
-  | { type: 'compacted' };
+  | { type: 'compacted' }
+  | { type: 'retry'; retry: RetryNotice };
 
 export function liveTurnReducer(state: LiveTurnState, action: LiveTurnAction): LiveTurnState {
   switch (action.type) {
@@ -73,43 +79,45 @@ export function liveTurnReducer(state: LiveTurnState, action: LiveTurnAction): L
       return { running: true, parts: [], finishedCount: state.finishedCount, compactedCount: state.compactedCount, queue: state.queue, context: state.context, convState: state.convState };
     case 'resume':
       return state.running ? state : liveTurnReducer(state, { type: 'start' });
+    case 'retry':
+      return { ...state, retry: action.retry };
     case 'context':
-      return { ...state, context: { used: action.used, limit: action.limit } };
+      return { ...state, retry: undefined, context: { used: action.used, limit: action.limit } };
     case 'conv_state':
       return { ...state, convState: action.state };
     case 'queue':
       return { ...state, queue: action.queue };
     case 'compacted':
-      return { ...state, compactedCount: state.compactedCount + 1 };
+      return { ...state, retry: undefined, compactedCount: state.compactedCount + 1 };
     case 'text_delta': {
       const last = state.parts[state.parts.length - 1];
       if (last?.type === 'text' && last.streaming && last.block === action.block) {
         const parts = [...state.parts];
         parts[parts.length - 1] = { ...last, text: last.text + action.text };
-        return { ...state, parts };
+        return { ...state, retry: undefined, parts };
       }
-      return { ...state, parts: [...state.parts, { type: 'text', text: action.text, block: action.block, streaming: true }] };
+      return { ...state, retry: undefined, parts: [...state.parts, { type: 'text', text: action.text, block: action.block, streaming: true }] };
     }
     case 'thinking_delta': {
       const last = state.parts[state.parts.length - 1];
       if (last?.type === 'reasoning') {
         const parts = [...state.parts];
         parts[parts.length - 1] = { ...last, text: last.text + action.text };
-        return { ...state, parts };
+        return { ...state, retry: undefined, parts };
       }
-      return { ...state, parts: [...state.parts, { type: 'reasoning', text: action.text }] };
+      return { ...state, retry: undefined, parts: [...state.parts, { type: 'reasoning', text: action.text }] };
     }
     case 'text': {
       // The complete block replaces the oldest partial one (blocks finish in order); with no partial
       // (provider without streaming, or deltas missed over a reconnect) it is simply appended.
       const idx = state.parts.findIndex(p => p.type === 'text' && p.streaming);
-      if (idx === -1) return { ...state, parts: [...state.parts, { type: 'text', text: action.text }] };
+      if (idx === -1) return { ...state, retry: undefined, parts: [...state.parts, { type: 'text', text: action.text }] };
       const parts = [...state.parts];
       parts[idx] = { type: 'text', text: action.text };
-      return { ...state, parts };
+      return { ...state, retry: undefined, parts };
     }
     case 'tool_use':
-      return { ...state, parts: [...state.parts, { type: 'tool', call: { label: action.label } }] };
+      return { ...state, retry: undefined, parts: [...state.parts, { type: 'tool', call: { label: action.label } }] };
     case 'tool_result': {
       const idx = state.parts.findIndex(p => p.type === 'tool' && !p.call.result);
       if (idx === -1) return state; // defensive — shouldn't happen given the guaranteed emission order
@@ -132,7 +140,7 @@ export function liveTurnReducer(state: LiveTurnState, action: LiveTurnAction): L
       // content as a persisted message right after this. Leaving parts
       // populated here duplicated every just-finished turn on screen until
       // the next conversation switch cleared it.
-      return { ...state, running: false, parts: [], error: action.error, errorKind: action.kind, errorDetail: action.detail, finishedCount: state.finishedCount + 1 };
+      return { ...state, running: false, retry: undefined, parts: [], error: action.error, errorKind: action.kind, errorDetail: action.detail, finishedCount: state.finishedCount + 1 };
   }
 }
 
@@ -142,7 +150,6 @@ const SIDE_EVENTS = [
   'gazeta:dismissed',
   'conversation:titled',
   'approval:resolved',
-  'provider:retry',
   'pins:changed',
   'agent:spawned',
   'agent:finished',
@@ -217,6 +224,9 @@ export function useSSE(conversationId: string | null, onSideEvent?: (event: Side
           wasTruncated: boolean;
         };
         dispatch({ type: 'tool_result', ...data });
+      });
+      source.addEventListener('provider:retry', e => {
+        dispatch({ type: 'retry', retry: { ...(JSON.parse((e as MessageEvent).data) as ProviderRetry), receivedAt: Date.now() } });
       });
       source.addEventListener('turn:done', () => dispatch({ type: 'finish' }));
       source.addEventListener('turn:error', e => {

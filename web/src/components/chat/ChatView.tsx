@@ -7,6 +7,7 @@ import { ChatQuestions } from '../gazeta/ChatQuestions';
 import { InlineApprovals } from '../approval/InlineApprovals';
 import { AssistantBubble, UserBubble } from './MessageBubble';
 import { ChatStatus, ContextMeter, EffortSelect } from './ChatStatus';
+import { RetryStatus } from './RetryStatus';
 import { CompactionNotice } from './CompactionNotice';
 import { useConversationState } from '../../hooks/useConversationState';
 import type { useApprovals } from '../../hooks/useApprovals';
@@ -110,6 +111,7 @@ export function ChatView({
           {/* Inside the scroller (sticky) rather than below it, so the scrollbar runs all the way down to the composer. */}
           <div className="sticky bottom-0 z-10 -mx-4 shrink-0 bg-bg">
             <ChatStatus api={convState} running={live.running} />
+            <RetryStatus retry={live.retry} running={live.running} />
           </div>
         </ThreadPrimitive.Viewport>
         {/* Select any passage in a message → floating "Quote" quotes just that passage in the next reply. */}

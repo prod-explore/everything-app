@@ -271,10 +271,10 @@ function ProviderCard({ p, vaultEnabled, onChanged }: { p: ProviderInfo; vaultEn
           <input type="checkbox" checked={p.local} onChange={e => void run(async () => { await updateProvider(p.id, { local: e.target.checked }); onChanged(); })} aria-label={`${p.label} runs on my own hardware`} />
           Runs on my own hardware
         </label>
-        <label className="flex items-center gap-2" title="Keep retrying overloaded / rate-limited answers for this long (peak hours). Empty = two quick retries.">
+        <label className="flex items-center gap-2" title="How long to keep retrying overloaded / rate-limited answers (peak hours). Empty = the default, 2 minutes. 0 = no automatic retries.">
           Retry busy errors for
-          <input inputMode="numeric" value={retry} onChange={e => setRetry(e.target.value)} onBlur={() => void saveNumber('retryMin', retry, 1, 1440)} placeholder="off" className="w-16 rounded-button border border-border bg-bg-secondary px-2 py-1 text-xs text-fg outline-none" aria-label={`Minutes to retry busy errors from ${p.label}`} />
-          min
+          <input inputMode="numeric" value={retry} onChange={e => setRetry(e.target.value)} onBlur={() => void saveNumber('retryMin', retry, 0, 1440)} placeholder="2" className="w-16 rounded-button border border-border bg-bg-secondary px-2 py-1 text-xs text-fg outline-none" aria-label={`Minutes to retry busy errors from ${p.label}`} />
+          min <span className="text-fg-tertiary">(default 2 min, 0 = off)</span>
         </label>
         <label className="flex items-center gap-2" title="How many requests agent workers may send to this provider at once. Empty = 3. Use 1 for a server that handles one request at a time.">
           Parallel requests

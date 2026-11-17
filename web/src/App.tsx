@@ -26,7 +26,7 @@ import { useActiveAgentCount } from './hooks/useActiveAgents';
 import { useApprovals } from './hooks/useApprovals';
 import { useModels } from './hooks/useModels';
 import { useSSE } from './hooks/useSSE';
-import type { BudgetWarning, Conversation, ProjectListItem, ProviderRetry } from './types';
+import type { BudgetWarning, Conversation, ProjectListItem } from './types';
 
 /** Sent by the /init command: has the assistant write the project's AGENTS.md. */
 const INIT_PROMPT =
@@ -39,13 +39,6 @@ export type DockTool = 'agents' | 'files' | 'git';
 /** Placeholder while a dock panel's code chunk loads. */
 function DockLoading() {
   return <p className="px-3 py-4 text-center text-xs text-fg-tertiary">Loading…</p>;
-}
-
-function formatWait(ms: number): string {
-  const s = Math.max(1, Math.round(ms / 1000));
-  if (s < 90) return `${s}s`;
-  const m = Math.round(s / 60);
-  return m < 90 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
 export default function App() {
@@ -120,13 +113,6 @@ function MainApp() {
   const [pinsRefresh, setPinsRefresh] = useState(0);
   const { models } = useModels();
   const approvals = useApprovals(selectedId);
-  const [providerRetry, setProviderRetry] = useState<ProviderRetry | null>(null);
-  // A successful retry emits no event, so the notice simply expires shortly after its own wait is over.
-  useEffect(() => {
-    if (!providerRetry) return;
-    const t = setTimeout(() => setProviderRetry(null), providerRetry.delayMs + 20_000);
-    return () => clearTimeout(t);
-  }, [providerRetry]);
   const [usage, setUsage] = useState('—');
   const [fullConv, setFullConv] = useState<Conversation | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
@@ -275,8 +261,6 @@ function MainApp() {
     if (event === 'turn:done' || event === 'conversation:titled') void refreshConversations();
     if (event === 'agent:spawned' || event === 'agent:finished') setAgentsRefresh(r => r + 1);
     if (event === 'agent:budget_warning') setBudgetWarning(data as BudgetWarning);
-    if (event === 'provider:retry') setProviderRetry(data as ProviderRetry);
-    if (event === 'turn:done') setProviderRetry(null);
     if (event === 'pins:changed') setPinsRefresh(r => r + 1);
     if (event === 'schedule:changed') setSchedulesRefresh(r => r + 1);
   });
@@ -414,15 +398,6 @@ function MainApp() {
         onToggleTool={toggleDockTool}
         agentCount={activeAgents}
       />
-      {providerRetry && (
-        <div role="status" className="flex items-center justify-between gap-3 border-b border-border px-4 py-2 text-xs text-fg-secondary">
-          <span>
-            {providerRetry.provider} is busy ({providerRetry.status}) — retrying automatically in {formatWait(providerRetry.delayMs)}
-            {providerRetry.remainingMs > 0 ? `, giving up in ${formatWait(providerRetry.remainingMs)}` : ''}. Use stop to cancel.
-          </span>
-          <button onClick={() => setProviderRetry(null)} className="shrink-0 underline">Hide</button>
-        </div>
-      )}
       <div className="flex flex-1 overflow-hidden">
         <div className="relative min-w-0 flex-1 overflow-hidden">
           <ChatView conversationId={selectedId} onOpenSettings={() => openSettings('models')} approvals={approvals} />
