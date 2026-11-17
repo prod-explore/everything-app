@@ -24,13 +24,23 @@ export interface MetaStore {
 }
 
 export class ProviderHttpError extends Error {
+  /** Machine-readable `error.code` the server sent, when it sent one. */
+  readonly code?: string;
+  /** How long the server asked us to wait before trying again (Retry-After / `retry_after_s`), in ms. */
+  retryAfterMs?: number;
+  /** The failure came after part of the answer had already arrived — repeating the request would duplicate it, so it is never retried. */
+  progressed = false;
+
   constructor(
     readonly provider: string,
     readonly status: number,
-    detail: string,
+    readonly detail: string,
+    extra: { code?: string; retryAfterMs?: number } = {},
   ) {
     super(`${provider} API error ${status}: ${detail}`);
     this.name = 'ProviderHttpError';
+    if (extra.code) this.code = extra.code;
+    if (extra.retryAfterMs !== undefined) this.retryAfterMs = extra.retryAfterMs;
   }
 }
 
@@ -49,10 +59,15 @@ export interface OpenAiCompatOptions {
   streamIdleMs?: number;
   /** How the provider is called in messages shown to a person (its label). */
   label?: string;
+  /**
+   * Quick retry policy: this many retries (1 s, 2 s, …), used when no `retryBudgetMs` is given. For background work
+   * that should give up fast (titles, summaries). 0 = never retry.
+   */
   maxRetries?: number;
   /**
-   * Keep retrying transient failures (429/5xx/network) for up to this long in total — for provider peak hours.
-   * When set it replaces the `maxRetries` count. The kill-switch signal interrupts the wait at any moment.
+   * Keep retrying transient failures (429/502/503/504/network) for up to this long, counted from the first failure.
+   * Unset = DEFAULT_RETRY_BUDGET_MS (unless `maxRetries` is given); 0 = no automatic retries. A server that asks to wait
+   * longer than what is left fails at once, saying when to retry. The kill-switch signal interrupts the wait at any moment.
    */
   retryBudgetMs?: number;
   /** Longest single pause between attempts. Default 5 min. */
@@ -61,8 +76,13 @@ export interface OpenAiCompatOptions {
   onRetry?: (info: RetryInfo) => void;
 }
 
+/** What a failed request gets when nobody chose a window (the provider card's "Retry busy errors for" is empty). */
+export const DEFAULT_RETRY_BUDGET_MS = 2 * 60_000;
+
 export interface RetryInfo {
   provider: string;
+  /** The conversation whose request is waiting; absent for background work (titles, summaries), which only logs. */
+  conversationId?: string;
   attempt: number;
   status: number | 'network';
   delayMs: number;
@@ -78,18 +98,27 @@ export function retryDelayMs(attempt: number, retryAfterSec: number | undefined,
   return Math.round(Math.min(Math.max(base, 1000), maxDelayMs));
 }
 
-/** Resolves after `ms`, or rejects as soon as `signal` aborts. */
-function abortableSleep(sleep: (ms: number) => Promise<void>, ms: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) return sleep(ms);
-  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('aborted'));
+/** Resolves after `ms`, or rejects as soon as `signal` aborts (the timer is released at once, not left to run out). */
+function abortableSleep(sleep: ((ms: number) => Promise<void>) | undefined, ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('aborted'));
   return new Promise((resolve, reject) => {
-    const onAbort = () => reject(signal.reason ?? new Error('aborted'));
-    signal.addEventListener('abort', onAbort, { once: true });
-    sleep(ms).then(
-      () => { signal.removeEventListener('abort', onAbort); resolve(); },
-      e => { signal.removeEventListener('abort', onAbort); reject(e); },
-    );
+    let timer: NodeJS.Timeout | undefined;
+    const onAbort = () => { clearTimeout(timer); reject(signal?.reason ?? new Error('aborted')); };
+    const settle = (fn: () => void) => { signal?.removeEventListener('abort', onAbort); fn(); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (sleep) sleep(ms).then(() => settle(resolve), e => settle(() => reject(e)));
+    else timer = setTimeout(() => settle(resolve), ms);
   });
+}
+
+/** `Retry-After` is either a number of seconds or an HTTP date. */
+export function parseRetryAfter(value: string | null | undefined, now: number = Date.now()): number | undefined {
+  const v = value?.trim();
+  if (!v) return undefined;
+  const sec = Number(v);
+  if (Number.isFinite(sec)) return sec > 0 ? Math.round(sec * 1000) : undefined;
+  const at = Date.parse(v);
+  return Number.isNaN(at) || at <= now ? undefined : at - now;
 }
 
 // ─── Wire types (only the fields we touch) ───────────────────────────────────
@@ -531,22 +560,90 @@ export function fromChatResponse(json: OaiResponse, requestedModel: string, ctx:
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
+/** More likely a bug on the server than a passing condition: worth two quick retries, never the whole window. */
+const LIMITED_RETRY = new Set([408, 500]);
+const LIMITED_RETRIES = 2;
 
 /**
- * Error codes a gateway (MindGate) or provider puts in `{ error: { code } }` for failures that waiting cannot fix: the
+ * Error codes a gateway or provider puts in `{ error: { code } }` for failures that waiting cannot fix: the
  * budget or subscription quota is spent until its reset. A plain 429 (`rate_limited`) is still retried; these must fail
  * fast with their message.
  */
 const NO_RETRY_CODES = new Set(['budget_exhausted', 'upstream_quota_exhausted', 'insufficient_quota']);
 
-function errorCode(body: string): string | undefined {
-  try {
-    const j = JSON.parse(body) as { error?: { code?: unknown }; code?: unknown };
-    const c = j?.error?.code ?? j?.code;
-    return typeof c === 'string' ? c : undefined;
-  } catch {
-    return undefined;
+/** What an `{ error: {...} }` object (an HTTP error body or an in-stream error event) says about the failure. */
+export interface ErrorPayload {
+  code?: string;
+  /** HTTP status the object itself names (`status`, or a numeric `code`). */
+  status?: number;
+  message?: string;
+  retryAfterMs?: number;
+}
+
+const asStatus = (v: unknown): number | undefined => (typeof v === 'number' && Number.isInteger(v) && v >= 400 && v <= 599 ? v : undefined);
+
+/**
+ * Reads `code`, `type`, `status`, `retry_after_s` and `reset_at` out of an error object (or a whole error body).
+ * `retry_after_s` may sit beside `error` instead of inside it, and `reset_at` counts as a wait only for a failure that
+ * is not already known to last until then.
+ */
+export function parseErrorPayload(input: unknown, now: number = Date.now()): ErrorPayload {
+  const root = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const err = root['error'] !== undefined ? root['error'] : root;
+  const o = err && typeof err === 'object' ? (err as Record<string, unknown>) : {};
+  const out: ErrorPayload = {};
+  const code = typeof o['code'] === 'string' ? o['code'] : typeof o['type'] === 'string' ? o['type'] : undefined;
+  if (code) out.code = code;
+  const status = asStatus(o['status']) ?? asStatus(o['http_status']) ?? asStatus(o['code']);
+  if (status) out.status = status;
+  const message = typeof err === 'string' ? err : typeof o['message'] === 'string' ? o['message'] : undefined;
+  if (message) out.message = message;
+  for (const src of [o, root]) {
+    const s = src['retry_after_s'] ?? src['retry_after'];
+    if (typeof s === 'number' && Number.isFinite(s) && s > 0) { out.retryAfterMs = Math.round(s * 1000); break; }
   }
+  if (out.retryAfterMs === undefined && typeof o['reset_at'] === 'string' && !NO_RETRY_CODES.has(out.code ?? '')) {
+    const at = Date.parse(o['reset_at']);
+    if (!Number.isNaN(at) && at > now) out.retryAfterMs = at - now;
+  }
+  return out;
+}
+
+function parseErrorBody(body: string): ErrorPayload {
+  try { return parseErrorPayload(JSON.parse(body)); } catch { return {}; }
+}
+
+/** The HTTP status an in-stream error event stands for (it arrives inside a 200, so it has none of its own). */
+export function statusForErrorEvent(p: ErrorPayload): number {
+  if (p.status) return p.status;
+  const c = (p.code ?? '').toLowerCase();
+  if (NO_RETRY_CODES.has(c) || /rate_?limit/.test(c)) return 429;
+  if (/overload|unavailable/.test(c)) return 503;
+  if (/timeout|timed_out/.test(c)) return 504;
+  if (/invalid_request|context_length/.test(c)) return 400;
+  if (/authentication|invalid_api_key/.test(c)) return 401;
+  if (/permission/.test(c)) return 403;
+  return 502;
+}
+
+/** Connection-level failures (refused, reset, DNS) as opposed to our own timeout or the stop button; marked where fetch() is called. */
+const networkFailures = new WeakSet<object>();
+const tagNetworkFailure = (err: unknown): void => { if (err && typeof err === 'object') networkFailures.add(err); };
+
+/** A failure worth another attempt: a retryable status (unless the server named a code that waiting cannot fix), or a dropped connection. */
+interface Failure {
+  status: number | 'network';
+  retryAfterMs?: number;
+  /** Retried only a couple of times even when the window is long. */
+  limited: boolean;
+}
+
+function transientFailure(err: unknown): Failure | null {
+  if (err instanceof ProviderHttpError) {
+    if (err.progressed || !RETRYABLE.has(err.status) || NO_RETRY_CODES.has(err.code ?? '')) return null;
+    return { status: err.status, ...(err.retryAfterMs !== undefined ? { retryAfterMs: err.retryAfterMs } : {}), limited: LIMITED_RETRY.has(err.status) };
+  }
+  return err && typeof err === 'object' && networkFailures.has(err) ? { status: 'network', limited: false } : null;
 }
 
 /** Ollama / llama.cpp messages for a generated tool call that is not valid JSON. */
@@ -556,6 +653,9 @@ const TOOL_PARSE_ERROR = /looks like object|can'?t find closing|error parsing to
 function effortField(params: Llm.MessageCreateParamsNonStreaming, info: ModelInfo): { reasoning_effort?: string } {
   return params.reasoning_effort && info.supportsEffort ? { reasoning_effort: params.reasoning_effort } : {};
 }
+
+/** Statuses a server answers with when it does not do `stream: true`. */
+const STREAM_REFUSED = new Set([400, 404, 405, 415, 422, 501]);
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_STREAM_IDLE_MS = 120_000;
@@ -592,14 +692,14 @@ function linkSignals(external: AbortSignal | undefined, timeoutMs: number): { si
 
 export class OpenAiCompatClient implements LlmClient {
   private readonly fetchImpl: typeof fetch;
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly sleep: ((ms: number) => Promise<void>) | undefined;
   private get name(): string {
     return this.opts.label ?? 'provider';
   }
 
   constructor(private readonly opts: OpenAiCompatOptions) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.sleep = opts.sleep ?? (ms => new Promise(r => setTimeout(r, ms)));
+    this.sleep = opts.sleep;
   }
 
   readonly messages = {
@@ -652,7 +752,8 @@ export class OpenAiCompatClient implements LlmClient {
    * `content_block_delta` events as they arrive; text, reasoning and `tool_calls` deltas (by index, with
    * arguments split across chunks) are accumulated and the final message goes through the same
    * fromChatResponse() translation as the non-streaming path, so tool calls behave identically.
-   * Any HTTP error before the stream starts falls back to create() (retries, local-model fallback).
+   * A failure before the first token is retried by the same loop as create() (one request per attempt); only a server
+   * that cannot stream at all falls back to create().
    */
   stream(params: Llm.MessageCreateParamsNonStreaming, options?: { signal?: AbortSignal }): MessageStreamLike {
     const listeners: Array<(e: Llm.MessageStreamEvent) => void> = [];
@@ -693,22 +794,45 @@ export class OpenAiCompatClient implements LlmClient {
       stream_options: { include_usage: true },
       ...(tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
     };
+    try {
+      return await this.withRetries(() => this.streamAttempt(params, body, ctx, external, emitText, emitThinking), external);
+    } catch (err) {
+      if (this.cannotStream(err, tools.length > 0)) return this.messages.create(params, { signal: external });
+      throw err;
+    }
+  }
+
+  /** A 4xx that says "no streaming here" (or the local tool-call parse failure, which create() answers without tools) is worth one plain request. */
+  private cannotStream(err: unknown, hasTools: boolean): boolean {
+    if (!(err instanceof ProviderHttpError) || err.progressed) return false;
+    if (hasTools && err.status === 400 && TOOL_PARSE_ERROR.test(err.message)) return true;
+    return STREAM_REFUSED.has(err.status) && /stream/i.test(err.detail);
+  }
+
+  /** One streamed request. Whatever fails before the first delta is thrown as it is for the retry loop; after it, the error is marked `progressed`. */
+  private async streamAttempt(
+    params: Llm.MessageCreateParamsNonStreaming,
+    body: Record<string, unknown>,
+    ctx: TranslateContext,
+    external: AbortSignal | undefined,
+    emitText: (text: string) => void,
+    emitThinking?: (text: string) => void,
+  ): Promise<Llm.Message> {
     const { signal, cleanup } = linkSignals(external, this.opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    // Set at the first content, reasoning or tool-call delta: from then on a retry would repeat what the caller already has.
+    let progressed = false;
     try {
-      const res = await this.fetchImpl(`${this.opts.baseUrl}/chat/completions`, {
+      const res = await this.fetchAttempt(`${this.opts.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...(this.opts.apiKey ? { Authorization: `Bearer ${this.opts.apiKey}` } : {}) },
         body: JSON.stringify(body),
-        signal,
-      });
+      }, signal);
       const type = res.headers.get('content-type') ?? '';
-      if (!res.ok || !res.body) {
-        cleanup();
-        return this.messages.create(params, { signal: external });
-      }
+      if (!res.ok) throw await this.httpError(res);
+      if (!res.body) throw new ProviderHttpError(this.name, 502, 'the response had no body');
       // Some servers ignore stream:true and answer with plain JSON — accept that too.
-      if (!type.includes('event-stream')) return fromChatResponse((await res.json()) as OaiResponse, params.model, ctx, this.name);
+      if (!type.includes('event-stream')) return fromChatResponse(this.checkAnswer(await res.json()), params.model, ctx, this.name);
 
       let text = '';
       // MindGate/custom models may answer with a tool call written as JSON text. A reply that starts with
@@ -738,7 +862,13 @@ export class OpenAiCompatClient implements LlmClient {
       let done = false;
       const idleMs = this.opts.streamIdleMs ?? DEFAULT_STREAM_IDLE_MS;
       while (!done) {
-        const chunk = await readWithIdleLimit(reader, idleMs, this.name);
+        let chunk: Awaited<ReturnType<typeof readWithIdleLimit>>;
+        try {
+          chunk = await readWithIdleLimit(reader, idleMs, this.name);
+        } catch (err) {
+          if (!progressed && !signal.aborted && !(err instanceof ProviderHttpError)) tagNetworkFailure(err);
+          throw err;
+        }
         if (chunk.done) break;
         buffer += decoder.decode(chunk.value, { stream: true });
         let nl: number;
@@ -751,10 +881,10 @@ export class OpenAiCompatClient implements LlmClient {
           let evt: {
             id?: string; model?: string; usage?: OaiResponse['usage'];
             choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null; reasoning_content?: string | null; reasoning?: string | null; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: Record<string, unknown> }> } }>;
-            error?: { message?: string };
+            error?: unknown;
           };
           try { evt = JSON.parse(data); } catch { continue; }
-          if (evt.error) throw new ProviderHttpError(this.name, 502, this.redact(String(evt.error.message ?? 'stream error')));
+          if (evt.error) throw this.eventError(evt.error);
           if (evt.id) id = evt.id;
           if (evt.model) model = evt.model;
           if (evt.usage) usage = evt.usage;
@@ -763,9 +893,10 @@ export class OpenAiCompatClient implements LlmClient {
           if (choice.finish_reason) finish = choice.finish_reason;
           const d = choice.delta ?? {};
           const thought = d.reasoning_content || d.reasoning;
-          if (thought) { reasoning += thought; emitThinking?.(thought); }
-          if (d.content) onText(d.content);
+          if (thought) { progressed = true; reasoning += thought; emitThinking?.(thought); }
+          if (d.content) { progressed = true; onText(d.content); }
           for (const tc of d.tool_calls ?? []) {
+            progressed = true;
             const i = tc.index ?? calls.length;
             calls[i] ??= { id: '', type: 'function', function: { name: '', arguments: '' } };
             if (tc.id) calls[i]!.id = tc.id;
@@ -800,6 +931,9 @@ export class OpenAiCompatClient implements LlmClient {
         if (first) emitText(first.text);
       }
       return message;
+    } catch (err) {
+      if (progressed && err instanceof ProviderHttpError) err.progressed = true;
+      throw err;
     } finally {
       cleanup();
       void reader?.cancel().catch(() => {});
@@ -829,65 +963,102 @@ export class OpenAiCompatClient implements LlmClient {
     return this.opts.apiKey ? text.split(this.opts.apiKey).join('[redacted]') : text;
   }
 
-  private async post(path: string, body: unknown, external?: AbortSignal): Promise<unknown> {
-    const budget = this.opts.retryBudgetMs;
-    const maxDelay = this.opts.retryMaxDelayMs ?? 5 * 60_000;
-    const maxRetries = this.opts.maxRetries ?? 2;
-    const startedAt = Date.now();
-    /** Decides whether another attempt is allowed; returns the pause, or null to give up. */
-    const nextPause = (attempt: number, status: number | 'network', retryAfterSec?: number): number | null => {
-      if (external?.aborted) return null;
-      if (budget !== undefined) {
-        const remaining = budget - (Date.now() - startedAt);
-        const delay = retryDelayMs(attempt, retryAfterSec, maxDelay);
-        if (remaining <= delay) return null;
-        this.opts.onRetry?.({ provider: this.name, attempt: attempt + 1, status, delayMs: delay, remainingMs: remaining });
-        return delay;
-      }
-      if (attempt >= maxRetries) return null;
-      const delay = retryAfterSec && retryAfterSec > 0 ? Math.min(retryAfterSec, 30) * 1000 : 1000 * 2 ** attempt;
-      this.opts.onRetry?.({ provider: this.name, attempt: attempt + 1, status, delayMs: delay, remainingMs: 0 });
-      return delay;
-    };
+  /** fetch() whose connection-level failures are marked as transient (not our own timeout, not the stop button). */
+  private async fetchAttempt(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+    try {
+      return await this.fetchImpl(url, { ...init, signal });
+    } catch (err) {
+      if (!signal.aborted) tagNetworkFailure(err);
+      throw err;
+    }
+  }
 
+  /** A non-2xx answer as an error that carries what the server said about it (code, how long to wait). */
+  private async httpError(res: Response): Promise<ProviderHttpError> {
+    const text = await res.text().catch(() => '');
+    const parsed = parseErrorBody(text);
+    const retryAfterMs = parseRetryAfter(res.headers.get('retry-after')) ?? parsed.retryAfterMs;
+    return new ProviderHttpError(this.name, res.status, this.redact(text.slice(0, 800)), {
+      ...(parsed.code ? { code: parsed.code } : {}),
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    });
+  }
+
+  /** An error event inside an otherwise healthy stream, with the status and classification it would have had as an HTTP answer. */
+  private eventError(raw: unknown): ProviderHttpError {
+    const parsed = parseErrorPayload(raw);
+    const detail = typeof raw === 'string' ? raw : JSON.stringify(raw) ?? 'stream error';
+    return new ProviderHttpError(this.name, statusForErrorEvent(parsed), this.redact(detail.slice(0, 800)), {
+      ...(parsed.code ? { code: parsed.code } : {}),
+      ...(parsed.retryAfterMs !== undefined ? { retryAfterMs: parsed.retryAfterMs } : {}),
+    });
+  }
+
+  /** A 200 whose JSON is an error object instead of a completion is an error, whatever the status line said. */
+  private checkAnswer(json: unknown): OaiResponse {
+    const o = json as { error?: unknown; choices?: unknown } | null;
+    if (o && typeof o === 'object' && o.error && !o.choices) throw this.eventError(o.error);
+    return json as OaiResponse;
+  }
+
+  /**
+   * The one retry loop behind create() and every streamed attempt. `run` makes one request and throws what went wrong;
+   * transient failures (429/502/503/504, a dropped connection — see transientFailure) are repeated after a pause:
+   * - window mode (the default, 2 min from the first failure, or the provider's own window): exponential backoff, a
+   *   server Retry-After honoured up to the window; a wait that would not fit fails now and says when to retry;
+   * - quick mode (`maxRetries`): that many retries after 1 s, 2 s, … for background work.
+   * The stop button (`external`) interrupts a wait at once.
+   */
+  private async withRetries<T>(run: () => Promise<T>, external?: AbortSignal): Promise<T> {
+    const quick = this.opts.retryBudgetMs === undefined && this.opts.maxRetries !== undefined;
+    const budget = this.opts.retryBudgetMs ?? DEFAULT_RETRY_BUDGET_MS;
+    const maxDelay = this.opts.retryMaxDelayMs ?? 5 * 60_000;
+    let failingSince: number | undefined;
     for (let attempt = 0; ; attempt++) {
+      try {
+        return await run();
+      } catch (err) {
+        const failure = transientFailure(err);
+        if (!failure || external?.aborted) throw err;
+        const now = Date.now();
+        failingSince ??= now;
+        const remaining = budget - (now - failingSince);
+        let delay: number | null;
+        if (quick) {
+          delay = attempt >= this.opts.maxRetries! ? null : failure.retryAfterMs ? Math.min(failure.retryAfterMs, 30_000) : 1000 * 2 ** attempt;
+        } else if (failure.limited && attempt >= LIMITED_RETRIES) {
+          delay = null;
+        } else if (failure.retryAfterMs !== undefined && failure.retryAfterMs > remaining) {
+          if (err instanceof ProviderHttpError) err.message += ` (asked to wait ${Math.ceil(failure.retryAfterMs / 1000)} s, which is longer than the retry window)`;
+          throw err;
+        } else {
+          const pause = retryDelayMs(attempt, failure.retryAfterMs !== undefined ? failure.retryAfterMs / 1000 : undefined, maxDelay);
+          delay = remaining <= pause ? null : pause;
+        }
+        if (delay === null) {
+          if (attempt > 0 && err instanceof ProviderHttpError) err.message += ` (retried ${attempt}×, then gave up)`;
+          throw err;
+        }
+        this.opts.onRetry?.({ provider: this.name, attempt: attempt + 1, status: failure.status, delayMs: delay, remainingMs: quick ? 0 : remaining });
+        await abortableSleep(this.sleep, delay, external);
+      }
+    }
+  }
+
+  private async post(path: string, body: unknown, external?: AbortSignal): Promise<unknown> {
+    return this.withRetries(async () => {
       const { signal, cleanup } = linkSignals(external, this.opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
       try {
-        let res: Response;
-        try {
-          res = await this.fetchImpl(`${this.opts.baseUrl}${path}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(this.opts.apiKey ? { Authorization: `Bearer ${this.opts.apiKey}` } : {}) },
-            body: JSON.stringify(body),
-            signal,
-          });
-        } catch (err) {
-          // Network failure or our own request timeout — transient only in budget mode (peak hours / flaky link).
-          const pause = budget !== undefined ? nextPause(attempt, 'network') : null;
-          if (pause === null) throw err;
-          cleanup();
-          await abortableSleep(this.sleep, pause, external);
-          continue;
-        }
-        if (res.ok) return await res.json();
-
-        const errBody = await res.text();
-        const status = res.status;
-        const retryable = RETRYABLE.has(status) && !NO_RETRY_CODES.has(errorCode(errBody) ?? '');
-        if (retryable) {
-          const retryAfter = Number(res.headers.get('retry-after'));
-          const pause = nextPause(attempt, status, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined);
-          if (pause !== null) {
-            cleanup();
-            await abortableSleep(this.sleep, pause, external);
-            continue;
-          }
-        }
-        const gaveUp = budget !== undefined && retryable ? ` (retried for ${Math.round((Date.now() - startedAt) / 60_000)} min, then gave up)` : '';
-        throw new ProviderHttpError(this.name, status, this.redact(errBody.slice(0, 800)) + gaveUp);
+        const res = await this.fetchAttempt(`${this.opts.baseUrl}${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(this.opts.apiKey ? { Authorization: `Bearer ${this.opts.apiKey}` } : {}) },
+          body: JSON.stringify(body),
+        }, signal);
+        if (!res.ok) throw await this.httpError(res);
+        return this.checkAnswer(await res.json());
       } finally {
         cleanup();
       }
-    }
+    }, external);
   }
 }

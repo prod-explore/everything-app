@@ -75,7 +75,7 @@ export interface ProviderRecord {
   enabled: boolean;
   /** Concurrent model calls for agent workers; null = default (3). Local inference: 1. */
   concurrency: number | null;
-  /** Keep retrying busy/overloaded errors (429/5xx/network) for this many minutes; null = the classic two retries. For peak hours. */
+  /** Keep retrying busy/overloaded errors (429/502/503/504/network) for this many minutes; null = the default (2 min), 0 = no automatic retries. For peak hours. */
   retryMin: number | null;
   /**
    * The user's statement "everything behind this URL runs on my own hardware" (a LAN Ollama/vLLM). Never inferred from

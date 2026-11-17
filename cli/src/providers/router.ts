@@ -56,6 +56,16 @@ export interface ResolvedModel {
 
 export type PickerModel = ModelInfo & { available: boolean; providerLabel: string };
 
+/** How a client is going to be used: who is waiting for it, and how patient it should be. */
+export interface ClientUse {
+  /** The conversation the call belongs to — a retry notice is shown there and nowhere else. Absent for background work. */
+  conversationId?: string;
+  /** Housekeeping (titles, summaries): two quick retries, not the provider's retry window. */
+  quickRetries?: boolean;
+}
+
+const QUICK_RETRIES = 2;
+
 export interface RouterOptions {
   db: Database.Database;
   vault?: KeyVault;
@@ -178,14 +188,15 @@ export class ProviderRouter {
     return new ProviderNotConfiguredError(provider.slug, `No ${provider.label} API key configured — add one in Settings → Models.`);
   }
 
-  private makeClient(provider: ProviderRecord, apiKey: string, withMeta = true): OpenAiCompatClient {
+  private makeClient(provider: ProviderRecord, apiKey: string, withMeta = true, use: ClientUse = {}): OpenAiCompatClient {
     return new OpenAiCompatClient({
       label: provider.label,
       baseUrl: trimTrailingSlashes(provider.baseUrl),
       apiKey,
       fetchImpl: this.opts.fetchImpl,
-      ...(provider.retryMin ? { retryBudgetMs: provider.retryMin * 60_000 } : {}),
-      onRetry: info => this.onProviderRetry?.(info),
+      // Housekeeping gives up fast; a chat turn waits out the provider's window (empty = the client's default, 0 = no retries).
+      ...(use.quickRetries ? { maxRetries: QUICK_RETRIES } : provider.retryMin !== null ? { retryBudgetMs: provider.retryMin * 60_000 } : {}),
+      onRetry: info => this.onProviderRetry?.(use.conversationId ? { ...info, conversationId: use.conversationId } : info),
       modelInfo: id => getModelInfo(id),
       upstreamModel: id => parseModelId(id)?.upstream ?? id,
       meta: withMeta
@@ -194,7 +205,7 @@ export class ProviderRouter {
     });
   }
 
-  clientFor(modelId: string): ResolvedModel {
+  clientFor(modelId: string, use: ClientUse = {}): ResolvedModel {
     if (this.opts.llmOverride) {
       const info = getModelInfo(modelId);
       return { provider: info.provider, info, client: this.opts.llmOverride };
@@ -213,7 +224,7 @@ export class ProviderRouter {
     const key = this.resolveKey(provider);
     if (key === null) throw this.notConfigured(provider);
     const info = getModelInfo(id);
-    const client = this.makeClient(provider, key);
+    const client = this.makeClient(provider, key, true, use);
     // A model that cannot read images gets them described by one that can (never by a less private one).
     return { provider: provider.slug, info, client: info.supportsImages ? client : withImageDescriptions(client, info.id, () => this.describerFor(info), this.descriptions) };
   }
@@ -232,7 +243,7 @@ export class ProviderRouter {
     return {
       model: best.id,
       describe: async (image, signal) => {
-        const { client } = this.clientFor(best.id);
+        const { client } = this.clientFor(best.id, { quickRetries: true });
         const res = await client.messages.create(
           { model: best.id, max_tokens: 900, system: DESCRIBE_SYSTEM, messages: [{ role: 'user', content: [image, { type: 'text', text: 'Describe this image.' }] }] },
           signal ? { signal } : undefined,

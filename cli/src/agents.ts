@@ -299,7 +299,7 @@ export class AgentManager {
     let prevId: number | null = resume?.lastMessageId ?? null;
     try {
       if (this.isGhost(run)) assertLocalModel(run.model);
-      const { provider, info, client } = router.clientFor(run.model);
+      const { provider, info, client } = router.clientFor(run.model, { conversationId: run.conversationId ?? undefined });
       const sem = this.semaphore(provider);
       const tools = this.registryFor(run).restrictTo(run.tools);
       const systemPrompt = withModelIdentity(

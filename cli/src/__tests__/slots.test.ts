@@ -54,10 +54,20 @@ describe('slots', () => {
   it('helper never silently becomes a paid model', () => {
     const d = db();
     assert.equal(resolveSlot(d, 'helper', [PAID], up), null);
-    assert.equal(resolveSlot(d, 'helper', ALL, up), '@p/free-a');
+    assert.equal(resolveSlot(d, 'helper', ALL, up), '@p/free-b');
     setSlots(d, { helper: '@p/free-b' });
     assert.equal(resolveSlot(d, 'helper', ALL, up), '@p/free-b');
     assert.equal(resolveSlot(d, 'helper', ALL, id => id !== '@p/free-b'), '@p/free-a', 'an unusable explicit choice falls back to a free model');
+  });
+
+  it('helper prefers a free model other than the chat default, and shares it only when it is the only one', () => {
+    const d = db();
+    assert.equal(resolveSlot(d, 'chat', ALL, up), '@p/free-a');
+    assert.equal(resolveSlot(d, 'helper', ALL, up), '@p/free-b', 'not the model the chat is on');
+    setSlots(d, { chat: '@p/free-b' });
+    assert.equal(resolveSlot(d, 'helper', ALL, up), '@p/free-a');
+    assert.equal(resolveSlot(d, 'helper', [PAID, FREE_A], up), '@p/free-a', 'a single free model still does the housekeeping');
+    assert.equal(resolveSlot(d, 'helper', ALL, id => id !== '@p/free-b' && id !== '@p/free-a'), null);
   });
 
   it('subagent is independent of helper (first free model unless set); escalation is never automatic', () => {

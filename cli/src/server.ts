@@ -16,7 +16,7 @@ import { fileTools, FILE_TOOLS_PROMPT } from './file-tools.js';
 import { previewHostFor, previewTool, PREVIEW_PROMPT } from './preview.js';
 import { assertStrongSecret } from './secret-check.js';
 import { searchMessages, exportMarkdown } from './search.js';
-import { backgroundModel, generateTitle } from './background.js';
+import { backgroundModel, fallbackTitle, generateTitle, noteHelperFailure } from './background.js';
 import { generateDailySummary } from './gazeta.js';
 import { UsageLedger, type UsageRange } from './usage-ledger.js';
 import { withModelIdentity } from './providers/identity.js';
@@ -419,7 +419,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
 
   router.onProviderRetry = info => {
     console.warn(`[provider] ${info.provider} busy (${info.status}) — retry #${info.attempt} in ${Math.round(info.delayMs / 1000)}s, giving up in ${Math.round(info.remainingMs / 60_000)} min`);
-    sse.emitAll('provider:retry', info);
+    // Only the conversation that is waiting hears about it; housekeeping retries (no conversation) stay in the log.
+    if (info.conversationId) sse.emit(info.conversationId, 'provider:retry', info);
   };
   const supervisor = new OrchestratorSupervisorClient();
   const sandboxExec: SandboxExec = opts.sandboxExec ?? new SupervisorExec();
@@ -1246,7 +1247,7 @@ ${formatHumanResponse(response)}` };
     compacting.add(convId);
     try {
       const bg = backgroundModel(db, router, { localOnly: conv.ghost });
-      const chat = bg ? null : router.clientFor(modelId);
+      const chat = bg ? null : router.clientFor(modelId, { conversationId: convId });
       const via = bg ?? { model: modelId, provider: chat!.provider, client: chat!.client as LlmClient };
       const r = await compactConversation(db, convId, {
         llm: via.client,
@@ -1375,7 +1376,7 @@ ${formatHumanResponse(response)}` };
         // lose its "local" mark between the request and the turn (provider repointed, hub reclassified it).
         if (conv.ghost) assertLocalModel(effectiveModel);
         if (!effectiveModel) throw new Error('No model is set up yet — add a provider in Settings → Models.');
-        const { provider, info, client } = router.clientFor(effectiveModel);
+        const { provider, info, client } = router.clientFor(effectiveModel, { conversationId: convId });
         const state = getConversationState(db, convId);
         const turnTools = conv.ghost ? ghostRegistry() : registry;
         const toolDefs = turnTools.toLlmTools() as Llm.Tool[];
@@ -1399,6 +1400,7 @@ ${formatHumanResponse(response)}` };
           } catch (err) {
             if (controller.signal.aborted) throw err;
             console.warn('[context] compaction failed: %s', router.redact((err as Error).message));
+            if (bg) noteHelperFailure(bg.model);
             return false;
           }
         };
@@ -1486,8 +1488,9 @@ ${m.body}`),
         const conv2 = getConversation(db, convId);
         if (conv2 && conv2.title === 'New conversation') {
           const titleSource = typeof content === 'string' ? content : '(attachment)';
-          updateConversation(db, convId, { title: titleSource.slice(0, 60) });
-          // Upgrade the plain slice to a proper title with a free-tier model; best-effort, never blocks the turn.
+          const plainTitle = typeof content === 'string' ? fallbackTitle(titleSource) : titleSource;
+          updateConversation(db, convId, { title: plainTitle });
+          // Upgrade the plain title to a proper one with the helper model; best-effort, never blocks the turn, and if the helper is down the plain one stays.
           const assistantText = textOfHistory(updatedHistory.slice(history.length + 1));
           // A ghost chat's title is only ever written by a local model; without one the plain slice stays.
           const bg = backgroundModel(db, router, { localOnly: conv.ghost });
@@ -1495,13 +1498,13 @@ ${m.body}`),
             void generateTitle(bg, content, assistantText, usage => ledger.record({ conversationId: convId, provider: bg.provider, model: bg.model, usage }))
               .then(title => {
                 const cur = getConversation(db, convId);
-                // Only replace our own slice — a title the user renamed in the meantime wins.
-                if (title && cur && cur.title === titleSource.slice(0, 60)) {
+                // Only replace our own plain title — a title the user renamed in the meantime wins.
+                if (title && cur && cur.title === plainTitle) {
                   updateConversation(db, convId, { title });
                   sse.emit(convId, 'conversation:titled', { id: convId, title });
                 }
               })
-              .catch(() => { /* keep the slice */ });
+              .catch(() => { /* keep the plain title */ });
           }
         }
 
@@ -2158,7 +2161,7 @@ ${formatHumanResponse(response)}`;
       baseUrl,
       keyOptional,
       concurrency: null,
-      retryMin: patience(b['retryMin'], 1, 24 * 60) ?? null,
+      retryMin: patience(b['retryMin'], 0, 24 * 60) ?? null,
       local: b['local'] === true,
     });
     if (apiKey) router.saveKey(slug, apiKey);
@@ -2176,7 +2179,7 @@ ${formatHumanResponse(response)}`;
     const c = b['concurrency'];
     if (c !== undefined && c !== null && !(typeof c === 'number' && Number.isInteger(c) && c >= 1 && c <= 32)) { res.status(400).json({ error: 'concurrency: integer 1–32, or null for the default' }); return; }
     const rm = b['retryMin'];
-    if (rm !== undefined && rm !== null && !(typeof rm === 'number' && Number.isInteger(rm) && rm >= 1 && rm <= 1440)) { res.status(400).json({ error: 'retryMin: 1–1440 minutes, or null for the classic two retries' }); return; }
+    if (rm !== undefined && rm !== null && !(typeof rm === 'number' && Number.isInteger(rm) && rm >= 0 && rm <= 1440)) { res.status(400).json({ error: 'retryMin: 0–1440 minutes (0 = no automatic retries), or null for the default of 2 minutes' }); return; }
     router.catalog.update(p.slug, {
       label: typeof b['label'] === 'string' && b['label'].trim() ? b['label'].trim().slice(0, 60) : undefined,
       baseUrl,

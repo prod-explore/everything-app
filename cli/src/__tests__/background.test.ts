@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type * as Llm from '../llm-types.js';
-import { backgroundModel, generateTitle } from '../background.js';
+import { HELPER_COOLDOWN_MS, backgroundModel, fallbackTitle, generateTitle, helperParked, noteHelperFailure } from '../background.js';
 import { truncateToolOutput } from '../output-truncator.js';
 import { openDb, runMigrations } from '../db.js';
 import { generateDailySummary } from '../gazeta.js';
@@ -32,6 +32,31 @@ describe('background (free tier) calls', () => {
     assert.equal(backgroundModel(db, router([paid, free], () => true))?.model, '@p/free');
     setSlots(db, { helper: '@p/paid' });
     assert.equal(backgroundModel(db, router([paid, free], () => true))?.model, '@p/paid', 'an explicit helper slot wins');
+  });
+
+  it('a failed title call returns null, parks the helper for a few minutes, and releases it afterwards', async () => {
+    const db = openDb(':memory:'); runMigrations(db);
+    const free = { id: '@p/offline', tags: ['free'], kind: 'chat' };
+    const calls: unknown[] = [];
+    const router = { chatCandidates: () => [free], isAvailable: () => true, clientFor: (id: string, use: unknown) => (calls.push(use), { provider: 'x', info: {}, client: {}, id }) } as unknown as ProviderRouter;
+    const bg = backgroundModel(db, router)!;
+    assert.deepEqual(calls, [{ quickRetries: true }], 'housekeeping asks for the quick retry policy');
+    const down = { ...bg, client: { messages: { create: async () => { throw new Error('503 node_unavailable'); } } } } as any;
+    assert.equal(await generateTitle(down, 'hello there', 'hi'), null);
+    assert.equal(helperParked('@p/offline'), true);
+    assert.equal(backgroundModel(db, router), null, 'no new attempt while it is parked');
+    assert.equal(helperParked('@p/offline', Date.now() + HELPER_COOLDOWN_MS + 1), false);
+    noteHelperFailure('@p/other', 0);
+    assert.equal(helperParked('@p/other'), false, 'a stale entry expires');
+  });
+
+  it('fallbackTitle: the first 8 words of the message, without markup or trailing punctuation', () => {
+    assert.equal(fallbackTitle('How do I configure nginx to proxy websockets to a node backend on the same host?'), 'How do I configure nginx to proxy websockets');
+    assert.equal(fallbackTitle('  **Fix** the login redirect bug!!  '), 'Fix the login redirect bug');
+    assert.equal(fallbackTitle('Short one.'), 'Short one');
+    assert.equal(fallbackTitle('x'.repeat(100)).length, 60);
+    assert.equal(fallbackTitle('   '), 'New conversation');
+    assert.ok(fallbackTitle('a '.repeat(30)).split(' ').length <= 8);
   });
 
   it('digest reports usage and stores the summary', async () => {

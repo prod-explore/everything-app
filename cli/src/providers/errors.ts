@@ -77,6 +77,18 @@ export function describeReset(detail: string, now: Date = new Date(), timeZone?:
   return `on ${at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...zone })} at ${time}`;
 }
 
+/** "3 min" / "40 s" for a wait the server asked for. */
+function waitText(ms: number): string {
+  const s = Math.ceil(ms / 1000);
+  return s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Math.round(s / 360) / 10} h`;
+}
+
+/** Closing advice for a transient failure that outlived the automatic retries. */
+function tryAgain(retryAfterMs: number | undefined): string {
+  const when = retryAfterMs ? `It asks to wait about ${waitText(retryAfterMs)} — try again then.` : 'Try again in a moment.';
+  return `${when} Raise "Retry busy errors for" on the provider card to keep retrying automatically for longer.`;
+}
+
 export function classifyError(err: unknown, redact: (s: string) => string = s => s): Incident {
   const raw = err instanceof Error ? err.message : String(err);
   const text = redact(raw);
@@ -110,10 +122,10 @@ export function classifyError(err: unknown, redact: (s: string) => string = s =>
       return { kind: 'auth', message: `${err.provider} rejected the API key (HTTP ${status}). Check it in Settings → Models.`, transient: false };
     }
     if (status === 429) {
-      return { kind: 'rate_limited', message: `${err.provider} is rate-limiting requests (HTTP 429). Try again in a moment — a longer "retry busy errors for" window on the provider card keeps retrying automatically.`, transient: true };
+      return { kind: 'rate_limited', message: `${err.provider} is rate-limiting requests (HTTP 429). ${tryAgain(err.retryAfterMs)}`, transient: true };
     }
     if (status >= 500 || status === 408) {
-      return { kind: 'busy', message: `${err.provider} is not answering properly (HTTP ${status}). Try again in a moment — a longer "retry busy errors for" window on the provider card keeps retrying automatically.`, transient: true };
+      return { kind: 'busy', message: `${err.provider} is not answering properly (HTTP ${status}). ${tryAgain(err.retryAfterMs)}`, transient: true };
     }
     if (status === 400 && /tool|function/i.test(detail) && /pars|json|invalid|looks like object|closing/i.test(detail)) {
       return { kind: 'tool_parse', message: 'The model produced a malformed tool call and the server refused it. Retrying usually works.', transient: true };

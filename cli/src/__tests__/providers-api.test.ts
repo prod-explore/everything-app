@@ -133,6 +133,9 @@ describe('providers API', () => {
     const get = async () => (await req(port, 'GET', '/api/providers')).json.providers.find((p: any) => p.id === 'mindgate');
     assert.equal((await get()).retryMin, null, 'the mindgate dialect has no default');
     assert.equal((await req(port, 'PATCH', '/api/providers/mindgate', { retryMin: 0.5 })).status, 400);
+    assert.equal((await req(port, 'PATCH', '/api/providers/mindgate', { retryMin: 1441 })).status, 400);
+    assert.equal((await req(port, 'PATCH', '/api/providers/mindgate', { retryMin: 0 })).status, 200);
+    assert.equal((await get()).retryMin, 0, '0 = no automatic retries (empty = the default of 2 minutes)');
     assert.equal((await req(port, 'PATCH', '/api/providers/mindgate', { retryMin: 90 })).status, 200);
     assert.equal((await get()).retryMin, 90);
     assert.equal((await req(port, 'PATCH', '/api/providers/mindgate', { retryMin: null })).status, 200);
@@ -171,7 +174,7 @@ describe('providers API', () => {
   it('slots: unset ones resolve automatically, explicit ones must be real chat models', async () => {
     const s = (await req(port, 'GET', '/api/slots')).json;
     assert.equal(s.slots.helper, '');
-    assert.equal(s.resolved.helper, '@mindgate/flash'); // first free chat model
+    assert.equal(s.resolved.helper, '@lan/qwen');      // a free model other than the chat default (flash)
     assert.equal(s.resolved.escalation, null);          // never automatic
     assert.equal(s.allowPaidAgents, false);
 

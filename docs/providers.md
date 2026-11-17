@@ -47,7 +47,7 @@ Nothing is inferred from a URL, a name or a tag, so a model nobody vouched for i
 | Slot | Used for | When unset |
 |---|---|---|
 | Chat default | New conversations | first `free` model, else first usable |
-| Helper | Chat titles, daily digest, compaction | first `free` model — never a paid one. For a ghost chat only a *local* helper is used; without one, the chat's own model summarises and the title stays a plain slice |
+| Helper | Chat titles, daily digest, compaction | first `free` model — never a paid one — preferring one *other than* the chat default, so housekeeping does not queue behind the model you are chatting on (with a single free model, that one is shared). For a ghost chat only a *local* helper is used; without one, the chat's own model summarises and the title stays the plain first-words title |
 | Agents | Default model of `spawn_agent` workers | the first free model; if none, the parent's own model |
 | Escalation | The stronger model the assistant reaches for | none (never automatic) |
 
@@ -55,12 +55,21 @@ Nothing is inferred from a URL, a name or a tag, so a model nobody vouched for i
 
 ## Busy retries (per provider)
 
-The app does not track whether a model is “up” and MindGate is not special: it is just another provider. One setting on each provider card covers peak hours. There is no per-provider timeout: every request is guarded by one generous limit (15 min) that only exists so a hung connection cannot keep a turn running forever; the stop button interrupts any wait. A gateway that has to wake a sleeping node first (MindGate) is covered by the retry window.
+The app does not track whether a model is “up” and MindGate is not special: it is just another provider. A request that fails for a passing reason is simply tried again, for **2 minutes** by default; one setting on each provider card changes that for peak hours. There is no per-provider timeout: every request is guarded by one generous limit (15 min) that only exists so a hung connection cannot keep a turn running forever; the stop button interrupts any wait. A gateway that has to wake a sleeping node first (MindGate) is covered by the retry window.
 
 | Setting | Default | Use |
 |---|---|---|
-| *Retry busy errors for … min* | off (two quick retries) | Keep retrying 429/5xx/network errors with backoff for this long — for providers with peak hours |
+| *Retry busy errors for … min* | 2 (empty = default, `0` = off) | Keep retrying 429/502/503/504 and network errors with backoff for this long, counted from the first failure — for providers with peak hours. `0` means no automatic retries |
 | *Parallel requests* | 3 | How many requests agent workers may have in flight at this provider; 1 for a server that handles one at a time |
+
+How a retry works:
+
+- **One request per attempt.** A streamed answer is retried as a stream — the same loop serves streaming and plain requests, so a failed message costs one request per attempt, never a stream plus plain duplicates. Only a server that answers that it cannot stream gets one plain request.
+- **Server waits are honoured.** `Retry-After` (seconds or a date) and a body's `retry_after_s` are followed without the old 30 s cap. A wait longer than what is left of the window fails at once with a message saying how long to wait, instead of sleeping through the whole window and failing anyway. `500` and `408` get two quick retries only, whatever the window.
+- **Errors inside a stream.** A gateway that reports a failure as an `error` event in an otherwise successful stream (`{"error":{"code","type","status","retry_after_s","reset_at"}}`) is classified like the HTTP answer it stands for: a rate limit is `429`, overloaded/unavailable `503`, a timeout `504`, anything else `502`. If nothing has been received yet, the request is retried within the window; once any text, reasoning or tool-call data has arrived it is not (the answer would be duplicated) and the turn fails with the right message.
+- **Never retried:** a spent quota or budget (`budget_exhausted`, `upstream_quota_exhausted`, `insufficient_quota`, HTTP 429), whose message names the reset time when the gateway sends one; and any other client error.
+- **The chat shows it.** While a turn waits, only the conversation it belongs to shows “… retrying in 12 s (attempt 2)” with a live countdown; stop cancels the wait.
+- **Background work is quick.** Titles, summaries and image descriptions use two quick retries (1 s, 2 s), not the window. When the helper model fails, it is left alone for 5 minutes (chats just use their plain fallback: the first words of the message as the title, the chat model for compaction), so an offline local helper does not slow every chat.
 
 `budget_exhausted` from a gateway is never retried.
 

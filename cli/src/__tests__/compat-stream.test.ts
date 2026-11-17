@@ -84,13 +84,13 @@ describe('OpenAI-compat streaming', () => {
     assert.deepEqual(msg.content, [{ type: 'thinking', thinking: 'Hmm, let me see.' }, { type: 'text', text: 'Done.' }]);
   });
 
-  it('falls back to the non-streaming path on an HTTP error, and gemini never streams', async () => {
+  it('falls back to the non-streaming path when the server refuses to stream', async () => {
     const bodies: any[] = [];
     const ok = { id: 'r', model: 'm', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'plain' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
     let n = 0;
     const c = client((async (_u: string, init: RequestInit) => {
       bodies.push(JSON.parse(String(init.body)));
-      return n++ === 0 ? new Response('busy', { status: 400 }) : new Response(JSON.stringify(ok), { status: 200, headers: { 'content-type': 'application/json' } });
+      return n++ === 0 ? new Response('{"error":{"message":"streaming is not supported for this model"}}', { status: 400 }) : new Response(JSON.stringify(ok), { status: 200, headers: { 'content-type': 'application/json' } });
     }) as typeof fetch);
     const msg = await c.messages.stream!(params).finalMessage();
     assert.equal((msg.content[0] as Llm.TextBlock).text, 'plain');

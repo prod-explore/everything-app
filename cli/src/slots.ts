@@ -7,7 +7,7 @@ import type { ModelInfo } from './providers/registry.js';
  * user picks one model per slot in Settings; an unset slot is resolved automatically from the model tags:
  *
  *   chat        what a new conversation starts on (the `default_model` setting)
- *   helper      housekeeping: chat titles, the daily digest            → auto: first available `free` model
+ *   helper      housekeeping: chat titles, the daily digest            → auto: first available `free` model other than the chat default
  *   subagent    default model for worker agents                        → auto: first available `free` model (independent of helper)
  *   escalation  what the orchestrator reaches for when the job is hard → never automatic
  *
@@ -61,8 +61,12 @@ export function resolveSlot(db: Database.Database, slot: SlotKey, candidates: re
     case 'chat':
       // An explicit default is honoured as-is (as before); otherwise a free model, otherwise whatever works.
       return explicit || firstFree(candidates, available) || candidates.find(m => available(m.id))?.id || null;
-    case 'helper':
-      return (explicit && available(explicit) ? explicit : null) ?? firstFree(candidates, available);
+    case 'helper': {
+      if (explicit && available(explicit)) return explicit;
+      // Housekeeping should not queue behind (or compete with) the model the user is chatting on: prefer another free one.
+      const chat = resolveSlot(db, 'chat', candidates, available);
+      return firstFree(candidates.filter(m => m.id !== chat), available) ?? firstFree(candidates, available);
+    }
     case 'subagent':
       return (explicit && available(explicit) ? explicit : null) ?? firstFree(candidates, available);
     case 'escalation':
