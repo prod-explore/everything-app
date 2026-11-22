@@ -672,5 +672,31 @@ describe('runTurn — _project_id injection (one sandbox per project)', () => {
     assert.equal(called.length, 1);
     assert.equal(called[0]!.args['_personal_profile_approved'], true);
     assert.equal(active, true);
+
+    // Case 4: an open without `profile` that the gate resolves to the dedicated profile also ends the personal session,
+    // so a later personal request asks again instead of riding on the stale approval.
+    called.length = 0;
+    await runTurn(
+      {
+        llm: scriptedLlm([
+          fakeMessage([toolUseBlock('t5', 'device-pc__browser_open', { url: 'https://github.com' })], 'tool_use'),
+          fakeMessage([textBlock('dedicated')], 'end_turn'),
+        ]),
+        model: '@t/m',
+        tools: registry,
+        systemPrompt: 'sys',
+        conversationId: 'c1',
+        webAccess: { grantedHosts: () => ['github.com'] },
+        confirm: async () => true,
+        deviceBrowserGate: {
+          checkPersonalProfile: () => ({ required: false }),
+          markPersonalActive: (_n, next) => { active = next; },
+        },
+      },
+      [],
+      'open without profile',
+    );
+    assert.equal(called.length, 1);
+    assert.equal(active, false, 'defaulted dedicated open resets personal active state');
   });
 });

@@ -745,7 +745,8 @@ async function runLoop(
         }
         result = await deps.tools.call(use.name, enrichedArgs);
         if (!virtual && deps.deviceBrowserGate) {
-          if (real === 'browser_close' || (real === 'browser_open' && args['profile'] === 'dedicated' && !result.isError)) {
+          // A browser_open that needed no personal-profile approval (explicit or defaulted dedicated) replaces the personal session on the device.
+          if (real === 'browser_close' || (real === 'browser_open' && !personalProfileApproved && !result.isError)) {
             deps.deviceBrowserGate.markPersonalActive?.(use.name, false);
           } else if (personalProfileApproved && !result.isError) {
             deps.deviceBrowserGate.markPersonalActive?.(use.name, true);
