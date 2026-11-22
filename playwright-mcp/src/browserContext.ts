@@ -190,9 +190,10 @@ export async function decideRequest(
   isTopLevelNavigation: boolean,
 ): Promise<RouteDecision> {
   const humanOnPersistent = state.persistentProfile === true && state.agentActing === 0;
-  const d = isTopLevelNavigation && !humanOnPersistent
-    ? checkNavigation(state.policy, url)
-    : checkRequest(state.policy, url);
+  // Browser-internal pages (chrome://, extensions, devtools…) are the person's to open in their own window. An agent
+  // step never gets them: they expose saved passwords, history and extension UIs behind the domain policy.
+  const policy = { ...state.policy, allowBrowserSchemes: humanOnPersistent };
+  const d = isTopLevelNavigation && !humanOnPersistent ? checkNavigation(policy, url) : checkRequest(policy, url);
   if (!d.allowed) return { allow: false, reason: d.reason };
   if (guard && /^https?:/i.test(url)) {
     try {

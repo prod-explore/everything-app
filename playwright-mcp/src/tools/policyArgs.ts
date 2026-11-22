@@ -31,11 +31,7 @@ export function envPolicy(config: PlaywrightConfig): PolicyOverride {
 
 export function effectivePolicy(config: PlaywrightConfig, override?: PolicyOverride, approvedHosts?: ReadonlySet<string>): EffectivePolicy {
   const policy = mergePolicy(envPolicy(config), override);
-  return {
-    ...policy,
-    ...(approvedHosts ? { approvedHosts } : {}),
-    ...(config.persistentProfile ? { allowBrowserSchemes: true } : {}),
-  };
+  return approvedHosts ? { ...policy, approvedHosts } : policy;
 }
 
 export function resolveProfileChoice(

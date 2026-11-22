@@ -200,6 +200,17 @@ describe('persistent user browser mode (human browsing vs agent actions)', () =>
     assert.equal((await decideRequest(state, privateGuard, 'file:///etc/passwd', true)).allow, false);
   });
 
+  it('never lets an agent step open browser-internal pages, even in a persistent profile', async () => {
+    const state = newSessionState(mergePolicy({}, { domainGrant: ['docs.example'] }));
+    state.persistentProfile = true;
+    await withAgentAction(state, async () => {
+      for (const url of ['chrome://settings/passwords', 'brave://history', 'chrome-extension://abcdef/popup.html', 'devtools://devtools/bundled/inspector.html', 'about:blank']) {
+        assert.equal((await decideRequest(state, privateGuard, url, true)).allow, false, url);
+      }
+    });
+    assert.equal((await decideRequest(state, privateGuard, 'chrome://settings', true)).allow, true, 'the person may');
+  });
+
   it('lets a human browse unapproved domains (e.g. github.com) freely when agentActing === 0, while blocking unapproved agent navigations', async () => {
     const policy = { ...mergePolicy({}, { domainGrant: ['docs.example'] }), allowBrowserSchemes: true };
     const state = newSessionState(policy);
