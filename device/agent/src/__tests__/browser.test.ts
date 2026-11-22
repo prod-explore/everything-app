@@ -160,12 +160,12 @@ describe('browser tools with the real Chrome (dedicated profile, headless only b
   }
   const text = (r: unknown): string => (r as { content: Array<{ text?: string }> }).content.map(c => c.text ?? '').join('\n');
 
-  it('exposes playwright-mcp\'s six tools, described for the user\'s own browser', async () => {
+  it('exposes playwright-mcp\'s six tools, described for the user\'s device browser', async () => {
     const client = await connect({});
     const tools = (await client.listTools()).tools;
     assert.deepEqual(tools.map(t => t.name).sort(), ['browser_act', 'browser_close', 'browser_observe', 'browser_open', 'browser_screenshot', 'browser_tabs']);
     const open = tools.find(t => t.name === 'browser_open')!;
-    assert.match(open.description!, /user's own browser/);
+    assert.match(open.description!, /persistent profile on the user's device/);
     assert.ok(!/ephemeral/.test(open.description!));
   });
 
