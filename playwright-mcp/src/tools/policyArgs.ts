@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import type { PlaywrightConfig } from '../config.js';
-import { checkNavigation, mergePolicy, policyOverrideSchema, type EffectivePolicy, type PolicyOverride } from '../policy.js';
+import { checkNavigation, mergePolicy, normalizeHost, policyOverrideSchema, type EffectivePolicy, type PolicyOverride } from '../policy.js';
 import type { SessionState } from '../browserContext.js';
+import type { SessionHandle } from '../sessionPool.js';
+import type { Page } from 'playwright';
 import { UrlBlockedError } from '../urlSafety.js';
 import { guardFor } from '../urlGuardFor.js';
 
@@ -17,6 +19,10 @@ export const hiddenPolicyArgs = {
     .boolean()
     .optional()
     .describe('Internal: the user explicitly allowed downloads/uploads for this call. Set by the orchestrator, never by the model.'),
+  _personal_profile_approved: z
+    .boolean()
+    .optional()
+    .describe('Internal: the user explicitly approved accessing the personal browser profile. Set by the orchestrator, never by the model.'),
 };
 
 export function envPolicy(config: PlaywrightConfig): PolicyOverride {
@@ -25,7 +31,44 @@ export function envPolicy(config: PlaywrightConfig): PolicyOverride {
 
 export function effectivePolicy(config: PlaywrightConfig, override?: PolicyOverride, approvedHosts?: ReadonlySet<string>): EffectivePolicy {
   const policy = mergePolicy(envPolicy(config), override);
-  return approvedHosts ? { ...policy, approvedHosts } : policy;
+  return {
+    ...policy,
+    ...(approvedHosts ? { approvedHosts } : {}),
+    ...(config.persistentProfile ? { allowBrowserSchemes: true } : {}),
+  };
+}
+
+export function resolveProfileChoice(
+  config: PlaywrightConfig,
+  requested?: 'dedicated' | 'personal',
+): { profile?: 'dedicated' | 'personal' } | { error: string } {
+  const available = config.availableProfiles;
+  if (requested && available && available.length > 0 && !available.includes(requested)) {
+    return {
+      error: `Browser profile "${requested}" is not enabled on this device (available: ${available.join(', ')}). Change browser.mode in the device app config if needed.`,
+    };
+  }
+  const chosen = requested ?? config.defaultProfile ?? (config.persistentProfile ? 'personal' : undefined);
+  return { profile: chosen };
+}
+
+/** Ensures a tab's current HTTP(S) page passes the session's domain policy before reading or acting on it. */
+export function ensurePageApproved(session: SessionHandle, page: Page, tabId?: number): string | null {
+  const url = page.url();
+  if (!/^https?:/i.test(url)) return null;
+  const d = checkNavigation(session.state.policy, url);
+  if (d.allowed) return null;
+  let host = url;
+  try {
+    host = normalizeHost(new URL(url).hostname);
+  } catch {
+    /* keep raw url */
+  }
+  const tabHint = tabId !== undefined ? ` and tab: ${tabId}` : '';
+  if (d.code === 'not_approved') {
+    return `Tab${tabId !== undefined ? ` [${tabId}]` : ''} is on ${host}, which is not approved yet — call browser_open with url ${JSON.stringify(url)}${tabHint} so the user can approve ${host} and attach to it without reloading.`;
+  }
+  return `Cannot access tab${tabId !== undefined ? ` [${tabId}]` : ''}: ${d.reason}`;
 }
 
 /** Applies this call's `_policy` (sticky: a call without one keeps the session's last override). */

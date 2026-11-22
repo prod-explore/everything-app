@@ -35,6 +35,10 @@ export interface ScmRepo {
   origin: string | null;
   owner: string | null;
   repo: string | null;
+  branch?: string | null;
+  dirty?: number;
+  ahead?: number;
+  behind?: number;
 }
 export interface ScmFile {
   path: string;

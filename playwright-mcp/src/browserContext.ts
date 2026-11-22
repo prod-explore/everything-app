@@ -26,13 +26,48 @@ export interface SessionState {
    * the session's temporary directory until it closes (server behaviour).
    */
   downloadDir?: string;
+  /** True when running inside the user's persistent device browser (human shares the window with the agent). */
+  persistentProfile?: boolean;
+  /** Selected device profile when launched (`dedicated` or `personal`). */
+  profile?: 'dedicated' | 'personal';
+  /** Set when the orchestrator explicitly approved using the user's `personal` profile for this session. */
+  personalApproved?: boolean;
+  /** Depth counter (> 0 while an agent navigation/action is actively running in this session). */
+  agentActing: number;
   /** Security-relevant events since the last tool result (blocked navigations, downloads…). Drained by tools. */
   events: string[];
 }
 
 export function newSessionState(policy: EffectivePolicy = OPEN_POLICY, override?: PolicyOverride): SessionState {
   const approvedHosts = new Set<string>();
-  return { policy: { ...policy, approvedHosts }, override, approvedHosts, allowDownloads: false, events: [] };
+  return { policy: { ...policy, approvedHosts }, override, approvedHosts, allowDownloads: false, agentActing: 0, events: [] };
+}
+
+/**
+ * Marks `state.agentActing > 0` for the duration of an agent tool step so policy routes distinguish agent-driven
+ * navigations from the human browsing their own tabs in a persistent browser, and temporarily intercepts
+ * `filechooser` / `dialog` events only while the agent is acting on persistent user browsers.
+ */
+export async function withAgentAction<T>(state: SessionState, fn: () => Promise<T>, page?: Page): Promise<T> {
+  state.agentActing += 1;
+  const onFileChooser = (fc: FileChooser) => handleFileChooser(state, fc);
+  const onDialog = (d: { dismiss(): Promise<void> }) => void d.dismiss().catch(() => {});
+  const tempAttach = Boolean(state.persistentProfile && page && typeof page.on === 'function');
+  if (tempAttach) {
+    page!.on('filechooser', onFileChooser);
+    page!.on('dialog', onDialog);
+  }
+  try {
+    return await fn();
+  } finally {
+    state.agentActing = Math.max(0, state.agentActing - 1);
+    if (tempAttach) {
+      const p = page as unknown as { off?: (e: string, l: unknown) => void; removeListener?: (e: string, l: unknown) => void };
+      const rm = p.off ?? p.removeListener;
+      rm?.call(page, 'filechooser', onFileChooser);
+      rm?.call(page, 'dialog', onDialog);
+    }
+  }
 }
 
 export function drainEvents(state: SessionState): string[] {
@@ -154,9 +189,12 @@ export async function decideRequest(
   url: string,
   isTopLevelNavigation: boolean,
 ): Promise<RouteDecision> {
-  const d = isTopLevelNavigation ? checkNavigation(state.policy, url) : checkRequest(state.policy, url);
+  const humanOnPersistent = state.persistentProfile === true && state.agentActing === 0;
+  const d = isTopLevelNavigation && !humanOnPersistent
+    ? checkNavigation(state.policy, url)
+    : checkRequest(state.policy, url);
   if (!d.allowed) return { allow: false, reason: d.reason };
-  if (guard && !/^(data|blob):/i.test(url)) {
+  if (guard && /^https?:/i.test(url)) {
     try {
       await guard.check(url);
     } catch (err) {
@@ -179,16 +217,18 @@ export function handleDownload(
   download: Pick<Download, 'cancel' | 'suggestedFilename' | 'url'> & Partial<Pick<Download, 'saveAs'>>,
 ): void {
   const name = safeName(download.suggestedFilename());
-  if (state.allowDownloads && state.downloadDir && download.saveAs) {
-    // Embedded use (device): the person allowed this download, so it lands in their download folder under a name that
-    // cannot overwrite anything (the name was sanitised above; a numeric suffix keeps an existing file intact).
+  const humanDownload = state.persistentProfile === true && state.agentActing === 0;
+  if ((state.allowDownloads || humanDownload) && state.downloadDir && download.saveAs) {
+    // Embedded use (device): either the user allowed this download or triggered it themselves in their window,
+    // so save it in their download folder under a non-overwriting name.
     const target = freeName(state.downloadDir, name);
-    pushEvent(state, `download allowed, saved to ${target}`);
+    pushEvent(state, `download ${humanDownload ? 'saved' : 'allowed, saved'} to ${target}`);
     void mkdir(state.downloadDir, { recursive: true })
       .then(() => download.saveAs!(target))
       .catch(err => pushEvent(state, `download failed to save: ${err instanceof Error ? err.message : String(err)}`));
     return;
   }
+  if (humanDownload) return;
   if (state.allowDownloads) {
     pushEvent(state, `download allowed (kept only in the ephemeral session, deleted when it closes): ${name}`);
     return;
@@ -221,8 +261,12 @@ function safeName(s: string): string {
 
 export function attachPageHandlers(page: Page, state: SessionState): void {
   page.on('download', d => handleDownload(state, d));
-  page.on('filechooser', fc => handleFileChooser(state, fc));
-  page.on('dialog', d => void d.dismiss().catch(() => {}));
+  // On persistent device browsers, attaching a permanent `filechooser` listener would suppress the person's own native
+  // upload dialog; `withAgentAction` attaches them only during active agent actions there.
+  if (!state.persistentProfile) {
+    page.on('filechooser', fc => handleFileChooser(state, fc));
+    page.on('dialog', d => void d.dismiss().catch(() => {}));
+  }
 }
 
 export async function installPolicyRoutes(
@@ -239,8 +283,12 @@ export async function installPolicyRoutes(
       await route.continue().catch(() => {});
       return;
     }
-    if (top) pushEvent(state, `navigation blocked: ${d.reason}`);
-    else console.warn('[browser-policy] blocked request to %s: %s', url, d.reason);
+    if (top) {
+      console.warn('[browser-policy] blocked navigation to %s: %s', url, d.reason);
+      pushEvent(state, `navigation blocked: ${d.reason}`);
+    } else {
+      console.warn('[browser-policy] blocked request to %s: %s', url, d.reason);
+    }
     await route.abort('blockedbyclient').catch(() => {});
   });
 }

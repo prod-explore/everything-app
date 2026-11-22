@@ -27,6 +27,14 @@ const BROWSER_OPTIONS: Option<DevicePolicy['browserAct']>[] = [
   { value: 'ask', label: 'Ask', hint: 'Clicking, typing and submitting on a page asks first. Opening a site is still gated per domain.' },
   { value: 'auto', label: 'Auto', hint: 'The assistant clicks and types without asking, in the accounts you are logged in to in that browser.' },
 ];
+const PERSONAL_PROFILE_OPTIONS: Option<NonNullable<DevicePolicy['browserPersonalProfile']>>[] = [
+  { value: 'deny', label: 'Deny', hint: 'Never allow opening your personal browser profile; only the dedicated profile may run.' },
+  { value: 'ask', label: 'Ask', hint: 'Always ask permission before opening your personal browser profile, saved sessions, or open tabs.' },
+  { value: 'auto', label: 'Auto', hint: 'Allow opening your personal browser profile without an extra prompt (each website domain still asks unless granted).' },
+];
+
+const isDeviceGrant = (toolLabel: string) =>
+  toolLabel.startsWith('cmd@device-') || (toolLabel.startsWith('device-') && toolLabel.endsWith('/browser_personal_profile'));
 
 /**
  * Devices tab: the computers paired with this server (tray app → Pair device → approve in the browser).
@@ -47,7 +55,7 @@ export function DevicesTab() {
   }, []);
 
   const loadGrants = useCallback(async () => {
-    try { setGrants((await listApprovalGrants()).grants.filter(g => g.toolLabel.startsWith('cmd@device-'))); } catch { /* the list is a convenience */ }
+    try { setGrants((await listApprovalGrants()).grants.filter(g => isDeviceGrant(g.toolLabel))); } catch { /* the list is a convenience */ }
   }, []);
 
   useEffect(() => {
@@ -77,7 +85,7 @@ export function DevicesTab() {
               <DeviceRow
                 key={d.id}
                 device={d}
-                grants={grants.filter(g => g.toolLabel.startsWith(`cmd@${d.connectionName}:`))}
+                grants={grants.filter(g => g.toolLabel.startsWith(`cmd@${d.connectionName}:`) || g.toolLabel === `${d.connectionName}/browser_personal_profile`)}
                 onChange={replace}
                 onRevoked={() => { void load(); void loadGrants(); }}
                 onGrantRevoked={() => void loadGrants()}
@@ -140,7 +148,17 @@ function exposure(d: DeviceInfo): string[] {
   const out: string[] = [];
   out.push(r.shell.enabled ? `Terminal: ${r.shell.kind === 'powershell' ? 'PowerShell' : 'POSIX shell'} (${r.shell.path})` : 'Terminal: off');
   out.push(r.files.enabled ? `Files: ${r.files.roots.length ? r.files.roots.join(', ') : 'no folders'} (${r.files.write ? 'read and write' : 'read-only'})` : 'Files: off');
-  out.push(r.browser.enabled ? `Browser: ${r.browser.product}, ${r.browser.mode === 'profile' ? 'your profile' : 'dedicated profile'}` : 'Browser: off');
+  out.push(
+    r.browser.enabled
+      ? `Browser: ${r.browser.product}, ${
+          r.browser.mode === 'profile'
+            ? 'your profile'
+            : r.browser.mode === 'both'
+              ? 'dedicated + personal (on request)'
+              : 'dedicated profile'
+        }`
+      : 'Browser: off',
+  );
   return out;
 }
 
@@ -227,14 +245,25 @@ function DeviceRow({ device: d, grants, onChange, onRevoked, onGrantRevoked }: {
         )}
         <Segmented label="Writing files" value={d.policy.filesWrite} options={FILES_OPTIONS} disabled={busy} onPick={v => void setPolicy({ filesWrite: v })} />
         <Segmented label="Acting in the browser" value={d.policy.browserAct} options={BROWSER_OPTIONS} disabled={busy} onPick={v => void setPolicy({ browserAct: v })} />
+        <Segmented
+          label="Personal browser profile"
+          value={d.policy.browserPersonalProfile ?? 'ask'}
+          options={PERSONAL_PROFILE_OPTIONS}
+          disabled={busy}
+          onPick={v => void setPolicy({ browserPersonalProfile: v })}
+        />
 
         {grants.length > 0 && (
           <div>
-            <div className="mb-1 text-xs font-medium text-fg-secondary">Remembered commands</div>
+            <div className="mb-1 text-xs font-medium text-fg-secondary">Remembered permissions</div>
             <ul className="divide-y divide-border rounded-button border border-border">
               {grants.map(g => (
                 <li key={g.id} className="flex items-center gap-2 px-2 py-1 text-xs">
-                  <span className="min-w-0 flex-1 truncate font-mono text-fg" title={grantText(g.toolLabel)}>$ {parseDeviceGrant(g.toolLabel)?.command ?? g.toolLabel}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-fg" title={grantText(g.toolLabel)}>
+                    {g.toolLabel.endsWith('/browser_personal_profile')
+                      ? 'Personal browser'
+                      : `$ ${parseDeviceGrant(g.toolLabel)?.command ?? g.toolLabel}`}
+                  </span>
                   <span className="shrink-0 text-fg-tertiary">{GRANT_SCOPE_LABEL[g.scope]}</span>
                   <button
                     onClick={() => void run(async () => { await revokeApprovalGrant(g.id); onGrantRevoked(); })}

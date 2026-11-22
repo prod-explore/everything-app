@@ -514,6 +514,7 @@ export interface DevicePolicy {
   shell: 'allowlist' | 'strict' | 'auto';
   filesWrite: 'ask' | 'auto';
   browserAct: 'ask' | 'auto';
+  browserPersonalProfile?: 'deny' | 'ask' | 'auto';
 }
 
 export interface DeviceReport {
@@ -524,7 +525,13 @@ export interface DeviceReport {
   agentVersion: string;
   shell: { enabled: boolean; kind: 'posix' | 'powershell'; path: string };
   files: { enabled: boolean; roots: string[]; write: boolean };
-  browser: { enabled: boolean; mode: 'profile' | 'dedicated'; product: 'brave' | 'chrome' | 'edge' | 'chromium' | 'custom'; executable: string | null };
+  browser: {
+    enabled: boolean;
+    mode: 'profile' | 'dedicated' | 'both';
+    profiles?: Array<'dedicated' | 'personal'>;
+    product: 'brave' | 'chrome' | 'edge' | 'chromium' | 'custom';
+    executable: string | null;
+  };
 }
 
 export interface DeviceInfo {

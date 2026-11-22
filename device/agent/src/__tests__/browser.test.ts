@@ -67,6 +67,38 @@ describe('device browser launch settings', () => {
     }
   });
 
+  it('dual-profile pool enforces personal approval and allows separate dedicated + personal sessions concurrently', async () => {
+    const fakeLauncher = {
+      launch: async (state: { profile?: string }) => ({
+        context: { close: async () => {}, on: () => {} },
+        page: { on: () => {} },
+        profile: state.profile,
+      }),
+    };
+    const pool = new DevicePool({
+      maxSessions: 2,
+      idleTimeoutMs: 1e9,
+      watchdogIntervalMs: 1e9,
+      defaultProfile: 'dedicated',
+      requirePersonalApproval: true,
+      makeLauncher: () => fakeLauncher as never,
+    });
+    try {
+      await assert.rejects(
+        pool.claim('chat-personal', { profile: 'personal' }),
+        /explicit user approval/,
+      );
+      await pool.claim('chat-dedicated', { profile: 'dedicated' });
+      await pool.claim('chat-personal', { profile: 'personal', personalApproved: true });
+      await assert.rejects(
+        pool.claim('chat-third', { profile: 'personal', personalApproved: true }),
+        BrowserInUseError,
+      );
+    } finally {
+      pool.stopWatchdog();
+    }
+  });
+
   it('profile mode refuses to launch while the profile is open, naming the browser and the way out', async () => {
     const dir = await mkdtemp(nodePath.join(tmpdir(), 'evv-prof-'));
     if (posix) await symlink(`${hostname()}-${process.pid}`, nodePath.join(dir, 'SingletonLock'));

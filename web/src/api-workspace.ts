@@ -113,6 +113,19 @@ export const scm = {
   stash: (p: string, dir: string, action: 'list' | 'push' | 'pop' | 'apply' | 'drop', index?: number, message?: string) =>
     request<{ output: string }>(`/api/projects/${p}/scm/stash`, post({ dir, action, index, message })),
   resolve: (p: string, dir: string, path: string, content: string) => request(`/api/projects/${p}/scm/resolve`, post({ dir, path, content })),
-  sync: (p: string, dir: string, action: 'fetch' | 'pull' | 'push' | 'clone', url?: string) =>
-    request<{ output: string }>(`/api/projects/${p}/scm/sync`, post({ dir, action, url })),
+  sync: (
+    p: string,
+    dir: string,
+    action: 'fetch' | 'pull' | 'push' | 'clone',
+    url?: string,
+    opts?: { dir?: string; branch?: string; depth?: number },
+  ) =>
+    request<{ output: string; dir?: string; path?: string; owner?: string; repo?: string }>(
+      `/api/projects/${p}/scm/sync`,
+      post(
+        action === 'clone'
+          ? { action, url, ...(opts?.dir ? { dir: opts.dir } : {}), ...(opts?.branch ? { branch: opts.branch } : {}), ...(opts?.depth ? { depth: opts.depth } : {}) }
+          : { dir, action, url },
+      ),
+    ),
 };

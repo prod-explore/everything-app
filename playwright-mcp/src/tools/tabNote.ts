@@ -14,7 +14,8 @@ export function formatTabs(session: Pick<SessionHandle, 'tabs'>): string {
   const rows = tabs.all().map(t => {
     const url = t.page.url().slice(0, 200) || 'about:blank';
     const title = t.title ? ` — title (page-supplied): ${JSON.stringify(t.title.slice(0, 80))}` : '';
-    return `[${t.id}]${t.id === activeId ? ' (active)' : ''} ${url}${title}`;
+    const originTag = t.origin === 'user' ? ' (user)' : '';
+    return `[${t.id}]${t.id === activeId ? ' (active)' : ''}${originTag} ${url}${title}`;
   });
   return `Tabs (${tabs.size} of at most ${tabs.max}; the active one is what browser_observe and browser_act work on):\n${rows.join('\n')}`;
 }

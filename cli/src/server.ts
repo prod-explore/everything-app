@@ -37,6 +37,7 @@ import { ACTIVE_STATUSES, addRunUsage, createRun, drainRunMessages, getRun, hear
 import { OrchestratorSupervisorClient, SANDBOX_UNREACHABLE, SupervisorExec, guessMime, type SandboxExec, type SandboxInventory, type SandboxLifecycle } from './supervisor-client.js';
 import { GitHubCredentials } from './github.js';
 import { createGithubRoutes, latestOwnerConversation } from './github-routes.js';
+import { GITHUB_TOOLS_PROMPT, githubVirtualTools } from './github-tools.js';
 import { Scheduler, type RunOutcome } from './scheduler.js';
 import { createScheduleRoutes } from './schedule-routes.js';
 import { deleteSchedule, type Schedule } from './schedules.js';
@@ -394,8 +395,73 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   const ledger = new UsageLedger(db);
   const sse = new SSEManager();
   // ─── Device bridge: the user's own machines as MCP servers (docs/devices.md, ADR 0017–0020) ───
-  const devices = createDeviceService({ db, registry, onChange: id => sse.emitAll('devices:changed', { id }) });
+  const activePersonalBrowsers = new Set<string>();
+  const devices = createDeviceService({
+    db,
+    registry,
+    onChange: id => {
+      if (!devices.hub.isOnline(id)) {
+        const onlineNames = new Set(devices.hub.list().map(d => d.connectionName));
+        for (const key of activePersonalBrowsers) {
+          const conn = key.slice(key.indexOf(':') + 1);
+          if (!onlineNames.has(conn)) activePersonalBrowsers.delete(key);
+        }
+      }
+      sse.emitAll('devices:changed', { id });
+    },
+  });
   approvalGate.setCommandScopeResolver(devices.commandScope);
+
+  function deviceBrowserGateFor(convId: string | null | undefined): ConversationDeps['deviceBrowserGate'] {
+    return {
+      checkPersonalProfile(toolName, args) {
+        if (!toolName.startsWith('device-')) return { required: false };
+        const sep = toolName.indexOf('__');
+        if (sep < 0) return { required: false };
+        const connName = toolName.slice(0, sep);
+        const real = toolName.slice(sep + 2);
+        if (real !== 'browser_open' && real !== 'browser_tabs') return { required: false };
+        const row = devices.store.getBySlug(connName.slice('device-'.length));
+        if (!row?.report?.browser.enabled) return { error: `Browser control is not enabled on ${row?.name ?? connName}.` };
+        const mode = row.report.browser.mode;
+        const rawProfile = args['profile'];
+        if (rawProfile !== undefined && rawProfile !== 'dedicated' && rawProfile !== 'personal') {
+          return { error: `Invalid browser profile "${String(rawProfile)}" — expected "dedicated" or "personal".` };
+        }
+        const key = `${convId ?? ''}:${connName}`;
+        let target: 'dedicated' | 'personal';
+        if (mode === 'profile') {
+          if (rawProfile === 'dedicated') return { error: `${row.name} only enables your personal browser profile (mode="profile").` };
+          target = 'personal';
+        } else if (mode === 'dedicated') {
+          if (rawProfile === 'personal') return { error: `${row.name} is set to Dedicated browser mode only; switch it to "both" in the tray app to allow personal profile.` };
+          target = 'dedicated';
+        } else {
+          if (rawProfile === 'personal') target = 'personal';
+          else if (rawProfile === 'dedicated') target = 'dedicated';
+          else target = real === 'browser_tabs' && activePersonalBrowsers.has(key) ? 'personal' : 'dedicated';
+        }
+        if (target !== 'personal') return { required: false };
+        return {
+          required: true,
+          policy: row.policy.browserPersonalProfile,
+          label: `${connName}/browser_personal_profile`,
+          deviceName: row.name,
+          browser: row.report.browser.product,
+          alreadyActive: activePersonalBrowsers.has(key),
+        };
+      },
+      markPersonalActive(toolName, active) {
+        if (!convId || !toolName.startsWith('device-')) return;
+        const sep = toolName.indexOf('__');
+        if (sep < 0) return;
+        const connName = toolName.slice(0, sep);
+        const key = `${convId}:${connName}`;
+        if (active) activePersonalBrowsers.add(key);
+        else activePersonalBrowsers.delete(key);
+      },
+    };
+  }
   /**
    * Model for chats that have none of their own: the `chat` slot — the user's explicit default, else a usable `free`
    * model, else any usable chat model — and finally the configured DEFAULT_MODEL (may be empty: then the turn says
@@ -459,10 +525,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
       humanInputTool({ convId: run.conversationId ?? '', projectId: run.projectId, runId: run.id, agent: run.label }, signal),
       reportTool({ convId: run.conversationId ?? '', projectId: run.projectId, runId: run.id, agent: run.label }),
       // Narrowing like every other tool: a worker gets the file tools only when its parent delegated them by name.
-      ...[...workspaceFileTools(run.conversationId, run.id), ...webToolsFor(run.conversationId), ...deviceTransferToolsFor(run.conversationId, run.id)].filter(t => run.tools.includes(t.definition.name)),
+      ...[...workspaceFileTools(run.conversationId, run.id), ...webToolsFor(run.conversationId), ...deviceTransferToolsFor(run.conversationId, run.id), ...githubToolsFor(run.conversationId, run.id)].filter(t => run.tools.includes(t.definition.name)),
     ],
-    delegableTools: run => [...workspaceFileTools(run.conversationId, run.id), ...webToolsFor(run.conversationId), ...deviceTransferToolsFor(run.conversationId, run.id)].map(t => t.definition.name),
+    delegableTools: run => [...workspaceFileTools(run.conversationId, run.id), ...webToolsFor(run.conversationId), ...deviceTransferToolsFor(run.conversationId, run.id), ...githubToolsFor(run.conversationId, run.id)].map(t => t.definition.name),
     webGrantedHosts: run => webHostsFor(run.conversationId, run.projectId, run.model)(),
+    deviceBrowserGate: run => deviceBrowserGateFor(run.conversationId),
   });
   /** Active root run per conversation — async Gazeta answers are delivered into it while a turn runs. */
   const activeRootRun = new Map<string, string>();
@@ -622,6 +689,20 @@ ${formatHumanResponse(response)}` };
     });
   }
 
+  function githubToolsFor(convId: string | null, runId?: string): VirtualTool[] {
+    const conv = convId ? getConversation(db, convId) : null;
+    if (!convId || !conv || conv.ghost) return [];
+    return githubVirtualTools({
+      db,
+      owner: conv.projectId ?? convId,
+      convId,
+      runId,
+      listAccountRepos: github.listAccountRepos,
+      listWorkspaceRepos: github.listWorkspaceRepos,
+      cloneRepo: github.cloneGithubRepo,
+    });
+  }
+
   function buildVirtualTools(convId: string, rootRunId: string, signal: AbortSignal, unattended = false, wakeChain?: number): VirtualTool[] {
     const conv = getConversation(db, convId);
     // Time tools: in a chat the user is in, both; in a wake-up, only another wake-up (a task that creates tasks would run away).
@@ -639,6 +720,7 @@ ${formatHumanResponse(response)}` };
       ...workspaceFileTools(convId, rootRunId),
       ...webToolsFor(convId),
       ...deviceTransferToolsFor(convId, rootRunId),
+      ...githubToolsFor(convId, rootRunId),
       // The one browser can look at the chat's own dev server (not in a ghost chat: it has no browser).
       ...(conv && !conv.ghost ? [previewTool({ owner: conv.projectId ?? convId, link: o => supervisor.preview(o) })] : []),
     ];
@@ -1366,7 +1448,15 @@ ${formatHumanResponse(response)}` };
           if (agentsFile.trim()) effectiveSystem += '\n\n' + projectInstructionsPrompt(agentsFile);
           effectiveSystem += '\n\n' + FILE_TOOLS_PROMPT;
         }
-        effectiveSystem += '\n\n' + (conv.ghost ? GHOST_PROMPT : WEB_TOOLS_PROMPT + ' ' + PREVIEW_PROMPT);
+        effectiveSystem += '\n\n' + (conv.ghost ? GHOST_PROMPT : WEB_TOOLS_PROMPT + ' ' + PREVIEW_PROMPT + ' ' + GITHUB_TOOLS_PROMPT);
+        if (!conv.ghost) {
+          const dualDevices = devices.hub.list()
+            .map(live => ({ live, row: devices.store.get(live.deviceId) }))
+            .filter(({ row }) => row?.report?.browser.enabled && row.report.browser.mode === 'both');
+          if (dualDevices.length > 0) {
+            effectiveSystem += `\n\nDevice dual-profile browsers online (${dualDevices.map(d => `${d.row!.name} / ${d.live.connectionName}`).join(', ')}): \`dedicated\` is the default profile for clean browsing; pass \`profile: "personal"\` on \`browser_open\` or \`browser_tabs(action: "list")\` only when the user wants you to use their logged-in personal profile or open tabs (requires user approval, plus per-domain approval before reading any tab content).`;
+          }
+        }
         const wakeTurn = opts.wakeChain !== undefined;
         if (!conv.ghost && (!opts.unattended || wakeTurn)) effectiveSystem += '\n\n' + schedulingPrompt(new Date(), USER_TIMEZONE, opts.unattended === true);
         if (opts.unattended) {
@@ -1414,16 +1504,17 @@ ${formatHumanResponse(response)}` };
         const toolDefs = turnTools.toLlmTools() as Llm.Tool[];
 
         // Summarise the older part of the conversation with the helper model (or the chat model itself).
-        const compactNow = async (tight: boolean): Promise<boolean> => {
+        const compactNow = async (tight: boolean, limitHint?: number): Promise<boolean> => {
           const bg = backgroundModel(db, router, { localOnly: conv.ghost });
           const via = bg ?? { model: effectiveModel, provider, client: client as LlmClient };
+          const effectiveLimit = info.contextLength ?? limitHint;
           try {
             const r = await compactConversation(db, convId, {
               llm: via.client,
               model: via.model,
               beforeId: userMessageId,
               keepTurns: tight ? 2 : 3,
-              maxTailTokens: info.contextLength ? Math.floor(info.contextLength * (tight ? 0.25 : 0.35)) : undefined,
+              maxTailTokens: effectiveLimit ? Math.floor(effectiveLimit * (tight ? 0.25 : 0.35)) : (tight ? 16_000 : undefined),
               signal: controller.signal,
               onUsage: usage => ledger.record({ conversationId: convId, provider: via.provider, model: via.model, usage }),
             });
@@ -1496,6 +1587,7 @@ ${m.body}`),
             projectId: conv.projectId ?? undefined,
             browserPolicy: browserPolicy(),
             webAccess: conv.ghost ? undefined : { grantedHosts: webHostsFor(convId, conv.projectId, effectiveModel), ownHost: previewHostFor(conv.projectId ?? convId) },
+            deviceBrowserGate: conv.ghost ? undefined : deviceBrowserGateFor(convId),
             confirm: async (label, args, opts) => {
               const decision = await approvalGate.confirmDetailed(convId, label, args, controller.signal, {
                 projectId: conv.projectId ?? undefined,
@@ -1527,7 +1619,8 @@ ${m.body}`),
           // "Context too long" on a request that ran no tool yet is safe to repeat once on a compacted history;
           // after tools ran, repeating could redo their effects, so that case is reported instead.
           // Nothing of this attempt may be stored yet, or the repeat would store the same steps twice.
-          if (classifyTurnError(err).kind === 'context_too_long' && !toolRan && !storedAny && !controller.signal.aborted && (await compactNow(true))) {
+          const incident = classifyTurnError(err);
+          if (incident.kind === 'context_too_long' && !toolRan && !storedAny && !controller.signal.aborted && (await compactNow(true, incident.limit))) {
             history = llmHistory(db, convId, userMessageId);
             updatedHistory = await runTurn(runDeps, history, content);
           } else {

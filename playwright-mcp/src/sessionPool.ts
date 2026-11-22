@@ -29,13 +29,16 @@ export interface SessionHandle {
 
 /** Seam for tests — real launch requires a Chromium binary this container may not have. */
 export interface ContextLauncher {
-  launch(state: SessionState): Promise<{ context: BrowserContext; page: Page }>;
+  launch(state: SessionState): Promise<{ context: BrowserContext; page: Page; existingPages?: Page[] }>;
 }
 
 export interface ClaimOptions {
   /** Effective policy for a NEW session (an existing session keeps its own; tools update it). */
   policy?: EffectivePolicy;
   override?: PolicyOverride;
+  persistentProfile?: boolean;
+  profile?: 'dedicated' | 'personal';
+  personalApproved?: boolean;
 }
 
 /**
@@ -101,7 +104,10 @@ export class BrowserSessionPool {
 
     const launcher = this.opts.makeLauncher(conversationId);
     const state = newSessionState(opts.policy, opts.override);
-    const { context, page } = await launcher.launch(state);
+    if (opts.persistentProfile !== undefined) state.persistentProfile = opts.persistentProfile;
+    if (opts.profile !== undefined) state.profile = opts.profile;
+    if (opts.personalApproved !== undefined) state.personalApproved = opts.personalApproved;
+    const { context, page, existingPages } = await launcher.launch(state);
     const tabs = new TabSet({
       max: this.opts.maxTabs ?? 6,
       notify: message => pushEvent(state, message),
@@ -120,10 +126,15 @@ export class BrowserSessionPool {
       lastActivityAt: new Date(),
       currentUrl: null,
     };
-    tabs.add(page);
+    for (const p of existingPages ?? []) {
+      if (p !== page) tabs.add(p, { origin: 'user' });
+    }
+    const agentTab = tabs.add(page, { origin: 'agent' });
+    if (agentTab) tabs.activate(agentTab.id);
     // Pages the session opens later (window.open, target=_blank, a tab the person or the agent opens) join the set.
     context.on('page', p => {
-      if (tabs.add(p) && handle.viewport) void p.setViewportSize(handle.viewport).catch(() => {});
+      const origin = state.persistentProfile && state.agentActing === 0 ? 'user' : 'agent';
+      if (tabs.add(p, { origin }) && handle.viewport) void p.setViewportSize(handle.viewport).catch(() => {});
     });
     this.sessions.set(conversationId, handle);
     this.ensureWatchdog();

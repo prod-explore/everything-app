@@ -211,4 +211,27 @@ describe('a session with tabs', () => {
     assert.deepEqual(tabsOf(session).map(t => [t.id, t.active]), [[1, false], [tab.id, true]]);
     pool.stopWatchdog();
   });
+
+  it('user tabs never count toward maxTabs and are never auto-closed', () => {
+    const { set, notices } = newSet(2);
+    // 4 pre-existing user tabs + 2 agent tabs within max=2
+    for (let i = 0; i < 4; i++) {
+      const p = fakePage(`https://user-${i}.example/`);
+      const t = set.add(asPage(p), { origin: 'user' });
+      assert.ok(t);
+      assert.equal(p.closed, false);
+    }
+    assert.equal(set.hasRoom(), true);
+    assert.ok(set.add(asPage(fakePage()), { origin: 'agent' }));
+    assert.ok(set.add(asPage(fakePage()), { origin: 'agent' }));
+    assert.equal(set.hasRoom(), false);
+    const overflow = fakePage();
+    assert.equal(set.add(asPage(overflow), { origin: 'agent' }), null);
+    assert.equal(overflow.closed, true);
+    // A 5th user-opened tab still opens freely!
+    const userTab5 = fakePage('https://github.com');
+    assert.ok(set.add(asPage(userTab5), { origin: 'user' }));
+    assert.equal(userTab5.closed, false);
+    assert.equal(notices.length, 1);
+  });
 });

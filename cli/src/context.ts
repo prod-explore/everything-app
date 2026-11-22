@@ -89,6 +89,49 @@ export function trimForContext(
   return trimmed > 0 ? { messages: out, trimmed } : { messages, trimmed: 0 };
 }
 
+/**
+ * Aggressively shrinks a request-only message view after a mid-turn `context_too_long` failure:
+ * 1) Stubs older tool outputs down to `targetTokens`.
+ * 2) If still over target, drops the oldest user turns at valid `isUserTurn` boundaries while preserving the
+ *    most recent user turn and any subsequent tool calls/results in the current turn.
+ */
+export function shrinkMessagesForOverflow(
+  messages: Llm.MessageParam[],
+  overheadTokens: number,
+  targetTokens: number,
+): Llm.MessageParam[] {
+  let view = trimForContext(messages, targetTokens, overheadTokens).messages;
+  if (estimateTokens(view) + overheadTokens <= targetTokens) return view;
+
+  const userTurnIndices: number[] = [];
+  view.forEach((m, i) => {
+    if (isUserTurn(m)) userTurnIndices.push(i);
+  });
+  const latestUserIdx = userTurnIndices.at(-1) ?? 0;
+  for (let i = 1; i < userTurnIndices.length; i++) {
+    const cut = userTurnIndices[i]!;
+    if (cut > latestUserIdx) break;
+    const sliced = view.slice(cut);
+    view = sliced;
+    if (estimateTokens(view) + overheadTokens <= targetTokens) return view;
+  }
+
+  // Last resort on a huge single-turn payload: truncate long tool_result strings inside the kept tail.
+  const clipped = view.map((m): Llm.MessageParam => {
+    if (!Array.isArray(m.content) || !m.content.some(b => b.type === 'tool_result')) return m;
+    let changed = false;
+    const blocks = m.content.map((b): Llm.ContentBlockParam => {
+      if (b.type !== 'tool_result' || typeof b.content !== 'string' || b.content.length <= 6000) return b;
+      changed = true;
+      const head = b.content.slice(0, 2500);
+      const tail = b.content.slice(-2500);
+      return { ...b, content: `${head}\n[... truncated ${b.content.length - 5000} chars to fit context limit ...]\n${tail}` };
+    });
+    return changed ? { role: m.role, content: blocks } : m;
+  });
+  return clipped;
+}
+
 const IMAGE_DROPPED = '[An image from an earlier tool call was dropped to save context. Run the tool again if you need to see it.]';
 
 /**

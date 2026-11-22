@@ -59,6 +59,10 @@ export function toolLabel(toolName: string, args: Args, running: boolean): ToolL
       return { icon: Terminal, label: r('Ran a command', 'Running a command'), detail: clip(str(args, 'command', 'cmd')) };
     case 'git_op':
       return { icon: GitBranch, label: r('Used git', 'Using git'), detail: clip(str(args, 'op', 'operation', 'command')) };
+    case 'github_list_repos':
+      return { icon: GitBranch, label: r('Listed GitHub repos', 'Listing GitHub repos'), detail: clip(str(args, 'query', 'visibility')) };
+    case 'github_clone_repo':
+      return { icon: GitBranch, label: r('Cloned a repository', 'Cloning a repository'), detail: clip(str(args, 'repo', 'dir')) };
     case 'read_file':
       return { icon: FileText, label: r('Read a file', 'Reading a file'), detail: clip(str(args, 'path', 'file')) };
     case 'write_file':
@@ -105,6 +109,9 @@ function deviceToolLabel(device: string, tool: string, args: Args): ToolLabel {
   }
   if (tool.startsWith('fs_') || tool.startsWith('_fs_')) {
     return { icon: FileText, label: `${device} · Files`, detail: clip(str(args, 'path')) };
+  }
+  if (tool === 'browser_personal_profile') {
+    return { icon: Globe, label: `${device} · Personal browser`, detail: host(str(args, 'url')) ?? clip(str(args, 'action')) };
   }
   if (tool.startsWith('browser_')) {
     return { icon: Globe, label: `${device} · Browser`, detail: tool === 'browser_open' ? host(str(args, 'url')) : clip(str(args, 'label', 'action', 'url')) };

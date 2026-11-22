@@ -31,6 +31,7 @@
 set -euo pipefail
 
 CHAIN="EA-EGRESS"
+IN_CHAIN="EA-EGRESS-IN"
 BRIDGES=(${EGRESS_BRIDGES:-br-ea-browser br-ea-sandbox})
 ALLOW=(${EGRESS_ALLOW:-})
 PRIVATE=(0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4)
@@ -43,10 +44,24 @@ exists() { [[ "${DRY_RUN:-0}" == "1" ]] && return 1; iptables "$@" 2>/dev/null; 
 
 remove() {
   for br in "${BRIDGES[@]}"; do
+    # Remove any legacy direct INPUT drops from older versions of this script.
     while exists -C INPUT -i "$br" -m conntrack --ctstate NEW -j DROP; do ipt -D INPUT -i "$br" -m conntrack --ctstate NEW -j DROP; done
   done
+  while exists -C INPUT -j "$IN_CHAIN"; do ipt -D INPUT -j "$IN_CHAIN"; done
+  if exists -L "$IN_CHAIN" -n; then ipt -F "$IN_CHAIN"; ipt -X "$IN_CHAIN"; fi
   while exists -C DOCKER-USER -j "$CHAIN"; do ipt -D DOCKER-USER -j "$CHAIN"; done
   if exists -L "$CHAIN" -n; then ipt -F "$CHAIN"; ipt -X "$CHAIN"; fi
+}
+
+allow_entry() {
+  local chain="$1" br="$2" entry="$3"
+  local ip="${entry%%:*}" port=""
+  [[ "$entry" == *:* ]] && port="${entry##*:}"
+  if [[ -n "$port" ]]; then
+    ipt -A "$chain" -i "$br" -d "$ip" -p tcp --dport "$port" -j RETURN
+  else
+    ipt -A "$chain" -i "$br" -d "$ip" -j RETURN
+  fi
 }
 
 apply() {
@@ -54,36 +69,44 @@ apply() {
   exists -L DOCKER-USER -n || { ipt -N DOCKER-USER; ipt -A DOCKER-USER -j RETURN; }
   remove
   ipt -N "$CHAIN"
+  ipt -N "$IN_CHAIN"
   # 1. replies / related traffic of connections that were allowed
   ipt -A "$CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  ipt -A "$IN_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
   for br in "${BRIDGES[@]}"; do
     # 2. bridge-local traffic is not ours to judge here
     ipt -A "$CHAIN" -i "$br" -o "$br" -j RETURN
-    # 3. explicit operator exceptions (e.g. a NAS the browser may read)
+    # 3. explicit operator exceptions (e.g. git-proxy published port or NAS the browser may read)
     for entry in "${ALLOW[@]}"; do
+      allow_entry "$CHAIN" "$br" "$entry"
+      allow_entry "$IN_CHAIN" "$br" "$entry"
+      # Published Docker bridge ports undergo DNAT in nat/PREROUTING before DOCKER-USER sees them,
+      # changing destination from host gateway IP to container IP — match the pre-DNAT destination too.
       ip="${entry%%:*}"; port=""
       [[ "$entry" == *:* ]] && port="${entry##*:}"
       if [[ -n "$port" ]]; then
-        ipt -A "$CHAIN" -i "$br" -d "$ip" -p tcp --dport "$port" -j RETURN
+        ipt -A "$CHAIN" -i "$br" -m conntrack --ctstate DNAT --ctorigdst "$ip" -p tcp --ctorigdstport "$port" -j RETURN
       else
-        ipt -A "$CHAIN" -i "$br" -d "$ip" -j RETURN
+        ipt -A "$CHAIN" -i "$br" -m conntrack --ctstate DNAT --ctorigdst "$ip" -j RETURN
       fi
     done
     # 4. no NEW connections from the bridge to private/reserved ranges
     for cidr in "${PRIVATE[@]}"; do
       ipt -A "$CHAIN" -i "$br" -d "$cidr" -m conntrack --ctstate NEW -j DROP
     done
-    # 5. nor to the host itself (its LAN IP, docker gateway, services bound on 0.0.0.0)
-    ipt -I INPUT 1 -i "$br" -m conntrack --ctstate NEW -j DROP
+    # 5. nor to the host itself (its LAN IP, docker gateway, services bound on 0.0.0.0) unless allowed above
+    ipt -A "$IN_CHAIN" -i "$br" -m conntrack --ctstate NEW -j DROP
   done
-  # Everything else (public internet) falls through to Docker's own rules.
+  # Everything else falls through cleanly.
   ipt -A "$CHAIN" -j RETURN
+  ipt -A "$IN_CHAIN" -j RETURN
   ipt -I DOCKER-USER 1 -j "$CHAIN"
+  ipt -I INPUT 1 -j "$IN_CHAIN"
 }
 
 case "${1:-}" in
   apply)  apply ;;
   remove) remove ;;
-  status) iptables -S "$CHAIN"; iptables -S INPUT | grep -E "$(IFS='|'; echo "${BRIDGES[*]}")" || true ;;
+  status) iptables -S "$CHAIN" || true; iptables -S "$IN_CHAIN" || true ;;
   *) echo "usage: $0 apply|remove|status" >&2; exit 2 ;;
 esac

@@ -773,12 +773,54 @@ describe('model metadata for the context window and reasoning effort', () => {
     const t = await boot({ script: () => msg([text('x')], 'end_turn') });
     try {
       assert.equal(getModelInfo('@t/m').supportsEffort, false);
-      assert.equal((await req(t.port, 'PATCH', '/api/models', { id: '@t/m', supportsEffort: true, contextLength: 32000 })).status, 200);
-      assert.deepEqual([getModelInfo('@t/m').supportsEffort, getModelInfo('@t/m').contextLength], [true, 32000]);
-      assert.equal((await req(t.port, 'PATCH', '/api/models', { id: '@t/m', supportsEffort: null, contextLength: null })).status, 200);
-      assert.deepEqual([getModelInfo('@t/m').supportsEffort, getModelInfo('@t/m').contextLength], [false, undefined]);
+    assert.equal((await req(t.port, 'PATCH', '/api/models', { id: '@t/m', supportsEffort: true, contextLength: 32000 })).status, 200);
+    assert.deepEqual([getModelInfo('@t/m').supportsEffort, getModelInfo('@t/m').contextLength], [true, 32000]);
+    assert.equal((await req(t.port, 'PATCH', '/api/models', { id: '@t/m', supportsEffort: null, contextLength: null })).status, 200);
+    assert.deepEqual([getModelInfo('@t/m').supportsEffort, getModelInfo('@t/m').contextLength], [false, undefined]);
     } finally {
       t.stop();
     }
+  });
+
+  it('parses legacy bridge char limits and recovers mid-turn on context_length_exceeded without re-running tools', async () => {
+    assert.equal(
+      classifyError(new ProviderHttpError('mindgate', 400, 'Prompt is 175000 characters; the limit of this provider is 150000.')).limit,
+      Math.floor(150000 / 3.5),
+    );
+    assert.equal(
+      classifyError(new ProviderHttpError('mindgate', 400, 'Prompt body is 420000 characters; maximum context length is 100000 tokens (400000 characters for this bridge).')).limit,
+      100000,
+    );
+
+    const calls: Llm.MessageCreateParamsNonStreaming[] = [];
+    let toolRuns = 0;
+    const reg = new ToolRegistry(['s__read_file']);
+    await reg.loadFrom([{
+      name: 's',
+      async listTools() { return [{ name: 'read_file', description: 'read', inputSchema: { type: 'object' } }]; },
+      async callTool() { toolRuns++; return { text: 'B'.repeat(20_000), isError: false }; },
+    }]);
+
+    let callIdx = 0;
+    const llm: LlmClient = {
+      messages: {
+        async create(p) {
+          calls.push(JSON.parse(JSON.stringify(p)));
+          callIdx++;
+          if (callIdx === 1) return msg([toolUse('u1', 's__read_file', {})], 'tool_use');
+          if (callIdx === 2) throw new ProviderHttpError('mindgate', 400, '{"error":{"code":"context_length_exceeded","message":"maximum context length is 4000 tokens"}}');
+          return msg([text('Recovered after shrink')], 'end_turn');
+        },
+      },
+    };
+    const prior = [
+      userText('old turn 1 ' + 'X'.repeat(8_000)),
+      asstText('old answer 1 ' + 'Y'.repeat(8_000)),
+    ];
+    const out = await runTurn({ ...base, llm, tools: reg }, prior, 'new question');
+    assert.equal(toolRuns, 1, 'tool executed once and was NOT re-run');
+    assert.equal(calls.length, 3, 'retried step 2 once with shrunk history');
+    assert.ok(estimateTokens(calls[2]!.messages) < estimateTokens(calls[1]!.messages));
+    assert.match(JSON.stringify(out.at(-1)), /Recovered after shrink/);
   });
 });

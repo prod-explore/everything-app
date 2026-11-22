@@ -26,6 +26,8 @@ export function parseDeviceGrant(label: string): { device: string; command: stri
 export function grantText(label: string): string {
   const d = parseDeviceGrant(label);
   if (d) return `${d.device} $ ${d.command}`;
+  const devTool = parseDeviceTool(label);
+  if (devTool?.tool === 'browser_personal_profile') return `${devTool.device} · Personal browser`;
   return label.replace(/^cmd:/, '$ ');
 }
 

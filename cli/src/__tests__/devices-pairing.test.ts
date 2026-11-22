@@ -220,7 +220,7 @@ describe('device REST API', () => {
       assert.deepEqual(Object.keys(d).sort(), ['agentVersion', 'connectedAt', 'connectionName', 'createdAt', 'id', 'lastSeenAt', 'name', 'online', 'platform', 'policy', 'report', 'tools']);
       assert.equal(d.name, 'Work PC');
       assert.equal(d.online, false);
-      assert.deepEqual(d.policy, { shell: 'allowlist', filesWrite: 'ask', browserAct: 'ask' });
+      assert.deepEqual(d.policy, { shell: 'allowlist', filesWrite: 'ask', browserAct: 'ask', browserPersonalProfile: 'ask' });
       assert.equal(d.report, null);
       assert.deepEqual(d.tools, []);
     } finally { t.close(); }
@@ -282,8 +282,8 @@ describe('device REST API', () => {
       assert.equal(patched.status, 200);
       assert.equal(patched.json.name, 'Renamed');
       assert.equal(patched.json.connectionName, 'device-pc', 'the connection name does not follow the display name');
-      assert.deepEqual(patched.json.policy, { shell: 'auto', filesWrite: 'auto', browserAct: 'ask' });
-      for (const bad of [{ policy: { shell: 'yolo' } }, { policy: { filesWrite: 'allowlist' } }, { policy: { extra: 1 } }, { policy: 'auto' }, { name: '' }]) {
+      assert.deepEqual(patched.json.policy, { shell: 'auto', filesWrite: 'auto', browserAct: 'ask', browserPersonalProfile: 'ask' });
+      for (const bad of [{ policy: { shell: 'yolo' } }, { policy: { filesWrite: 'allowlist' } }, { policy: { browserPersonalProfile: 'bogus' } }, { policy: { extra: 1 } }, { policy: 'auto' }, { name: '' }]) {
         assert.equal((await t.call('PATCH', `/api/devices/${pc.deviceId}`, bad)).status, 400, JSON.stringify(bad));
       }
       assert.equal((await t.call('PATCH', '/api/devices/0000000000000000', { name: 'x' })).status, 404);

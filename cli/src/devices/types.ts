@@ -9,18 +9,26 @@ export type DevicePlatform = (typeof PLATFORMS)[number];
 
 export type ShellLevel = 'allowlist' | 'strict' | 'auto';
 export type AskLevel = 'ask' | 'auto';
+export type PersonalProfileLevel = 'deny' | 'ask' | 'auto';
 
-/** The three levels of Settings → Devices (ADR 0019). */
+/** The permission levels of Settings → Devices (ADR 0019). */
 export interface DevicePolicy {
   shell: ShellLevel;
   filesWrite: AskLevel;
   browserAct: AskLevel;
+  browserPersonalProfile: PersonalProfileLevel;
 }
 
-export const DEFAULT_DEVICE_POLICY: DevicePolicy = { shell: 'allowlist', filesWrite: 'ask', browserAct: 'ask' };
+export const DEFAULT_DEVICE_POLICY: DevicePolicy = {
+  shell: 'allowlist',
+  filesWrite: 'ask',
+  browserAct: 'ask',
+  browserPersonalProfile: 'ask',
+};
 
 const SHELL_LEVELS: readonly string[] = ['allowlist', 'strict', 'auto'];
 const ASK_LEVELS: readonly string[] = ['ask', 'auto'];
+const PERSONAL_PROFILE_LEVELS: readonly string[] = ['deny', 'ask', 'auto'];
 
 /** A stored or submitted policy → a complete one: anything missing or unknown falls back to the (restrictive) default. */
 export function parseDevicePolicy(raw: unknown): DevicePolicy {
@@ -29,6 +37,9 @@ export function parseDevicePolicy(raw: unknown): DevicePolicy {
     shell: SHELL_LEVELS.includes(o['shell'] as string) ? (o['shell'] as ShellLevel) : DEFAULT_DEVICE_POLICY.shell,
     filesWrite: ASK_LEVELS.includes(o['filesWrite'] as string) ? (o['filesWrite'] as AskLevel) : DEFAULT_DEVICE_POLICY.filesWrite,
     browserAct: ASK_LEVELS.includes(o['browserAct'] as string) ? (o['browserAct'] as AskLevel) : DEFAULT_DEVICE_POLICY.browserAct,
+    browserPersonalProfile: PERSONAL_PROFILE_LEVELS.includes(o['browserPersonalProfile'] as string)
+      ? (o['browserPersonalProfile'] as PersonalProfileLevel)
+      : DEFAULT_DEVICE_POLICY.browserPersonalProfile,
   };
 }
 
@@ -40,7 +51,21 @@ export function validatePolicyPatch(raw: unknown): { patch: Partial<DevicePolicy
     if (key === 'shell' && SHELL_LEVELS.includes(value as string)) patch.shell = value as ShellLevel;
     else if (key === 'filesWrite' && ASK_LEVELS.includes(value as string)) patch.filesWrite = value as AskLevel;
     else if (key === 'browserAct' && ASK_LEVELS.includes(value as string)) patch.browserAct = value as AskLevel;
-    else return { error: `policy.${key}: ${key === 'shell' ? 'allowlist | strict | auto' : key === 'filesWrite' || key === 'browserAct' ? 'ask | auto' : 'unknown level'}` };
+    else if (key === 'browserPersonalProfile' && PERSONAL_PROFILE_LEVELS.includes(value as string)) {
+      patch.browserPersonalProfile = value as PersonalProfileLevel;
+    } else {
+      return {
+        error: `policy.${key}: ${
+          key === 'shell'
+            ? 'allowlist | strict | auto'
+            : key === 'filesWrite' || key === 'browserAct'
+              ? 'ask | auto'
+              : key === 'browserPersonalProfile'
+                ? 'deny | ask | auto'
+                : 'unknown level'
+        }`,
+      };
+    }
   }
   return { patch };
 }
@@ -54,7 +79,13 @@ export interface DeviceReport {
   agentVersion: string;
   shell: { enabled: boolean; kind: 'posix' | 'powershell'; path: string };
   files: { enabled: boolean; roots: string[]; write: boolean };
-  browser: { enabled: boolean; mode: 'profile' | 'dedicated'; product: 'brave' | 'chrome' | 'edge' | 'chromium' | 'custom'; executable: string | null };
+  browser: {
+    enabled: boolean;
+    mode: 'profile' | 'dedicated' | 'both';
+    profiles?: Array<'dedicated' | 'personal'>;
+    product: 'brave' | 'chrome' | 'edge' | 'chromium' | 'custom';
+    executable: string | null;
+  };
 }
 
 const str = (v: unknown, max = 200): string => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -86,7 +117,10 @@ export function parseDeviceReport(raw: unknown): DeviceReport | null {
     },
     browser: {
       enabled: browser['enabled'] === true,
-      mode: browser['mode'] === 'dedicated' ? 'dedicated' : 'profile',
+      mode: browser['mode'] === 'dedicated' ? 'dedicated' : browser['mode'] === 'both' ? 'both' : 'profile',
+      ...(Array.isArray(browser['profiles'])
+        ? { profiles: browser['profiles'].filter((p): p is 'dedicated' | 'personal' => p === 'dedicated' || p === 'personal') }
+        : {}),
       product: products.includes(browser['product'] as (typeof products)[number]) ? (browser['product'] as (typeof products)[number]) : 'custom',
       executable: typeof browser['executable'] === 'string' ? browser['executable'].slice(0, 300) : null,
     },

@@ -44,6 +44,12 @@ export interface PlaywrightConfig {
    * an ephemeral one. Unset on the server.
    */
   persistentProfile?: boolean;
+  /** Embedded use only (device agent): profiles available to choose between (`dedicated` vs `personal`). */
+  availableProfiles?: Array<'dedicated' | 'personal'>;
+  /** Embedded use only: which profile is opened when `browser_open` / `browser_tabs` omits `profile`. */
+  defaultProfile?: 'dedicated' | 'personal';
+  /** Embedded use only: refuse `personal` profile unless orchestrator sets `_personal_profile_approved: true`. */
+  requirePersonalApproval?: boolean;
 }
 
 function required(name: string): string {

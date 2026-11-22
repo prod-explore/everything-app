@@ -13,8 +13,8 @@ import type { PlaywrightConfig } from './config.js';
 
 export { registerAllTools as registerBrowserTools } from './tools/index.js';
 export { BrowserSessionPool, SessionLimitError } from './sessionPool.js';
-export type { ContextLauncher, SessionHandle, SessionPoolOptions } from './sessionPool.js';
-export { attachPageHandlers, installPolicyRoutes, newSessionState } from './browserContext.js';
+export type { ClaimOptions, ContextLauncher, SessionHandle, SessionPoolOptions } from './sessionPool.js';
+export { attachPageHandlers, installPolicyRoutes, newSessionState, withAgentAction } from './browserContext.js';
 export type { SessionState } from './browserContext.js';
 export { jsContextOptions } from './policy.js';
 export { UrlGuard } from './urlSafety.js';

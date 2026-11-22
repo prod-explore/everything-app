@@ -1,7 +1,8 @@
 import type * as Llm from './llm-types.js';
 import type { ToolRegistry } from './tool-registry.js';
 import { truncateToolOutput } from './output-truncator.js';
-import { dropOldToolImages, estimateTokens, trimForContext, TRIM_AT } from './context.js';
+import { dropOldToolImages, estimateTokens, shrinkMessagesForOverflow, trimForContext, TRIM_AT } from './context.js';
+import { classifyError } from './providers/errors.js';
 import { toolResultContent, type ToolImage } from './tool-images.js';
 import { looksDangerous } from './web-approval.js';
 import { collectContextUrls, urlIsInContext } from './web/provenance.js';
@@ -167,6 +168,14 @@ export interface ConversationDeps {
    * The first-byte clock does not run while that is in the future, so the adapter's own retry window is not cut short.
    */
   waitingUntil?: () => number;
+  /** Personal browser profile approval gate for paired device browsers (`browser_open`, `browser_tabs`, `browser_close`). */
+  deviceBrowserGate?: {
+    checkPersonalProfile: (toolName: string, args: Record<string, unknown>) =>
+      | { required: false }
+      | { required: true; policy: 'deny' | 'ask' | 'auto'; label: string; deviceName: string; browser: string; alreadyActive: boolean }
+      | { error: string };
+    markPersonalActive?: (toolName: string, active: boolean) => void;
+  };
 }
 
 /** A message the turn produced; `incomplete` marks a reply that was cut short and carries what it had so far. */
@@ -444,60 +453,89 @@ async function runLoop(
     flushNew(deps, trace); // the previous step (reply + tool results, inbox text included) is complete
 
     // What is sent may be a trimmed copy (old tool outputs stubbed); `messages` itself is never trimmed. Tool outputs in it are already truncated per result.
+    const overhead = estimateTokens([], deps.systemPrompt, toolDefs);
     const recent = dropOldToolImages(messages);
     const view = deps.contextWindow
-      ? trimForContext(recent, Math.floor(deps.contextWindow * TRIM_AT), estimateTokens([], deps.systemPrompt, toolDefs)).messages
+      ? trimForContext(recent, Math.floor(deps.contextWindow * TRIM_AT), overhead).messages
       : recent;
-    const params: Llm.MessageCreateParamsNonStreaming = {
-      model: deps.model,
-      max_tokens: deps.maxTokens ?? 4096,
-      system: deps.systemPrompt,
-      tools: toolDefs.length > 0 ? toolDefs : undefined,
-      messages: view,
-      ...(deps.reasoningEffort ? { reasoning_effort: deps.reasoningEffort } : {}),
-    };
-    // Lets the kill switch cancel a request that's already in flight, not just the next one.
-    const options = { signal: deps.signal };
-    const { onTextDelta, onThinkingDelta } = deps;
-    let response: Llm.Message;
-    if ((onTextDelta || onThinkingDelta) && deps.llm.messages.stream) {
-      const inflight: NonNullable<TurnTrace['inflight']> = { thinking: '', text: new Map<number, string>() };
-      // When the reasoning began, and how long it ran before the answer started (or the response ended).
-      const clock: { thinkingFrom?: number } = {};
-      const closeThinking = () => {
-        if (clock.thinkingFrom !== undefined && inflight.thinkingMs === undefined) inflight.thinkingMs = Date.now() - clock.thinkingFrom;
+
+    const callModel = async (reqMessages: Llm.MessageParam[], progress: { any: boolean }): Promise<Llm.Message> => {
+      const params: Llm.MessageCreateParamsNonStreaming = {
+        model: deps.model,
+        max_tokens: deps.maxTokens ?? 4096,
+        system: deps.systemPrompt,
+        tools: toolDefs.length > 0 ? toolDefs : undefined,
+        messages: reqMessages,
+        ...(deps.reasoningEffort ? { reasoning_effort: deps.reasoningEffort } : {}),
       };
-      trace.inflight = inflight;
-      const watch = watchFirstByte(deps);
-      try {
-        const stream = deps.llm.messages.stream(params, { signal: watch.signal });
-        stream.on('streamEvent', event => {
-          if (event.type !== 'content_block_delta') return;
-          if (event.delta.type === 'text_delta' && event.delta.text) {
-            watch.sawByte();
-            closeThinking();
-            inflight.text.set(event.index, (inflight.text.get(event.index) ?? '') + event.delta.text);
-            onTextDelta?.({ block: event.index, text: event.delta.text });
-          } else if (event.delta.type === 'thinking_delta' && event.delta.thinking) {
-            watch.sawByte();
-            clock.thinkingFrom ??= Date.now();
-            inflight.thinking += event.delta.thinking;
-            onThinkingDelta?.({ text: event.delta.thinking });
-          }
-        });
-        response = await stream.finalMessage();
-        closeThinking();
-        const thought = response.content.find((b): b is Llm.ThinkingBlock => b.type === 'thinking');
-        if (thought && inflight.thinkingMs !== undefined) thought.durationMs = inflight.thinkingMs;
-      } catch (err) {
-        closeThinking();
-        // The guard aborted the request: report that, not whatever the HTTP client says about being aborted.
-        throw watch.timedOut() ? new FirstByteTimeoutError(deps.firstByteTimeoutMs ?? 0) : err;
-      } finally {
-        watch.stop();
+      // Lets the kill switch cancel a request that's already in flight, not just the next one.
+      const options = { signal: deps.signal };
+      const { onTextDelta, onThinkingDelta } = deps;
+      if ((onTextDelta || onThinkingDelta) && deps.llm.messages.stream) {
+        const inflight: NonNullable<TurnTrace['inflight']> = { thinking: '', text: new Map<number, string>() };
+        // When the reasoning began, and how long it ran before the answer started (or the response ended).
+        const clock: { thinkingFrom?: number } = {};
+        const closeThinking = () => {
+          if (clock.thinkingFrom !== undefined && inflight.thinkingMs === undefined) inflight.thinkingMs = Date.now() - clock.thinkingFrom;
+        };
+        trace.inflight = inflight;
+        const watch = watchFirstByte(deps);
+        try {
+          const stream = deps.llm.messages.stream(params, { signal: watch.signal });
+          stream.on('streamEvent', event => {
+            if (event.type !== 'content_block_delta') return;
+            if (event.delta.type === 'text_delta' && event.delta.text) {
+              progress.any = true;
+              watch.sawByte();
+              closeThinking();
+              inflight.text.set(event.index, (inflight.text.get(event.index) ?? '') + event.delta.text);
+              onTextDelta?.({ block: event.index, text: event.delta.text });
+            } else if (event.delta.type === 'thinking_delta' && event.delta.thinking) {
+              progress.any = true;
+              watch.sawByte();
+              clock.thinkingFrom ??= Date.now();
+              inflight.thinking += event.delta.thinking;
+              onThinkingDelta?.({ text: event.delta.thinking });
+            }
+          });
+          const res = await stream.finalMessage();
+          closeThinking();
+          const thought = res.content.find((b): b is Llm.ThinkingBlock => b.type === 'thinking');
+          if (thought && inflight.thinkingMs !== undefined) thought.durationMs = inflight.thinkingMs;
+          return res;
+        } catch (err) {
+          closeThinking();
+          // The guard aborted the request: report that, not whatever the HTTP client says about being aborted.
+          throw watch.timedOut() ? new FirstByteTimeoutError(deps.firstByteTimeoutMs ?? 0) : err;
+        } finally {
+          watch.stop();
+        }
       }
-    } else {
-      response = await deps.llm.messages.create(params, options);
+      return deps.llm.messages.create(params, options);
+    };
+
+    const progress = { any: false };
+    let response: Llm.Message;
+    try {
+      response = await callModel(view, progress);
+    } catch (err) {
+      const incident = classifyError(err);
+      if (steps > 1 && incident.kind === 'context_too_long' && !progress.any && !deps.signal?.aborted) {
+        trace.inflight = null;
+        const currentTotal = estimateTokens(view) + overhead;
+        const target = Math.max(
+          overhead + 2_000,
+          Math.min(incident.limit ? Math.floor(incident.limit * 0.7) : Number.MAX_SAFE_INTEGER, Math.floor(currentTotal * 0.55)),
+        );
+        const shrunk = shrinkMessagesForOverflow(view, overhead, target);
+        if (estimateTokens(shrunk) + overhead < currentTotal) {
+          response = await callModel(shrunk, progress);
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
     }
     trace.inflight = null;
 
@@ -555,9 +593,55 @@ async function runLoop(
         continue;
       }
 
-      // Per-domain gate (web_fetch, browser_open): the user allows a DOMAIN once / for this chat / always, like in
-      // Antigravity's browser agent. The grant label is `web:<host>`, so it lives in the ordinary grants table.
+      // Per-domain gate (web_fetch, browser_open) & device personal profile gate (browser_open, browser_tabs):
+      // check personal profile access BEFORE per-domain prompt so denying personal profile stops cleanly.
       const real = realToolName(use.name);
+      let personalProfileApproved = false;
+      if (!virtual && (real === 'browser_open' || real === 'browser_tabs') && deps.deviceBrowserGate) {
+        const check = deps.deviceBrowserGate.checkPersonalProfile(use.name, args);
+        if ('error' in check) {
+          deps.onToolResult?.(use.name, check.error, check.error, true);
+          toolResults.push({ type: 'tool_result', tool_use_id: use.id, content: check.error, is_error: true });
+          continue;
+        }
+        if (check.required) {
+          if (check.policy === 'deny') {
+            const msgText = `Not executed — personal browser profile access is disabled for ${check.deviceName} in Settings → Devices (you can still use profile="dedicated").`;
+            deps.onToolResult?.(use.name, msgText, msgText, true);
+            toolResults.push({ type: 'tool_result', tool_use_id: use.id, content: msgText, is_error: true });
+            continue;
+          }
+          if ((check.policy === 'auto' || check.alreadyActive) && !injectionWarning) {
+            personalProfileApproved = true;
+          } else {
+            const profileDecision = await deps.confirm(
+              check.label,
+              {
+                device: check.deviceName,
+                browser: check.browser,
+                profile: 'personal',
+                action: real,
+                ...(typeof args['url'] === 'string' ? { url: args['url'] } : {}),
+                note: 'Access your personal browser profile (saved logins, cookies, and open tabs)',
+              },
+              injectionWarning ? { forcePrompt: injectionWarning } : undefined,
+            );
+            if (deps.signal?.aborted) throw new Error('Turn aborted by user (kill switch)');
+            const allowedProfile = typeof profileDecision === 'boolean' ? profileDecision : profileDecision.approved;
+            if (!allowedProfile) {
+              const reason = typeof profileDecision === 'boolean' ? undefined : profileDecision.reason;
+              const msgText = reason
+                ? `Not executed — ${reason}.`
+                : `Not executed — the user did not allow access to ${check.deviceName}'s personal browser profile.`;
+              deps.onToolResult?.(use.name, msgText, msgText, true);
+              toolResults.push({ type: 'tool_result', tool_use_id: use.id, content: msgText, is_error: true });
+              continue;
+            }
+            personalProfileApproved = true;
+          }
+        }
+      }
+
       let approvedHost: string | undefined;
       const domainGated = virtual ? use.name === 'web_fetch' : real === 'browser_open' && deps.webAccess !== undefined;
       if (domainGated) {
@@ -651,14 +735,22 @@ async function runLoop(
         if (BROWSER_TOOL_NAMES.has(real)) {
           // Hidden args belong to the orchestrator: a model could otherwise widen its own policy, approve a domain
           // itself or allow downloads. Downloads stay blocked (playwright-mcp default).
-          const { _policy: _p, _allow_downloads: _d, _approved_host: _a, ...rest } = enrichedArgs;
+          const { _policy: _p, _allow_downloads: _d, _approved_host: _a, _personal_profile_approved: _pp, ...rest } = enrichedArgs;
           enrichedArgs = rest;
           if (deps.browserPolicy || deps.webAccess) {
             enrichedArgs._policy = { ...deps.browserPolicy, ...(deps.webAccess ? { domainGrant: [...deps.webAccess.grantedHosts(), ...(deps.webAccess.ownHost ? [deps.webAccess.ownHost] : [])] } : {}) };
           }
           if (real === 'browser_open' && approvedHost) enrichedArgs._approved_host = approvedHost;
+          if (personalProfileApproved) enrichedArgs._personal_profile_approved = true;
         }
         result = await deps.tools.call(use.name, enrichedArgs);
+        if (!virtual && deps.deviceBrowserGate) {
+          if (real === 'browser_close' || (real === 'browser_open' && args['profile'] === 'dedicated' && !result.isError)) {
+            deps.deviceBrowserGate.markPersonalActive?.(use.name, false);
+          } else if (personalProfileApproved && !result.isError) {
+            deps.deviceBrowserGate.markPersonalActive?.(use.name, true);
+          }
+        }
       }
       if (virtual ? WEB_VIRTUAL_TOOLS.has(use.name) : BROWSER_TOOL_NAMES.has(real)) {
         const signal = browserInjectionSignal(result.text);

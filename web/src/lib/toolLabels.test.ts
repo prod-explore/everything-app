@@ -44,4 +44,13 @@ describe('toolLabel', () => {
   it('shows an unknown device tool under the device name', () => {
     expect(toolLabel('device-pc__whatever', undefined, false).label).toBe('PC · whatever');
   });
+
+  it('labels GitHub workspace tools and personal browser gate labels', () => {
+    expect(toolLabel('github_list_repos', { visibility: 'all' }, false)).toMatchObject({ label: 'Listed GitHub repos', detail: 'all' });
+    expect(toolLabel('github_clone_repo', { repo: 'miki/app' }, true)).toMatchObject({ label: 'Cloning a repository', detail: 'miki/app' });
+    expect(toolLabel('device-pc__browser_personal_profile', { url: 'https://github.com' }, false)).toMatchObject({
+      label: 'PC · Personal browser',
+      detail: 'github.com',
+    });
+  });
 });

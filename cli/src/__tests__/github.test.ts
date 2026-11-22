@@ -267,4 +267,61 @@ describe('GitHubCredentials', () => {
     await assert.rejects(creds.setPat('ghp_abcdef123'), /classic/);
     assert.deepEqual(await creds.setPat('github_pat_11ABC_def'), { login: 'x' });
   });
+
+  it('parseGithubRepo accepts bare github.com/owner/repo and http:// forms while rejecting host-only strings', () => {
+    assert.deepEqual(parseGithubRepo('github.com/acme/site'), { owner: 'acme', repo: 'site' });
+    assert.deepEqual(parseGithubRepo('www.github.com/acme/site.git'), { owner: 'acme', repo: 'site' });
+    assert.deepEqual(parseGithubRepo('http://github.com/acme/site'), { owner: 'acme', repo: 'site' });
+    assert.equal(parseGithubRepo('github.com/acme'), null);
+    assert.equal(parseGithubRepo('www.github.com/acme'), null);
+  });
+
+  it('supports multi-repo custom dir + branch clone, enriched scm-repos metadata, and force-rewire retry on 401', async () => {
+    let mints = 0;
+    let cloneAttempts = 0;
+    const execs: string[] = [];
+    const t = await setup({
+      fetch: fakeFetch(url => {
+        if (url.endsWith('/admin/tokens')) {
+          mints++;
+          return { status: 201, json: { token: `gpx_${mints}`, expiresAt: new Date(Date.now() + 3600e3).toISOString() } };
+        }
+        return { status: 404, json: {} };
+      }),
+      exec: async (_o, cmd) => {
+        execs.push(cmd);
+        if (cmd.includes('find . -maxdepth 3')) {
+          return { stdout: './api\thttps://github.com/acme/api.git\tmain\t2\t1\t0\n./web\thttps://github.com/acme/web\tfeat/ui\t0\t0\t3\n', stderr: '', exitCode: 0 };
+        }
+        if (cmd.includes('git clone')) {
+          cloneAttempts++;
+          if (cloneAttempts === 1) return { stdout: '', stderr: 'fatal: Authentication failed for proxy token is invalid or expired', exitCode: 128 };
+          return { stdout: 'Cloning into...', stderr: '', exitCode: 0 };
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    });
+    try {
+      const repos = await call(t.port, 'GET', `/api/projects/${t.project.id}/scm-repos`);
+      assert.deepEqual(repos.json.repos, [
+        { dir: 'api', origin: 'https://github.com/acme/api.git', owner: 'acme', repo: 'api', branch: 'main', dirty: 2, ahead: 1, behind: 0 },
+        { dir: 'web', origin: 'https://github.com/acme/web', owner: 'acme', repo: 'web', branch: 'feat/ui', dirty: 0, ahead: 0, behind: 3 },
+      ]);
+
+      const c = await call(t.port, 'POST', `/api/projects/${t.project.id}/scm/sync`, {
+        action: 'clone',
+        url: 'github.com/acme/worker',
+        dir: 'services/worker',
+        branch: 'dev',
+        depth: 1,
+      });
+      assert.equal(c.status, 200);
+      assert.equal(c.json.dir, 'services/worker');
+      assert.equal(mints, 2, 're-minted token after 401 failure');
+      assert.equal(cloneAttempts, 2, 'retried clone once after rewire');
+      assert.ok(execs.some(cmd => cmd.includes("--branch 'dev'") && cmd.includes('--depth 1') && cmd.includes("'services/worker'")));
+    } finally {
+      t.close();
+    }
+  });
 });

@@ -19,5 +19,6 @@ describe('device helpers', () => {
     expect(grantText('cmd@device-pc:git push')).toBe('PC $ git push');
     expect(grantText('cmd:npm install')).toBe('$ npm install');
     expect(grantText('web:example.com')).toBe('web:example.com');
+    expect(grantText('device-pc/browser_personal_profile')).toBe('PC · Personal browser');
   });
 });

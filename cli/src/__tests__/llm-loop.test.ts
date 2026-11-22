@@ -570,4 +570,107 @@ describe('runTurn — _project_id injection (one sandbox per project)', () => {
     assert.equal(args['_conversation_id'], 'conv-1');
     assert.equal('_project_id' in args, false);
   });
+
+  it('enforces personal browser profile approval gate, strips spoofed _personal_profile_approved, and supports deny/ask/auto', async () => {
+    const called: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const confirms: Array<{ label: string; args: Record<string, unknown> }> = [];
+    const registry = new ToolRegistry([]);
+    await registry.loadFrom([
+      {
+        name: 'device-pc',
+        autoApproves: (name: string) => name === 'browser_tabs',
+        async listTools() {
+          return [
+            { name: 'browser_tabs', description: 'tabs', inputSchema: { type: 'object' } },
+            { name: 'browser_open', description: 'open', inputSchema: { type: 'object' } },
+          ];
+        },
+        async callTool(name, args) {
+          called.push({ name, args: args ?? {} });
+          return { text: 'ok', isError: false };
+        },
+      } as McpConnectionLike,
+    ]);
+
+    // Case 1: policy = 'deny' -> never confirms and never calls tool (even if model spoofs _personal_profile_approved).
+    let active = false;
+    await runTurn(
+      {
+        llm: scriptedLlm([
+          fakeMessage([toolUseBlock('t1', 'device-pc__browser_tabs', { action: 'list', profile: 'personal', _personal_profile_approved: true })], 'tool_use'),
+          fakeMessage([textBlock('blocked')], 'end_turn'),
+        ]),
+        model: '@t/m',
+        tools: registry,
+        systemPrompt: 'sys',
+        conversationId: 'c1',
+        confirm: async (label, args) => { confirms.push({ label, args }); return true; },
+        deviceBrowserGate: {
+          checkPersonalProfile: () => ({ required: true, policy: 'deny', label: 'device-pc/browser_personal_profile', deviceName: 'PC', browser: 'brave', alreadyActive: false }),
+        },
+      },
+      [],
+      'list my tabs',
+    );
+    assert.equal(called.length, 0);
+    assert.equal(confirms.length, 0);
+
+    // Case 2: policy = 'ask' -> asks device-pc/browser_personal_profile FIRST, then injects _personal_profile_approved = true;
+    // switching to dedicated resets active flag; spoofed _personal_profile_approved is stripped when dedicated.
+    await runTurn(
+      {
+        llm: scriptedLlm([
+          fakeMessage([toolUseBlock('t2', 'device-pc__browser_tabs', { action: 'list', profile: 'personal' })], 'tool_use'),
+          fakeMessage([toolUseBlock('t3', 'device-pc__browser_open', { url: 'https://github.com', profile: 'dedicated', _personal_profile_approved: true })], 'tool_use'),
+          fakeMessage([textBlock('done')], 'end_turn'),
+        ]),
+        model: '@t/m',
+        tools: registry,
+        systemPrompt: 'sys',
+        conversationId: 'c1',
+        webAccess: { grantedHosts: () => ['github.com'] },
+        confirm: async (label, args) => { confirms.push({ label, args }); return true; },
+        deviceBrowserGate: {
+          checkPersonalProfile: (_n, args) => args['profile'] === 'personal'
+            ? { required: true, policy: 'ask', label: 'device-pc/browser_personal_profile', deviceName: 'PC', browser: 'brave', alreadyActive: active }
+            : { required: false },
+          markPersonalActive: (_n, next) => { active = next; },
+        },
+      },
+      [],
+      'check personal tabs then dedicated',
+    );
+    assert.deepEqual(confirms.map(c => c.label), ['device-pc/browser_personal_profile', 'web:github.com']);
+    assert.equal(called.length, 2);
+    assert.equal(called[0]!.args['_personal_profile_approved'], true);
+    assert.equal('_personal_profile_approved' in called[1]!.args, false, 'spoofed _personal_profile_approved stripped');
+    assert.equal(active, false, 'opening dedicated resets personal active state');
+
+    // Case 3: policy = 'auto' -> injects _personal_profile_approved without prompting for browser_personal_profile.
+    confirms.length = 0;
+    called.length = 0;
+    await runTurn(
+      {
+        llm: scriptedLlm([
+          fakeMessage([toolUseBlock('t4', 'device-pc__browser_tabs', { action: 'list', profile: 'personal' })], 'tool_use'),
+          fakeMessage([textBlock('auto ok')], 'end_turn'),
+        ]),
+        model: '@t/m',
+        tools: registry,
+        systemPrompt: 'sys',
+        conversationId: 'c1',
+        confirm: async (label, args) => { confirms.push({ label, args }); return true; },
+        deviceBrowserGate: {
+          checkPersonalProfile: () => ({ required: true, policy: 'auto', label: 'device-pc/browser_personal_profile', deviceName: 'PC', browser: 'brave', alreadyActive: false }),
+          markPersonalActive: (_n, next) => { active = next; },
+        },
+      },
+      [],
+      'list my tabs auto',
+    );
+    assert.equal(confirms.length, 0);
+    assert.equal(called.length, 1);
+    assert.equal(called[0]!.args['_personal_profile_approved'], true);
+    assert.equal(active, true);
+  });
 });

@@ -26,6 +26,7 @@ export function ScmBody({
   onCloned: (dirName: string) => void | Promise<void>;
 }) {
   const [cloneUrl, setCloneUrl] = useState(suggestedCloneUrl ?? '');
+  const [cloneError, setCloneError] = useState<string | null>(null);
   const [status, setStatus] = useState<ScmStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
@@ -33,8 +34,8 @@ export function ScmBody({
   const [diffFile, setDiffFile] = useState<{ file: ScmFile; staged: boolean } | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
 
-  useEffect(() => { setCloneUrl(suggestedCloneUrl ?? ''); }, [suggestedCloneUrl]);
-  useEffect(() => { setDiffFile(null); setConflict(null); setOutput(null); }, [dir]);
+  useEffect(() => { setCloneUrl(suggestedCloneUrl ?? ''); setCloneError(null); }, [suggestedCloneUrl]);
+  useEffect(() => { setDiffFile(null); setConflict(null); setOutput(null); setCloneError(null); }, [dir]);
 
   const refresh = useCallback(async () => {
     try {
@@ -84,19 +85,23 @@ export function ScmBody({
               e.preventDefault();
               const url = cloneUrl.trim();
               if (!url || busy) return;
-              void act('clone', async () => {
-                const r = await scm.sync(projectId, '', 'clone', url);
-                const name = url.replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:]/).pop() ?? '';
-                setCloneUrl('');
-                await onCloned(name);
-                return r;
-              });
+              setBusy('clone');
+              setCloneError(null);
+              void scm.sync(projectId, '', 'clone', url)
+                .then(async r => {
+                  const name = r.dir ?? (url.replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:]/).pop() ?? '');
+                  setCloneUrl('');
+                  if (r.output) setOutput(r.output.trim());
+                  await onCloned(name);
+                })
+                .catch(err => setCloneError((err as Error).message))
+                .finally(() => setBusy(null));
             }}
           >
             <input
               value={cloneUrl}
               onChange={e => setCloneUrl(e.target.value)}
-              placeholder="github.com/owner/repo — clone into the sandbox"
+              placeholder="owner/repo or https://github.com/owner/repo"
               aria-label="Repository URL to clone"
               className="min-w-0 flex-1 rounded border border-border bg-bg px-2 py-1 text-fg outline-none focus:border-border-hover"
             />
@@ -104,6 +109,7 @@ export function ScmBody({
               {busy === 'clone' ? 'Cloning…' : 'Clone'}
             </button>
           </form>
+          {cloneError && <PanelMessage tone="error">{cloneError}</PanelMessage>}
           <PanelMessage>Log in to GitHub once in Settings → GitHub; every push still asks for your approval.</PanelMessage>
         </div>
       ) : (

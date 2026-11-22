@@ -183,7 +183,7 @@ describe('approval gate for device shells (ADR 0019)', () => {
 
 describe('what a device tool needs approval for (autoApproves, ADR 0019)', () => {
   const ask = DEFAULT_DEVICE_POLICY;
-  const auto: DevicePolicy = { shell: 'auto', filesWrite: 'auto', browserAct: 'auto' };
+  const auto: DevicePolicy = { shell: 'auto', filesWrite: 'auto', browserAct: 'auto', browserPersonalProfile: 'auto' };
 
   it('is a table: reading never asks, writing and acting follow their level, shell and browser_open go elsewhere', () => {
     for (const t of ['shell_read', 'shell_list', 'shell_close', 'fs_list', 'fs_read', 'fs_search', 'browser_observe', 'browser_screenshot', 'browser_tabs', 'browser_close']) {
@@ -213,5 +213,21 @@ describe('what a device tool needs approval for (autoApproves, ADR 0019)', () =>
     assert.deepEqual(['fs_read', 'fs_write', 'browser_act', 'browser_open', 'shell_run'].map(needs), [false, false, false, true, true], 'applies to the very next call');
     r.svc.store.setPolicy(p.id, DEFAULT_DEVICE_POLICY);
     assert.equal(needs('fs_write'), true);
+  });
+
+  it('parses and validates browserPersonalProfile policy levels and mode="both" reports', async () => {
+    const { parseDevicePolicy, validatePolicyPatch, parseDeviceReport } = await import('../devices/types.js');
+    assert.equal(parseDevicePolicy({}).browserPersonalProfile, 'ask');
+    assert.equal(parseDevicePolicy({ browserPersonalProfile: 'deny' }).browserPersonalProfile, 'deny');
+    assert.equal(parseDevicePolicy({ browserPersonalProfile: 'weird' }).browserPersonalProfile, 'ask');
+    assert.deepEqual(validatePolicyPatch({ browserPersonalProfile: 'auto' }), { patch: { browserPersonalProfile: 'auto' } });
+    assert.ok('error' in validatePolicyPatch({ browserPersonalProfile: 'bad' }));
+    const rep = parseDeviceReport({
+      name: 'PC',
+      platform: 'windows',
+      browser: { enabled: true, mode: 'both', profiles: ['dedicated', 'personal', 'other'], product: 'brave', executable: null },
+    });
+    assert.equal(rep?.browser.mode, 'both');
+    assert.deepEqual(rep?.browser.profiles, ['dedicated', 'personal']);
   });
 });

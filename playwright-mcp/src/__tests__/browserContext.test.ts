@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  attachPageHandlers,
   chromiumLaunchArgs,
   contextOptionsFor,
   decideRequest,
@@ -8,6 +9,7 @@ import {
   handleDownload,
   handleFileChooser,
   newSessionState,
+  withAgentAction,
 } from '../browserContext.js';
 import { mergePolicy } from '../policy.js';
 import { UrlBlockedError } from '../urlSafety.js';
@@ -185,5 +187,58 @@ describe('user-approved domains (domainGrant)', () => {
   it('the operator denylist still wins over an approval', async () => {
     const state = newSessionState(mergePolicy({ domainDeny: ['bad.example'] }, { domainGrant: ['bad.example'] }));
     assert.equal((await decideRequest(state, okGuard, 'https://bad.example/', true)).allow, false);
+  });
+});
+
+describe('persistent user browser mode (human browsing vs agent actions)', () => {
+  it('allows browser-internal schemes when allowBrowserSchemes is true', async () => {
+    const policy = { ...mergePolicy({}, { domainGrant: ['allowed.example'] }), allowBrowserSchemes: true };
+    const state = newSessionState(policy);
+    state.persistentProfile = true;
+    assert.equal((await decideRequest(state, privateGuard, 'chrome-extension://abcdef/popup.html', true)).allow, true);
+    assert.equal((await decideRequest(state, privateGuard, 'brave://settings', true)).allow, true);
+    assert.equal((await decideRequest(state, privateGuard, 'file:///etc/passwd', true)).allow, false);
+  });
+
+  it('lets a human browse unapproved domains (e.g. github.com) freely when agentActing === 0, while blocking unapproved agent navigations', async () => {
+    const policy = { ...mergePolicy({}, { domainGrant: ['docs.example'] }), allowBrowserSchemes: true };
+    const state = newSessionState(policy);
+    state.persistentProfile = true;
+
+    // Human types github.com directly in their Brave window -> allowed!
+    assert.equal((await decideRequest(state, okGuard, 'https://github.com/prod-explore', true)).allow, true);
+    // Still obeys operator denylist!
+    state.policy = { ...mergePolicy({ domainDeny: ['blocked.example'] }, { domainGrant: ['docs.example'] }), allowBrowserSchemes: true };
+    assert.equal((await decideRequest(state, okGuard, 'https://blocked.example/', true)).allow, false);
+
+    // Agent calls browser_open / browser_act -> agentActing > 0 -> unapproved top-level nav blocked!
+    await withAgentAction(state, async () => {
+      assert.equal(state.agentActing, 1);
+      const nav = await decideRequest(state, okGuard, 'https://github.com/prod-explore', true);
+      assert.equal(nav.allow, false);
+      assert.match(nav.reason!, /domain not approved yet/);
+    });
+    assert.equal(state.agentActing, 0);
+  });
+
+  it('does not cancel the user own downloads or attach permanent filechooser listeners on persistent browsers', async () => {
+    const state = newSessionState();
+    state.persistentProfile = true;
+    const d = fakeDownload('archive.zip');
+    handleDownload(state, d);
+    assert.equal(d.cancelled, false);
+
+    const events: string[] = [];
+    const fakePage = {
+      on(ev: string) { events.push(`on:${ev}`); return fakePage; },
+      off(ev: string) { events.push(`off:${ev}`); return fakePage; },
+    };
+    attachPageHandlers(fakePage as never, state);
+    assert.deepEqual(events, ['on:download'], 'no permanent filechooser or dialog hijacking on user browser');
+
+    await withAgentAction(state, async () => {
+      assert.ok(events.includes('on:filechooser'));
+    }, fakePage as never);
+    assert.ok(events.includes('off:filechooser'));
   });
 });

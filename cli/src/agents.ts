@@ -108,6 +108,8 @@ export interface AgentManagerDeps {
   delegableTools?: (run: RunRow) => string[];
   /** Domains the user has allowed for this run's chat (grants), handed to the browser on every call. */
   webGrantedHosts?: (run: RunRow) => string[];
+  /** Personal browser profile approval gate for paired device browsers. */
+  deviceBrowserGate?: (run: RunRow) => ConversationDeps['deviceBrowserGate'];
   /** Connectors whose tools runs of a ghost chat may use (see ghost.ts); everything else is invisible to them. */
   ghostConnectors?: readonly string[];
 }
@@ -328,11 +330,12 @@ export class AgentManager {
           browserPolicy: this.deps.browserPolicy?.(),
           userUrlsTrusted: false,
           webAccess: this.deps.webGrantedHosts ? { grantedHosts: () => this.deps.webGrantedHosts!(run) } : undefined,
+          deviceBrowserGate: this.deps.deviceBrowserGate?.(run),
           confirm: async (label, args, opts) => {
-            // A domain grant (`web:<host>`) belongs to the chat, not to one agent: keep its label, show who asks in the args.
-            const isDomain = label.startsWith('web:');
-            const toolLabel = isDomain ? label : `[agent ${run.label}] ${label}`;
-            if (isDomain) args = { ...args, agent: run.label };
+            // A domain grant (`web:<host>`) or device personal-profile grant (`device-<slug>/browser_personal_profile`) belongs to the chat, not one worker.
+            const sharedGrant = label.startsWith('web:') || /^device-[a-z0-9-]+\/browser_personal_profile$/.test(label);
+            const toolLabel = sharedGrant ? label : `[agent ${run.label}] ${label}`;
+            if (sharedGrant) args = { ...args, agent: run.label };
             setRunStatus(db, run.id, 'waiting_input');
             try {
               return await approval.confirmDetailed(run.conversationId ?? run.id, toolLabel, args, signal, {

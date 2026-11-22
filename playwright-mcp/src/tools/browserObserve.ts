@@ -5,7 +5,7 @@ import type { BrowserSessionPool } from '../sessionPool.js';
 import { drainEvents } from '../browserContext.js';
 import { observePage } from '../observe.js';
 import { observationResult, UNTRUSTED_CONTENT_NOTICE } from './formatObservation.js';
-import { applyCallPolicy, hiddenPolicyArgs } from './policyArgs.js';
+import { applyCallPolicy, ensurePageApproved, hiddenPolicyArgs } from './policyArgs.js';
 import { tabNote } from './tabNote.js';
 import { fail } from './types.js';
 
@@ -38,6 +38,8 @@ export function registerBrowserObserve(server: McpServer, config: PlaywrightConf
       try {
         pool.touch(convId);
         applyCallPolicy(config, session.state, _policy);
+        const blocked = ensurePageApproved(session, session.page, session.tabs.active().id);
+        if (blocked) return fail(blocked);
         const obs = await observePage(session.page, config, session.state.policy.js);
         return observationResult(obs, [tabNote(session)], drainEvents(session.state));
       } catch (err: unknown) {

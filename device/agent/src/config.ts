@@ -63,7 +63,7 @@ export const configSchema = z.object({
   browser: z
     .object({
       enabled: z.boolean().default(false),
-      mode: z.enum(['profile', 'dedicated']).default('profile'),
+      mode: z.enum(['profile', 'dedicated', 'both']).default('profile'),
       product: z.enum(['brave', 'chrome', 'edge', 'chromium', 'custom']).default('brave'),
       executable: z.string().min(1).nullable().default(null),
       userDataDir: z.string().min(1).nullable().default(null),
@@ -144,11 +144,15 @@ export interface ResolvedFiles {
 
 export interface ResolvedBrowser {
   enabled: boolean;
-  mode: 'profile' | 'dedicated';
+  mode: 'profile' | 'dedicated' | 'both';
   product: BrowserProduct;
   executable: string | null;
   /** The directory handed to Chromium as --user-data-dir; null only when nothing could be determined (custom product without one). */
   userDataDir: string | null;
+  dedicatedUserDataDir?: string;
+  personalUserDataDir?: string | null;
+  availableProfiles?: Array<'dedicated' | 'personal'>;
+  defaultProfile?: 'dedicated' | 'personal';
   profileDirectory: string;
   allowPrivateNetwork: boolean;
 }
@@ -188,16 +192,33 @@ export function resolveConfig(cfg: DeviceConfig, dataDir: string, h: HostEnv = h
   const executable = b.executable ? expandHome(b.executable, h.home) : detectBrowserExecutable(b.product, h);
   if (b.enabled && !executable) warnings.push(`browser: no ${b.product} executable found (set browser.executable)`);
   const dedicatedDir = (h.platform === 'windows' ? nodePath.win32 : nodePath.posix).join(dataDir, 'browser-profile');
-  const userDataDir = b.mode === 'dedicated' ? dedicatedDir : b.userDataDir ? expandHome(b.userDataDir, h.home) : defaultUserDataDir(b.product, h);
-  if (b.enabled && !userDataDir) warnings.push('browser: product "custom" in profile mode needs browser.userDataDir');
+  const personalDir = b.userDataDir ? expandHome(b.userDataDir, h.home) : defaultUserDataDir(b.product, h);
+  const availableProfiles: Array<'dedicated' | 'personal'> =
+    b.mode === 'dedicated'
+      ? ['dedicated']
+      : b.mode === 'both'
+        ? (personalDir ? ['dedicated', 'personal'] : ['dedicated'])
+        : (personalDir ? ['personal'] : []);
+  const defaultProfile: 'dedicated' | 'personal' =
+    b.mode === 'profile' ? 'personal' : 'dedicated';
+  const userDataDir =
+    b.mode === 'dedicated' || b.mode === 'both'
+      ? dedicatedDir
+      : personalDir;
+  if (b.enabled && b.mode === 'profile' && !personalDir) warnings.push('browser: product "custom" in profile mode needs browser.userDataDir');
+  if (b.enabled && b.mode === 'both' && !personalDir) warnings.push('browser: personal profile disabled (product "custom" needs browser.userDataDir); using dedicated only');
   const browser: ResolvedBrowser = {
     // Without an executable the tools would only ever fail; the server should not see them. Profile mode with an unknown
     // profile directory is the same situation.
-    enabled: b.enabled && !!executable && !!userDataDir,
+    enabled: b.enabled && !!executable && availableProfiles.length > 0 && !!userDataDir,
     mode: b.mode,
     product: b.product,
     executable,
     userDataDir,
+    dedicatedUserDataDir: dedicatedDir,
+    personalUserDataDir: personalDir,
+    availableProfiles,
+    defaultProfile,
     profileDirectory: b.mode === 'dedicated' ? 'Default' : b.profileDirectory,
     allowPrivateNetwork: b.allowPrivateNetwork,
   };

@@ -7,6 +7,8 @@ export interface Tab {
   readonly page: Page;
   /** Last known document title (page-supplied; may be empty until the page has loaded). */
   title: string;
+  /** Whether the tab was opened by the agent (counts toward maxTabs) or restored / opened manually by the person. */
+  origin?: 'agent' | 'user';
 }
 
 export class TabLimitError extends Error {
@@ -64,23 +66,28 @@ export class TabSet {
     return tab;
   }
 
+  private agentCount(): number {
+    return this.tabs.reduce((n, t) => n + (t.origin === 'user' ? 0 : 1), 0);
+  }
+
   hasRoom(): boolean {
-    return this.tabs.length < this.opts.max;
+    return this.agentCount() < this.opts.max;
   }
 
   /**
    * Registers a page. Idempotent (the page may be announced by the context and handed over by whoever opened it).
-   * Beyond the limit the page is closed and the agent is told, which stops a site from opening tabs without end.
+   * Agent/site-opened tabs beyond the limit are closed; pre-existing or manually opened user tabs stay untouched.
    */
-  add(page: Page): Tab | null {
+  add(page: Page, opts?: { origin?: 'agent' | 'user' }): Tab | null {
     const known = this.tabs.find(t => t.page === page);
     if (known) return known;
-    if (!this.hasRoom()) {
+    const origin = opts?.origin ?? 'agent';
+    if (origin !== 'user' && !this.hasRoom()) {
       void page.close().catch(() => {});
       this.opts.notify(`a page tried to open a new tab, but this session already has ${this.opts.max} — it was closed`);
       return null;
     }
-    const tab: Tab = { id: this.nextId++, page, title: '' };
+    const tab: Tab = { id: this.nextId++, page, title: '', ...(opts?.origin ? { origin: opts.origin } : {}) };
     this.tabs.push(tab);
     if (this.tabs.length === 1) this.activeId = tab.id;
     const refreshTitle = () => {

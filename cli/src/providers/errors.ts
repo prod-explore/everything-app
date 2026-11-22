@@ -40,16 +40,20 @@ const CONTEXT_PATTERNS = [
   /request too large/i,
   /input token count .{0,40}exceeds/i,
   /exceeds the maximum number of tokens/i,
+  /limit of this provider is [\d,]+/i,
 ];
 
-/** "maximum context length is 32768 tokens" / "limit of 1048576" → 32768 */
+/** "maximum context length is 32768 tokens" / "limit of 1048576" / legacy char limits → tokens */
 export function contextLimitFromMessage(text: string): number | undefined {
-  const m =
-    /(?:maximum|max)\s+context\s+length\s+(?:is|of)\s+(\d{3,9})/i.exec(text) ??
-    /context\s+(?:window|length|limit)\s+(?:is|of)\s+(\d{3,9})/i.exec(text) ??
-    /limit\s+(?:is|of)\s+(\d{4,9})\s+tokens/i.exec(text) ??
-    /exceeds? the limit of (\d{4,9})/i.exec(text);
-  return m ? Number(m[1]) : undefined;
+  const tok =
+    /(?:maximum|max)\s+context\s+length\s+(?:is|of)\s+([\d,]{3,12})/i.exec(text) ??
+    /context\s+(?:window|length|limit)\s+(?:is|of)\s+([\d,]{3,12})/i.exec(text) ??
+    /limit\s+(?:is|of)\s+([\d,]{4,12})\s+tokens/i.exec(text) ??
+    /exceeds? the limit of ([\d,]{4,12})/i.exec(text);
+  if (tok) return Number(tok[1]!.replace(/,/g, ''));
+  const chars = /(?:limit of this provider is|max(?:imum)?\s+prompt\s+chars?\s+(?:is|of))\s+([\d,]{4,12})/i.exec(text);
+  if (chars) return Math.max(1000, Math.floor(Number(chars[1]!.replace(/,/g, '')) / 3.5));
+  return undefined;
 }
 
 export function looksLikeContextOverflow(status: number, detail: string): boolean {

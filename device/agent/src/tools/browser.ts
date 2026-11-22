@@ -12,8 +12,10 @@ import {
   registerBrowserTools,
   SessionLimitError,
   UrlGuard,
+  type ClaimOptions,
   type ContextLauncher,
   type PlaywrightConfig,
+  type SessionPoolOptions,
   type SessionState,
 } from '../../../../playwright-mcp/src/lib.js';
 import { profileInUse } from '../browser/lock.js';
@@ -39,17 +41,41 @@ const TEST_HEADLESS = 'EVVAPP_DEVICE_TEST_HEADLESS';
 export class BrowserInUseError extends Error {
   constructor() {
     super(
-      'the browser on this device is in use by another chat — a device runs one browser session at a time. ' +
+      'the browser profile on this device is in use by another chat — each browser profile runs one session at a time. ' +
         'It is released when that chat calls browser_close or after 30 idle minutes.',
     );
     this.name = 'BrowserInUseError';
   }
 }
 
+export interface DevicePoolOptions extends SessionPoolOptions {
+  defaultProfile?: 'dedicated' | 'personal';
+  requirePersonalApproval?: boolean;
+}
+
 export class DevicePool extends BrowserSessionPool {
-  override async claim(...args: Parameters<BrowserSessionPool['claim']>): ReturnType<BrowserSessionPool['claim']> {
+  private readonly defaultProfile?: 'dedicated' | 'personal';
+  private readonly requirePersonalApproval: boolean;
+
+  constructor(opts: DevicePoolOptions) {
+    super(opts);
+    this.defaultProfile = opts.defaultProfile;
+    this.requirePersonalApproval = opts.requirePersonalApproval === true;
+  }
+
+  override async claim(conversationId: string, opts: ClaimOptions = {}): Promise<{ session: import('../../../../playwright-mcp/src/lib.js').SessionHandle; isNew: boolean }> {
+    const profile = opts.profile ?? this.defaultProfile;
+    if (profile === 'personal' && this.requirePersonalApproval && opts.personalApproved !== true) {
+      throw new Error('Personal browser profile requires explicit user approval.');
+    }
+    if (!this.get(conversationId) && profile) {
+      for (const s of this.status().sessions) {
+        const handle = this.get(s.id);
+        if (handle && handle.state.profile === profile) throw new BrowserInUseError();
+      }
+    }
     try {
-      return await super.claim(...args);
+      return await super.claim(conversationId, opts);
     } catch (err) {
       if (err instanceof SessionLimitError) throw new BrowserInUseError();
       throw err;
@@ -79,27 +105,39 @@ export class DeviceLauncher implements ContextLauncher {
     private readonly onClosed: () => void,
   ) {}
 
-  async launch(state: SessionState): Promise<{ context: BrowserContext; page: Page }> {
+  async launch(state: SessionState): Promise<{ context: BrowserContext; page: Page; existingPages: Page[] }> {
     const b = this.browser;
     const name = PRODUCT_NAMES[b.product];
+    const profile: 'dedicated' | 'personal' = state.profile ?? b.defaultProfile ?? (b.mode === 'dedicated' ? 'dedicated' : 'personal');
+    if (b.availableProfiles && !b.availableProfiles.includes(profile)) {
+      throw new Error(`browser profile "${profile}" is not enabled on this device`);
+    }
+    const targetDir = profile === 'personal' ? (b.personalUserDataDir ?? b.userDataDir) : (b.dedicatedUserDataDir ?? b.userDataDir);
+    const targetProfileDir = profile === 'dedicated' ? 'Default' : b.profileDirectory;
     if (!b.executable) throw new Error(`no ${name} executable found on this device (set browser.executable in the device config)`);
-    if (!b.userDataDir) throw new Error('no browser profile directory is configured for this device');
+    if (!targetDir) throw new Error('no browser profile directory is configured for this device');
 
-    if (b.mode === 'profile') {
-      if (await profileInUse(b.userDataDir, this.platform)) {
-        throw new Error(`${name} is open with this profile — close it, or switch the device to the dedicated profile`);
+    if (profile === 'personal') {
+      if (await profileInUse(targetDir, this.platform)) {
+        const canDedicated = b.availableProfiles?.includes('dedicated');
+        throw new Error(
+          `${name} is open with this profile — close it, or switch the device to the dedicated profile` +
+            (canDedicated ? ' (or call browser_open with profile="dedicated")' : ''),
+        );
       }
     } else {
-      await mkdir(b.userDataDir, { recursive: true });
+      await mkdir(targetDir, { recursive: true });
     }
 
     state.downloadDir = this.downloadDir;
+    state.persistentProfile = true;
+    state.profile = profile;
     let context: BrowserContext;
     try {
-      context = await chromium.launchPersistentContext(b.userDataDir, {
+      context = await chromium.launchPersistentContext(targetDir, {
         executablePath: b.executable,
         headless: process.env[TEST_HEADLESS] === '1',
-        args: launchArgs(b.profileDirectory),
+        args: launchArgs(targetProfileDir),
         ignoreDefaultArgs: IGNORED_DEFAULT_ARGS,
         acceptDownloads: true,
         viewport: null,
@@ -107,21 +145,22 @@ export class DeviceLauncher implements ContextLauncher {
       });
     } catch (err) {
       const hint =
-        b.product === 'chrome' && b.mode === 'profile'
+        b.product === 'chrome' && profile === 'personal'
           ? ' Chrome 136+ refuses automation on its default profile folder — switch the device to the dedicated profile.'
           : '';
       throw new Error(`could not start ${name}: ${firstLine(errMessage(err))}.${hint}`);
     }
 
     try {
-      // Only the domain gate here; the SSRF guard joins it when the device does not allow its private network.
+      // Only the domain gate here (relaxed for manual user browsing while enforcing agent actions); SSRF guard joins if allowPrivateNetwork=false.
       await installPolicyRoutes(context, state, b.allowPrivateNetwork ? undefined : new UrlGuard());
-      for (const p of context.pages()) attachPageHandlers(p, state);
+      const existingPages = [...context.pages()];
+      for (const p of existingPages) attachPageHandlers(p, state);
       context.on('page', p => attachPageHandlers(p, state));
       // A restored session may bring tabs of the person's own: leave them alone and work in a tab of our own.
       const page = await context.newPage();
       context.once('close', () => this.onClosed());
-      return { context, page };
+      return { context, page, existingPages };
     } catch (err) {
       await context.close().catch(() => {});
       throw err;
@@ -139,12 +178,23 @@ export interface DeviceBrowser {
 }
 
 export function createDeviceBrowser(browser: ResolvedBrowser, platform: DevicePlatform, downloadDir = nodePath.join(homedir(), 'Downloads')): DeviceBrowser {
-  const config = embeddedConfig({ maxSessions: 1, persistentProfile: true, allowPrivateNetwork: browser.allowPrivateNetwork });
+  const availableProfiles = browser.availableProfiles ?? [browser.mode === 'dedicated' ? 'dedicated' : 'personal'];
+  const defaultProfile = browser.defaultProfile ?? (browser.mode === 'dedicated' ? 'dedicated' : 'personal');
+  const config = embeddedConfig({
+    maxSessions: Math.max(1, availableProfiles.length),
+    persistentProfile: true,
+    allowPrivateNetwork: browser.allowPrivateNetwork,
+    availableProfiles,
+    defaultProfile,
+    requirePersonalApproval: true,
+  });
   const pool: BrowserSessionPool = new DevicePool({
     maxSessions: config.maxSessions,
     idleTimeoutMs: config.sessionIdleTimeoutMs,
     watchdogIntervalMs: config.watchdogIntervalMs,
     maxTabs: config.maxTabs,
+    defaultProfile,
+    requirePersonalApproval: true,
     makeLauncher: conversationId => new DeviceLauncher(browser, platform, downloadDir, () => void pool.close(conversationId, 'the browser was closed')),
   });
   return {

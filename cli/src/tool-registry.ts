@@ -21,7 +21,14 @@ interface RegisteredTool {
  * The loop overwrites or strips whatever a model puts there, so offering them only costs tokens on every request —
  * about 2k for the browser and sandbox tools — and tells the model about knobs it must not touch.
  */
-const ORCHESTRATOR_PARAMS: ReadonlySet<string> = new Set(['_conversation_id', '_project_id', '_policy', '_allow_downloads', '_approved_host']);
+const ORCHESTRATOR_PARAMS: ReadonlySet<string> = new Set([
+  '_conversation_id',
+  '_project_id',
+  '_policy',
+  '_allow_downloads',
+  '_approved_host',
+  '_personal_profile_approved',
+]);
 
 /** The schema a model is shown: without the orchestrator's own parameters. The registered schema itself is left as it is. */
 export function withoutOrchestratorParams(schema: Record<string, unknown>): Record<string, unknown> {

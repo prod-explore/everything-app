@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { PlaywrightConfig } from '../config.js';
 import type { BrowserSessionPool } from '../sessionPool.js';
 import { drainEvents } from '../browserContext.js';
-import { applyCallPolicy, hiddenPolicyArgs } from './policyArgs.js';
+import { applyCallPolicy, ensurePageApproved, hiddenPolicyArgs } from './policyArgs.js';
 import { tabNote } from './tabNote.js';
 import { fail, type ToolImageResult } from './types.js';
 
@@ -44,6 +44,8 @@ export function registerBrowserScreenshot(server: McpServer, config: PlaywrightC
         pool.touch(convId);
         applyCallPolicy(config, session.state, _policy);
         const page = session.page;
+        const blocked = ensurePageApproved(session, page, session.tabs.active().id);
+        if (blocked) return fail(blocked);
         const viewport = page.viewportSize() ?? session.viewport ?? { width: 1280, height: 800 };
 
         let cutOff = false;

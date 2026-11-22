@@ -14,7 +14,8 @@ export interface DeviceReport {
   files: { enabled: boolean; roots: string[]; write: boolean };
   browser: {
     enabled: boolean;
-    mode: 'profile' | 'dedicated';
+    mode: 'profile' | 'dedicated' | 'both';
+    profiles?: Array<'dedicated' | 'personal'>;
     product: BrowserProduct;
     executable: string | null;
   };
@@ -34,6 +35,7 @@ export function buildReport(cfg: ResolvedConfig): DeviceReport {
     browser: {
       enabled: cfg.browser.enabled,
       mode: cfg.browser.mode,
+      ...(cfg.browser.mode === 'both' && cfg.browser.availableProfiles ? { profiles: cfg.browser.availableProfiles } : {}),
       product: cfg.browser.product,
       executable: cfg.browser.executable,
     },

@@ -45,6 +45,8 @@ export interface EffectivePolicy {
   grant?: string[];
   /** Hosts approved for this browser session only (live set owned by the session; dies with it). */
   approvedHosts?: ReadonlySet<string>;
+  /** Embedded user browsers only: allow browser-internal schemes (`chrome-extension:`, `brave:`, `chrome:`, etc.). */
+  allowBrowserSchemes?: boolean;
 }
 
 /** Zod schema for the hidden `_policy` tool argument. */
@@ -174,7 +176,25 @@ export function domainDeniedMessage(host: string): string {
   return `domain blocked by project policy (denylist): ${host} — ask the user if it should be unblocked`;
 }
 
-function parseHost(url: string): { host: string } | PolicyDecision {
+/** Schemes safe only inside an embedded user browser with persistent extensions/NTP. */
+const BROWSER_UI_SCHEMES = new Set([
+  'about:',
+  'blob:',
+  'brave:',
+  'chrome:',
+  'chrome-extension:',
+  'chrome-search:',
+  'chrome-untrusted:',
+  'data:',
+  'devtools:',
+  'edge:',
+]);
+
+function parseHost(url: string, allowBrowserSchemes = false): { host: string } | { browserScheme: true } | PolicyDecision {
+  const sm = /^\s*([a-z][a-z0-9+.-]*:)/i.exec(url);
+  if (allowBrowserSchemes && sm && BROWSER_UI_SCHEMES.has(sm[1]!.toLowerCase())) {
+    return { browserScheme: true };
+  }
   if (isBlockedScheme(url)) {
     return { allowed: false, code: 'scheme', reason: `scheme not allowed in the browser: ${url.split(':')[0]}:` };
   }
@@ -194,7 +214,8 @@ function parseHost(url: string): { host: string } | PolicyDecision {
 export function checkRequest(policy: EffectivePolicy, url: string): PolicyDecision {
   // data:/blob: sub-resources never leave the browser; let them through.
   if (/^(data|blob):/i.test(url)) return { allowed: true };
-  const h = parseHost(url);
+  const h = parseHost(url, policy.allowBrowserSchemes === true);
+  if ('browserScheme' in h) return { allowed: true };
   if ('allowed' in h) return h;
   if (hostMatchesAny(h.host, policy.deny)) {
     return { allowed: false, code: 'denied', host: h.host, reason: domainDeniedMessage(h.host) };
@@ -204,7 +225,8 @@ export function checkRequest(policy: EffectivePolicy, url: string): PolicyDecisi
 
 /** Top-level navigations (including redirects of them): denylist, then every allowlist layer. */
 export function checkNavigation(policy: EffectivePolicy, url: string): PolicyDecision {
-  const h = parseHost(url);
+  const h = parseHost(url, policy.allowBrowserSchemes === true);
+  if ('browserScheme' in h) return { allowed: true };
   if ('allowed' in h) return h;
   if (hostMatchesAny(h.host, policy.deny)) {
     return { allowed: false, code: 'denied', host: h.host, reason: domainDeniedMessage(h.host) };

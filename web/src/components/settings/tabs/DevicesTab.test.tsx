@@ -117,14 +117,37 @@ describe('DevicesTab', () => {
     await waitFor(() => expect(calls.find(c => c.method === 'DELETE')?.url).toBe('/api/devices/d1'));
   });
 
-  it('lists remembered device commands readably', async () => {
+  it('lists remembered device commands and personal browser permission readably', async () => {
     stubApi([device()], [
       { id: 'g1', toolLabel: 'cmd@device-pc:git push', scope: 'always', subjectType: null, subjectId: null, conversationId: null, projectId: null, createdAt: '', expiresAt: null },
-      { id: 'g2', toolLabel: 'cmd@device-laptop:ls', scope: 'always', subjectType: null, subjectId: null, conversationId: null, projectId: null, createdAt: '', expiresAt: null },
+      { id: 'g2', toolLabel: 'device-pc/browser_personal_profile', scope: 'always', subjectType: null, subjectId: null, conversationId: null, projectId: null, createdAt: '', expiresAt: null },
+      { id: 'g3', toolLabel: 'cmd@device-laptop:ls', scope: 'always', subjectType: null, subjectId: null, conversationId: null, projectId: null, createdAt: '', expiresAt: null },
     ]);
     render(<DevicesTab />);
     expect(await screen.findByText('$ git push')).toBeInTheDocument();
+    expect(screen.getByText('Personal browser')).toBeInTheDocument();
     expect(screen.queryByText('$ ls')).not.toBeInTheDocument();
+  });
+
+  it('shows mode="both" and lets the user change the Personal browser profile policy (Deny / Ask / Auto)', async () => {
+    const dual = device({
+      policy: { shell: 'allowlist', filesWrite: 'ask', browserAct: 'ask', browserPersonalProfile: 'ask' },
+      report: {
+        name: 'Desktop PC', platform: 'windows', arch: 'x64', hostname: 'PC1', agentVersion: '0.3.1',
+        shell: { enabled: true, kind: 'posix', path: 'C:\\Program Files\\Git\\bin\\bash.exe' },
+        files: { enabled: true, roots: ['C:\\Projects'], write: true },
+        browser: { enabled: true, mode: 'both', profiles: ['dedicated', 'personal'], product: 'brave', executable: null },
+      },
+    });
+    const calls = stubApi([dual]);
+    render(<DevicesTab />);
+    expect(await screen.findByText(/Browser: brave, dedicated \+ personal \(on request\)/)).toBeInTheDocument();
+    const group = screen.getByRole('radiogroup', { name: 'Personal browser profile' });
+    await userEvent.click(within(group).getByRole('radio', { name: 'Deny' }));
+    await waitFor(() => expect(calls.find(c => c.method === 'PATCH')).toMatchObject({
+      url: '/api/devices/d1',
+      body: { policy: { browserPersonalProfile: 'deny' } },
+    }));
   });
 
   it('polls the list every 5 seconds', async () => {

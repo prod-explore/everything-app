@@ -2,10 +2,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { PlaywrightConfig } from '../config.js';
 import type { BrowserSessionPool } from '../sessionPool.js';
-import { drainEvents } from '../browserContext.js';
+import { drainEvents, withAgentAction } from '../browserContext.js';
 import { observePage } from '../observe.js';
 import { observationResult, UNTRUSTED_CONTENT_NOTICE } from './formatObservation.js';
-import { applyCallPolicy, checkTargetUrl, hiddenPolicyArgs, withDownloadPermission } from './policyArgs.js';
+import { applyCallPolicy, checkTargetUrl, ensurePageApproved, hiddenPolicyArgs, withDownloadPermission } from './policyArgs.js';
 import { tabNote } from './tabNote.js';
 import { fail } from './types.js';
 
@@ -70,61 +70,69 @@ export function registerBrowserAct(server: McpServer, config: PlaywrightConfig, 
       let page = session.page;
       const tabsBefore = new Set(session.tabs.all().map(t => t.id));
       applyCallPolicy(config, state, _policy);
+      if (action !== 'navigate') {
+        const unapproved = ensurePageApproved(session, page, session.tabs.active().id);
+        if (unapproved) return fail(unapproved);
+      }
 
       try {
         return await withDownloadPermission(state, _allow_downloads, async () => {
-          if (action === 'navigate') {
-            const blocked = await checkTargetUrl(config, state.policy, value!);
-            if (blocked) return fail(blocked);
-            await page.goto(value!, { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
-            pool.setCurrentUrl(convId, value!);
-          } else if (action === 'press' && ref === undefined) {
-            await page.keyboard.press(value!);
-          } else {
-            const locator = page.locator(`[data-ea-ref="${ref}"]`);
-            const count = await locator.count();
-            if (count === 0) {
-              return fail(
-                `Ref [${ref}] not found on the current page — it may be stale (the page changed since ` +
-                  `your last observation). Call browser_observe to get current refs, then retry.`,
-              );
+          return await withAgentAction(state, async () => {
+            if (action === 'navigate') {
+              const blocked = await checkTargetUrl(config, state.policy, value!);
+              if (blocked) return fail(blocked);
+              await page.goto(value!, { waitUntil: 'domcontentloaded', timeout: config.navTimeoutMs });
+              pool.setCurrentUrl(convId, value!);
+            } else if (action === 'press' && ref === undefined) {
+              await page.keyboard.press(value!);
+            } else {
+              const locator = page.locator(`[data-ea-ref="${ref}"]`);
+              const count = await locator.count();
+              if (count === 0) {
+                return fail(
+                  `Ref [${ref}] not found on the current page — it may be stale (the page changed since ` +
+                    `your last observation). Call browser_observe to get current refs, then retry.`,
+                );
+              }
+              switch (action) {
+                case 'click':
+                  await locator.first().click({ timeout: config.navTimeoutMs });
+                  break;
+                case 'type':
+                  await locator.first().fill(value ?? '', { timeout: config.navTimeoutMs });
+                  break;
+                case 'select':
+                  await locator.first().selectOption(value ?? '', { timeout: config.navTimeoutMs });
+                  break;
+                case 'press':
+                  await locator.first().press(value!, { timeout: config.navTimeoutMs });
+                  break;
+              }
+              pool.setCurrentUrl(convId, page.url());
             }
-            switch (action) {
-              case 'click':
-                await locator.first().click({ timeout: config.navTimeoutMs });
-                break;
-              case 'type':
-                await locator.first().fill(value ?? '', { timeout: config.navTimeoutMs });
-                break;
-              case 'select':
-                await locator.first().selectOption(value ?? '', { timeout: config.navTimeoutMs });
-                break;
-              case 'press':
-                await locator.first().press(value!, { timeout: config.navTimeoutMs });
-                break;
-            }
-            pool.setCurrentUrl(convId, page.url());
-          }
 
-          // Best-effort settle — SPAs that never go network-idle shouldn't fail the action.
-          await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-
-          // A click that opened a new window (target=_blank, window.open) leaves the person looking at the new page in a
-          // normal browser; do the same, and say so, instead of observing the page that merely stayed behind.
-          const notes = [`(performed: ${action} on ${JSON.stringify(label)}${value ? ` = ${JSON.stringify(value)}` : ''})`];
-          const opened = session.tabs.all().filter(t => !tabsBefore.has(t.id));
-          const newest = opened[opened.length - 1];
-          if (newest) {
-            session.tabs.activate(newest.id);
-            page = newest.page;
-            await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+            // Best-effort settle — SPAs that never go network-idle shouldn't fail the action.
             await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-            pool.setCurrentUrl(convId, page.url());
-            notes.push(`(this action opened a new tab [${newest.id}] and it is now the active tab; the page you acted on is still open — browser_tabs switches back)`);
-          }
 
-          const obs = await observePage(page, config, state.policy.js);
-          return observationResult(obs, [...notes, tabNote(session)], drainEvents(state));
+            // A click that opened a new window (target=_blank, window.open) leaves the person looking at the new page in a
+            // normal browser; do the same, and say so, instead of observing the page that merely stayed behind.
+            const notes = [`(performed: ${action} on ${JSON.stringify(label)}${value ? ` = ${JSON.stringify(value)}` : ''})`];
+            const opened = session.tabs.all().filter(t => !tabsBefore.has(t.id));
+            const newest = opened[opened.length - 1];
+            if (newest) {
+              session.tabs.activate(newest.id);
+              page = newest.page;
+              await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+              await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+              pool.setCurrentUrl(convId, page.url());
+              notes.push(`(this action opened a new tab [${newest.id}] and it is now the active tab; the page you acted on is still open — browser_tabs switches back)`);
+            }
+
+            const unapprovedAfter = ensurePageApproved(session, page, session.tabs.active().id);
+            if (unapprovedAfter) return fail(unapprovedAfter);
+            const obs = await observePage(page, config, state.policy.js);
+            return observationResult(obs, [...notes, tabNote(session)], drainEvents(state));
+          }, page);
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

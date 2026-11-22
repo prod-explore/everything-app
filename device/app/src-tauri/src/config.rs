@@ -37,6 +37,7 @@ pub struct Files {
 pub enum Mode {
     Profile,
     Dedicated,
+    Both,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -239,6 +240,8 @@ mod tests {
     #[test]
     fn rejects_bad_enum_and_normalises_empties() {
         assert!(parse(serde_json::json!({"browser": {"mode": "weird"}})).is_err());
+        let both = parse(serde_json::json!({"browser": {"mode": "both"}})).unwrap();
+        assert_eq!(both.browser.mode, Mode::Both);
         let c = parse(serde_json::json!({"shell": {"path": "  "}, "files": {"roots": ["/a", "/a", " "]}}))
             .unwrap();
         assert_eq!(c.shell.path, None);

@@ -21,13 +21,44 @@ import { trimTrailingSlashes } from './text-utils.js';
 
 const NAME_RE = /^[A-Za-z0-9_.-]{1,100}$/;
 
-/** Parses `owner/repo`, `https://github.com/owner/repo(.git)` or `git@github.com:owner/repo.git`. Only github.com is accepted. */
+/** Parses `owner/repo`, `(https://|http://)?github.com/owner/repo(.git)` or `git@github.com:owner/repo.git`. Only github.com is accepted. */
 export function parseGithubRepo(input: unknown): { owner: string; repo: string } | null {
   if (typeof input !== 'string') return null;
   const t = input.trim();
-  const m = /^(?:https:\/\/(?:www\.)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(t);
-  if (!m || !NAME_RE.test(m[1]!) || !NAME_RE.test(m[2]!) || m[1] === '.' || m[2] === '.' || m[1] === '..' || m[2] === '..') return null;
-  return { owner: m[1]!, repo: m[2]! };
+  const m = /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(t);
+  if (!m || !NAME_RE.test(m[1]!) || !NAME_RE.test(m[2]!)) return null;
+  const owner = m[1]!;
+  const repo = m[2]!;
+  if (owner === '.' || repo === '.' || owner === '..' || repo === '..') return null;
+  if (/^(?:www\.)?github\.com$/i.test(owner)) return null;
+  return { owner, repo };
+}
+
+export interface WorkspaceRepo {
+  dir: string;
+  origin: string | null;
+  owner: string | null;
+  repo: string | null;
+  branch?: string | null;
+  dirty?: number;
+  ahead?: number;
+  behind?: number;
+}
+
+export interface AccountRepo {
+  fullName: string;
+  owner: string;
+  repo: string;
+  private: boolean;
+  defaultBranch: string;
+  description: string | null;
+  language: string | null;
+  pushedAt: string | null;
+  htmlUrl: string;
+}
+
+function isProxyAuthFailure(output: string): boolean {
+  return /proxy token|Authentication failed|could not read Username|terminal prompts disabled|\b401\b/i.test(output);
 }
 
 function sameRepo(a: { owner: string; repo: string }, owner: string, repo: string): boolean {
@@ -152,18 +183,159 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
     res.json({ ok: true });
   });
 
+  async function listWorkspaceRepos(ownerId: string): Promise<WorkspaceRepo[]> {
+    const cmd = [
+      'cd /workspace 2>/dev/null && find . -maxdepth 3 -name .git -prune | sort | while IFS= read -r g; do',
+      'd=$(dirname "$g");',
+      'o=$(git -C "$d" remote get-url origin 2>/dev/null || true);',
+      'b=$(git -C "$d" symbolic-ref --short HEAD 2>/dev/null || git -C "$d" rev-parse --short HEAD 2>/dev/null || true);',
+      'dirty=$(git -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d " ");',
+      'ab=$(git -C "$d" rev-list --left-right --count HEAD...@{u} 2>/dev/null || printf "0\\t0");',
+      'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "$d" "$o" "$b" "$dirty" "$ab";',
+      'done',
+    ].join(' ');
+    const r = await sandbox.exec(owner(ownerId), cmd, 30_000);
+    return r.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line): WorkspaceRepo => {
+        const cols = line.split('\t');
+        const [d, origin] = cols;
+        const dir = (d ?? '.').replace(/^\.\/?/, '');
+        const gh = parseGithubRepo(origin ?? '');
+        const item: WorkspaceRepo = { dir, origin: origin || null, owner: gh?.owner ?? null, repo: gh?.repo ?? null };
+        if (cols.length > 2) {
+          item.branch = cols[2] || null;
+          item.dirty = Number.isFinite(Number(cols[3])) ? Number(cols[3]) : 0;
+          item.ahead = Number.isFinite(Number(cols[4])) ? Number(cols[4]) : 0;
+          item.behind = Number.isFinite(Number(cols[5])) ? Number(cols[5]) : 0;
+        }
+        return item;
+      })
+      .filter(x => x.dir === '' || x.dir.split('/').every(seg => seg !== '..' && /^[\w.@+-]+$/.test(seg)));
+  }
+
+  async function listAccountRepos(opts: { visibility?: 'all' | 'private' | 'public'; query?: string; limit?: number } = {}): Promise<{ connected: boolean; repos: AccountRepo[] }> {
+    const token = await credentials.getToken();
+    if (!token) return { connected: false, repos: [] };
+    const visibility = opts.visibility === 'private' || opts.visibility === 'public' ? opts.visibility : 'all';
+    const limit = Math.min(Math.max(Number(opts.limit ?? 30) || 30, 1), 100);
+    const query = (opts.query ?? '').trim().toLowerCase();
+
+    const fetchPage = async (page: number): Promise<Array<Record<string, unknown>>> => {
+      const url = `${credentials.apiBase}/user/repos?visibility=${visibility}&affiliation=owner,collaborator,organization_member&sort=pushed&direction=desc&per_page=100&page=${page}`;
+      const res = await doFetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'EverythingApp',
+        },
+        redirect: 'follow',
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => '');
+        throw new Error(`GitHub API error (${res.status}): ${msg.slice(0, 300) || res.statusText}`);
+      }
+      const data = await res.json();
+      return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
+    };
+
+    const raw = await fetchPage(1);
+    if (query && raw.length === 100) {
+      raw.push(...await fetchPage(2));
+    }
+    const mapped = raw
+      .map((r): AccountRepo | null => {
+        const o = r['owner'] as Record<string, unknown> | undefined;
+        const ownerLogin = typeof o?.['login'] === 'string' ? o['login'] : '';
+        const name = typeof r['name'] === 'string' ? r['name'] : '';
+        if (!ownerLogin || !name) return null;
+        return {
+          fullName: typeof r['full_name'] === 'string' ? r['full_name'] : `${ownerLogin}/${name}`,
+          owner: ownerLogin,
+          repo: name,
+          private: r['private'] === true,
+          defaultBranch: typeof r['default_branch'] === 'string' ? r['default_branch'] : 'main',
+          description: typeof r['description'] === 'string' ? r['description'] : null,
+          language: typeof r['language'] === 'string' ? r['language'] : null,
+          pushedAt: typeof r['pushed_at'] === 'string' ? r['pushed_at'] : null,
+          htmlUrl: typeof r['html_url'] === 'string' ? r['html_url'] : `https://github.com/${ownerLogin}/${name}`,
+        };
+      })
+      .filter((x): x is AccountRepo => x !== null)
+      .filter(r => !query || r.fullName.toLowerCase().includes(query) || (r.description ?? '').toLowerCase().includes(query) || (r.language ?? '').toLowerCase().includes(query))
+      .slice(0, limit);
+    return { connected: true, repos: mapped };
+  }
+
+  function cloneDirRel(raw: unknown, fallbackRepo: string): { rel: string } | { error: string } {
+    const cleaned = typeof raw === 'string' ? trimTrailingSlashes(raw.trim().replace(/^\/workspace\/?/, '').replace(/^\.\/?/, '')) : '';
+    const rel = cleaned || fallbackRepo;
+    const segs = rel.split('/');
+    if (segs.length === 0 || segs.length > 2 || segs.some(s => !s || s === '.' || s === '..' || !/^[\w.@+-]+$/.test(s))) {
+      return { error: 'invalid target directory (use a simple folder name or group/repo inside /workspace, max 2 segments)' };
+    }
+    return { rel };
+  }
+
+  async function cloneGithubRepo(
+    ownerId: string,
+    opts: { repo: unknown; dir?: unknown; branch?: unknown; depth?: unknown },
+  ): Promise<{ dir: string; path: string; owner: string; repo: string; output: string }> {
+    const parsed = parseGithubRepo(opts.repo);
+    if (!parsed) throw new Error('expected a github.com repository URL or owner/repo');
+    const target = cloneDirRel(opts.dir, parsed.repo);
+    if ('error' in target) throw new Error(target.error);
+    const targetRel = target.rel;
+
+    let branchArg = '';
+    if (typeof opts.branch === 'string' && opts.branch.trim()) {
+      const b = opts.branch.trim();
+      if (!/^[A-Za-z0-9._/-]{1,200}$/.test(b) || b.startsWith('-') || b.includes('..') || b.endsWith('.lock')) {
+        throw new Error('invalid branch name');
+      }
+      branchArg = ` --branch ${shq(b)}`;
+    }
+    let depthArg = '';
+    if (opts.depth !== undefined && opts.depth !== null) {
+      const d = Number(opts.depth);
+      if (!Number.isInteger(d) || d < 1 || d > 10_000) throw new Error('depth must be an integer between 1 and 10000');
+      depthArg = ` --depth ${d}`;
+    }
+
+    const wired = await ensureSandboxGit(ownerId);
+    const parentRel = targetRel.includes('/') ? targetRel.slice(0, targetRel.lastIndexOf('/')) : '';
+    const mkdirParent = parentRel ? `mkdir -p ${shq(parentRel)} && ` : '';
+    const cloneCmd = [
+      `mkdir -p /workspace && cd /workspace && ${mkdirParent}`,
+      `if [ -e ${shq(targetRel)} ]; then printf 'Directory /workspace/%s already exists — pass a different "dir" name to keep multiple repositories in one workspace.\\n' ${shq(targetRel)} >&2; exit 17; fi && `,
+      `git clone${branchArg}${depthArg} https://github.com/${parsed.owner}/${parsed.repo}.git ${shq(targetRel)}`,
+    ].join('');
+
+    let r = await sandbox.exec(owner(ownerId), cloneCmd, 600_000);
+    if (r.exitCode !== 0 && wired.wired && isProxyAuthFailure(r.stderr + r.stdout)) {
+      await ensureSandboxGit(ownerId, { force: true });
+      r = await sandbox.exec(owner(ownerId), cloneCmd, 600_000);
+    }
+    if (r.exitCode !== 0) {
+      const detail = (r.stderr || r.stdout).trim().slice(0, 4000) || `git clone exited with ${r.exitCode}`;
+      throw new Error(!wired.wired && wired.reason ? `${detail} (${wired.reason})` : detail);
+    }
+    return {
+      dir: targetRel,
+      path: `/workspace/${targetRel}`,
+      owner: parsed.owner,
+      repo: parsed.repo,
+      output: (r.stdout + r.stderr).trim(),
+    };
+  }
+
   // Repositories that exist in the project's sandbox workspace (any git checkout up to 3 levels deep) + their origin.
   api.get('/projects/:id/scm-repos', async (req, res) => {
     if (!knownOwner(req.params.id)) { res.status(404).json({ error: 'project or chat not found' }); return; }
     try {
-      const r = await sandbox.exec(owner(req.params.id), `cd /workspace 2>/dev/null && find . -maxdepth 3 -name .git -prune | while IFS= read -r g; do d=$(dirname "$g"); printf '%s\\t%s\\n' "$d" "$(git -C "$d" remote get-url origin 2>/dev/null)"; done`, 30_000);
-      const repos = r.stdout.split('\n').filter(Boolean).map(line => {
-        const [d, origin] = line.split('\t');
-        const dir = (d ?? '.').replace(/^\.\/?/, '');
-        const gh = parseGithubRepo(origin ?? '');
-        return { dir, origin: origin || null, owner: gh?.owner ?? null, repo: gh?.repo ?? null };
-      }).filter(x => x.dir === '' || /^[\w.@+/-]+$/.test(x.dir));
-      res.json({ repos });
+      res.json({ repos: await listWorkspaceRepos(req.params.id) });
     } catch (err) {
       res.status(502).json({ error: (err as Error).message });
     }
@@ -345,22 +517,34 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
   scm.post('/sync', run(async (id, dir, req) => {
     const action = req.body?.action;
     if (action !== 'fetch' && action !== 'pull' && action !== 'push' && action !== 'clone') throw new Error('action must be fetch | pull | push | clone');
-    await ensureSandboxGit(id);
     if (action === 'clone') {
-      const repo = parseGithubRepo(req.body?.url);
-      if (!repo) throw new Error('expected a github.com repository URL or owner/repo');
-      const r = await sandbox.exec(owner(id), `cd /workspace && git clone https://github.com/${repo.owner}/${repo.repo}.git ${shq(repo.repo)}`, 600_000);
-      return { output: ok(r) + r.stderr };
+      return await cloneGithubRepo(id, {
+        repo: req.body?.url ?? req.body?.repo,
+        dir: req.body?.targetDir ?? (typeof req.body?.dir === 'string' && req.body.dir.trim() ? req.body.dir : undefined),
+        branch: req.body?.branch,
+        depth: req.body?.depth,
+      });
     }
+    const wired = await ensureSandboxGit(id);
+    const runNetworkGit = async (args: string) => {
+      let r = await git(id, dir, args, 600_000);
+      if (r.exitCode !== 0 && wired.wired && isProxyAuthFailure(r.stderr + r.stdout)) {
+        await ensureSandboxGit(id, { force: true });
+        r = await git(id, dir, args, 600_000);
+      }
+      if (r.exitCode !== 0) {
+        const msg = (r.stderr || r.stdout).trim().slice(0, 4000) || `git exited with ${r.exitCode}`;
+        throw new Error(!wired.wired && wired.reason ? `${msg} (${wired.reason})` : msg);
+      }
+      return { output: r.stdout + r.stderr };
+    };
     if (action === 'push') {
       const remote = ok(await git(id, dir, 'remote get-url origin')).trim();
       const m = /github\.com[/:]([^/]+)\/([^/\s]+?)(?:\.git)?$/.exec(remote);
       if (m) expectedPushes.push({ projectId: id, owner: m[1]!, repo: m[2]!, until: Date.now() + 120_000 });
-      const r = await git(id, dir, 'push -u origin HEAD', 600_000);
-      return { output: ok(r) + r.stderr };
+      return await runNetworkGit('push -u origin HEAD');
     }
-    const r = await git(id, dir, action === 'pull' ? 'pull --ff-only' : 'fetch --all --prune', 600_000);
-    return { output: ok(r) + r.stderr };
+    return await runNetworkGit(action === 'pull' ? 'pull --ff-only' : 'fetch --all --prune');
   }));
   api.use('/projects/:id/scm', scm);
 
@@ -381,13 +565,13 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
    * sandbox to use git-proxy for github.com (HTTPS and SSH forms). The token is opaque and useless outside the
    * proxy; the real GitHub credential never enters the sandbox (see ADR 0003).
    */
-  async function ensureSandboxGit(projectId: string): Promise<{ wired: boolean; reason?: string }> {
+  async function ensureSandboxGit(projectId: string, opts?: { force?: boolean }): Promise<{ wired: boolean; reason?: string }> {
     if (!adminToken) return { wired: false, reason: 'GIT_PROXY_ADMIN_TOKEN is not configured' };
     if (!(await credentials.getToken())) return { wired: false, reason: 'GitHub is not connected — log in once in Settings → GitHub' };
     // One login for the whole app: the proxy token may reach any repository the connected account can; every push still asks.
     const reposKey = '*';
     const cached = sandboxTokens.get(projectId);
-    if (cached && cached.reposKey === reposKey && cached.expiresAt - Date.now() > 10 * 60_000) return { wired: true };
+    if (!opts?.force && cached && cached.reposKey === reposKey && cached.expiresAt - Date.now() > 10 * 60_000) return { wired: true };
 
     const minted = await doFetch(`${proxyUrl.replace(/\/$/, '')}/admin/tokens`, {
       method: 'POST',
@@ -424,7 +608,7 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
     if (!res.ok) throw new Error(`git-proxy refused to revoke the tokens (${res.status})`);
   }
 
-  return { internal, api, ensureSandboxGit, revokeSandboxGit };
+  return { internal, api, ensureSandboxGit, revokeSandboxGit, listWorkspaceRepos, listAccountRepos, cloneGithubRepo };
 }
 
 export interface StatusEntry {

@@ -219,4 +219,19 @@ describe('resolveConfig', () => {
     assert.equal(custom.browser.enabled, false);
     assert.match(custom.warnings[0]!, /userDataDir/);
   });
+
+  it('both mode exposes dedicated + personal profiles with dedicated as the default', () => {
+    const r = resolveConfig(
+      parseConfig({ browser: { enabled: true, mode: 'both', profileDirectory: 'Work' } }),
+      '/data/dir',
+      linux,
+    );
+    assert.equal(r.browser.enabled, true);
+    assert.equal(r.browser.mode, 'both');
+    assert.deepEqual(r.browser.availableProfiles, ['dedicated', 'personal']);
+    assert.equal(r.browser.defaultProfile, 'dedicated');
+    assert.equal(r.browser.dedicatedUserDataDir, '/data/dir/browser-profile');
+    assert.equal(r.browser.personalUserDataDir, '/home/me/.config/BraveSoftware/Brave-Browser');
+    assert.equal(r.browser.profileDirectory, 'Work');
+  });
 });
