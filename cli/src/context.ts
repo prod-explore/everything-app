@@ -108,11 +108,12 @@ export function shrinkMessagesForOverflow(
     if (isUserTurn(m)) userTurnIndices.push(i);
   });
   const latestUserIdx = userTurnIndices.at(-1) ?? 0;
+  // The indices refer to `full`; slicing a view that was already cut would shift every later boundary.
+  const full = view;
   for (let i = 1; i < userTurnIndices.length; i++) {
     const cut = userTurnIndices[i]!;
     if (cut > latestUserIdx) break;
-    const sliced = view.slice(cut);
-    view = sliced;
+    view = full.slice(cut);
     if (estimateTokens(view) + overheadTokens <= targetTokens) return view;
   }
 

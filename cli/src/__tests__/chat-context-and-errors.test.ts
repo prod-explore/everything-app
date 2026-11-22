@@ -9,7 +9,7 @@ import type { McpConnectionLike } from '../mcp-client.js';
 import { OpenAiCompatClient, ProviderHttpError } from '../providers/openai-compat.js';
 import { ProviderNotConfiguredError, ProviderRouter } from '../providers/router.js';
 import { classifyError, contextLimitFromMessage, describeReset } from '../providers/errors.js';
-import { estimateTokens, planCompaction, renderTranscript, summarizeHistory, trimForContext, withSummary } from '../context.js';
+import { estimateTokens, planCompaction, renderTranscript, shrinkMessagesForOverflow, summarizeHistory, trimForContext, withSummary } from '../context.js';
 import { parseTodos, projectInstructionsPrompt } from '../chat-tools.js';
 import { appendMessage, appendSummary, createConversation, deactivateMessagesFrom, deleteMessagesFrom, getConversationState, getMessages, loadLlmHistory, openDb, runMigrations, setConversationState } from '../db.js';
 import { llmHistory } from '../compaction.js';
@@ -822,5 +822,40 @@ describe('model metadata for the context window and reasoning effort', () => {
     assert.equal(calls.length, 3, 'retried step 2 once with shrunk history');
     assert.ok(estimateTokens(calls[2]!.messages) < estimateTokens(calls[1]!.messages));
     assert.match(JSON.stringify(out.at(-1)), /Recovered after shrink/);
+  });
+});
+
+describe('shrinkMessagesForOverflow', () => {
+  const toolCall = (id: string): Llm.MessageParam => ({ role: 'assistant', content: [{ type: 'tool_use', id, name: 'read_file', input: {} }] });
+  const toolRes = (id: string, out: string): Llm.MessageParam => ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: out }] });
+
+  it('drops whole old user turns from the original boundaries, never starting mid-turn', () => {
+    const msgs: Llm.MessageParam[] = [
+      userText('turn 0'), toolCall('a'), toolRes('a', 'small'), asstText('done 0'),
+      userText('turn 1 ' + 'X'.repeat(20_000)), asstText('done 1'),
+      userText('turn 2'), asstText('done 2'),
+      userText('turn 3'), asstText('done 3'),
+    ];
+    const out = shrinkMessagesForOverflow(msgs, 0, 2_000);
+    assert.deepEqual(out, msgs.slice(6), 'cuts at the third user turn, not at a boundary shifted by the earlier cut');
+  });
+
+  it('keeps every tool_result next to its tool_use and the latest user turn', () => {
+    const msgs: Llm.MessageParam[] = [
+      userText('turn 0 ' + 'Y'.repeat(20_000)), asstText('a0'),
+      userText('turn 1'), toolCall('b'), toolRes('b', 'out'), asstText('a1'),
+      userText('latest'), toolCall('c'), toolRes('c', 'Z'.repeat(30_000)),
+    ];
+    const out = shrinkMessagesForOverflow(msgs, 0, 3_000);
+    const ids = new Set<string>();
+    for (const m of out) {
+      if (!Array.isArray(m.content)) continue;
+      for (const b of m.content) {
+        if (b.type === 'tool_use') ids.add(b.id);
+        if (b.type === 'tool_result') assert.ok(ids.has(b.tool_use_id), 'tool_result without its tool_use');
+      }
+    }
+    assert.equal(out[0]!.role, 'user');
+    assert.ok(JSON.stringify(out).includes('latest'));
   });
 });
