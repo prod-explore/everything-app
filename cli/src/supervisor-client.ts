@@ -76,6 +76,13 @@ export class OrchestratorSupervisorClient implements SandboxLifecycle {
     }));
   }
 
+  /** Links the owner's sandbox with git-proxy over a private network (git-proxy answers there as `git-proxy`). */
+  async gitLink(owner: string): Promise<{ host: string }> {
+    return this.json(await sfetch(`${this.baseUrl.replace(/\/$/, '')}/gitlink`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerId: owner }),
+    }));
+  }
+
   async inventory(owner: string): Promise<SandboxInventory> {
     return this.json(await sfetch(this.url(owner, '/inventory')));
   }

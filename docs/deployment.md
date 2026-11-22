@@ -76,18 +76,15 @@ enabled IPv6 on these bridges, mirror the rules with `ip6tables`.
 
 ## Let sandboxes use GitHub
 
-Sandboxes are not on any network the other services share, so they reach git-proxy through a port published on the
-sandbox bridge's gateway:
+Sandboxes are not on any network the other services share (their bridge has container-to-container traffic switched
+off), and git-proxy publishes no host port. Before wiring git into a sandbox the orchestrator asks the supervisor to
+link the two (`POST /gitlink`): a private network without a route out holding that one sandbox and git-proxy, where
+git-proxy answers as `git-proxy`. Nothing to configure: leave `GIT_PROXY_SANDBOX_URL` empty. The traffic never crosses
+`br-ea-sandbox`, so `EGRESS_ALLOW` needs no entry for it. The supervisor reaches git-proxy by `GIT_PROXY_CONTAINER`
+(default `everythingapp-git-proxy`).
 
-```sh
-gw=$(docker network inspect ea-sandbox-egress -f '{{(index .IPAM.Config 0).Gateway}}')
-# in .env
-GIT_PROXY_BIND=$gw
-GIT_PROXY_SANDBOX_URL=http://$gw:8080
-# for the egress guard
-sudo EGRESS_ALLOW="$gw:8080" deploy/egress-guard.sh apply
-docker compose up -d git-proxy everythingapp-web
-```
+If you rather publish git-proxy's port on a bridge gateway yourself, set `GIT_PROXY_SANDBOX_URL=http://<gateway>:8080`
+(the link is then skipped) and allow it with `sudo EGRESS_ALLOW="<gateway>:8080" deploy/egress-guard.sh apply`.
 
 Then connect GitHub in *Settings → GitHub*: a GitHub App with device flow (`GITHUB_APP_CLIENT_ID` and
 `GITHUB_APP_CLIENT_SECRET`, "Device Flow" enabled in the App) or a fine-grained personal access token. `GITHUB_PAT` in `.env` is

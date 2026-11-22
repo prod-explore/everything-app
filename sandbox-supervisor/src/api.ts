@@ -99,6 +99,20 @@ export function createSupervisorApp(sandboxes: SandboxManager, defaultTimeoutMs 
     res.json({ ok: true });
   });
 
+  // POST /gitlink { ownerId } — link the owner's sandbox with git-proxy over a private network (no published host port).
+  app.post('/gitlink', async (req, res) => {
+    const ownerId = ownerOf(req.body ?? {});
+    if (!ownerId) {
+      res.status(400).json({ error: 'ownerId is required' });
+      return;
+    }
+    try {
+      res.json(await sandboxes.linkGitProxy(ownerId));
+    } catch (err) {
+      res.status(statusOf(err, 503)).json({ error: messageOf(err) });
+    }
+  });
+
   // POST /terminal/run { ownerId, terminal?, command, timeoutMs? }
   app.post('/terminal/run', async (req, res) => {
     const { terminal, command, timeoutMs } = (req.body ?? {}) as { terminal?: unknown; command?: unknown; timeoutMs?: unknown };

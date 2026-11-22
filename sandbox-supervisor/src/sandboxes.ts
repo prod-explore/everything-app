@@ -149,6 +149,8 @@ export interface SandboxManagerOptions {
   disk?: DiskQuotaOptions;
   /** Name of the browser container that previews attach to. Empty = previews are not configured (501). */
   browserContainer?: string;
+  /** Name of the git-proxy container that sandboxes are linked to (alias `git-proxy`). Empty = not configured (501). */
+  gitProxyContainer?: string;
   now?: () => number;
 }
 
@@ -200,6 +202,13 @@ export function previewNetworkName(ownerId: string): string {
   return `ea-preview-${digest(ownerId).slice(0, 16)}`;
 }
 
+export function gitLinkNetworkName(ownerId: string): string {
+  return `ea-gitlink-${digest(ownerId).slice(0, 16)}`;
+}
+
+/** DNS alias of git-proxy on every git link network: the sandbox reaches it as http://git-proxy:8080. */
+export const GIT_PROXY_ALIAS = 'git-proxy';
+
 export class SandboxManager {
   private readonly sandboxes = new Map<string, Sandbox>();
   private readonly inflight = new Map<string, Promise<{ sandbox: Sandbox; isNew: boolean }>>();
@@ -215,6 +224,7 @@ export class SandboxManager {
   ) {
     this.opts = {
       browserContainer: opts.browserContainer ?? '',
+      gitProxyContainer: opts.gitProxyContainer ?? '',
       maxRunning: opts.maxRunning ?? 2,
       idleMs: opts.idleMs ?? 30 * 60_000,
       containerTtlMs: opts.containerTtlMs ?? 7 * 24 * 3600_000,
@@ -388,6 +398,7 @@ export class SandboxManager {
     s.disk.bytes = null;
     await this.ops.stopContainer(s.containerId).catch(err => console.warn('[sandboxes] stop failed for %s:', s.ownerId, err));
     await this.unpreview(s.ownerId);
+    await this.unlinkGitProxy(s.ownerId);
   }
 
   /**
@@ -408,6 +419,32 @@ export class SandboxManager {
       throw new HttpError(`Could not link the sandbox and the browser: ${(err as Error).message}`, 502);
     }
     return { host, network };
+  }
+
+  /**
+   * Makes git-proxy reachable from the owner's sandbox WITHOUT publishing a host port: a private network (no route out,
+   * the sandbox bridge itself has ICC off) holding just this sandbox and git-proxy, which answers there as `git-proxy`.
+   * Idempotent; the orchestrator calls it before wiring git in the sandbox.
+   */
+  async linkGitProxy(ownerId: string): Promise<{ host: string; network: string }> {
+    if (!this.opts.gitProxyContainer) throw new HttpError('git-proxy link is not configured on this supervisor (GIT_PROXY_CONTAINER is empty).', 501);
+    const { containerId } = await this.claim(ownerId);
+    const network = gitLinkNetworkName(ownerId);
+    await this.ops.ensurePreviewNetwork(network, ownerId);
+    try {
+      await this.ops.connectNetwork(network, containerId);
+      await this.ops.connectNetwork(network, this.opts.gitProxyContainer, [GIT_PROXY_ALIAS]);
+    } catch (err) {
+      await this.ops.removePreviewNetwork(network).catch(() => undefined);
+      throw new HttpError(`Could not link the sandbox and git-proxy: ${(err as Error).message}`, 502);
+    }
+    return { host: GIT_PROXY_ALIAS, network };
+  }
+
+  /** Cuts the git-proxy link again. Safe to call when there is none. */
+  async unlinkGitProxy(ownerId: string): Promise<void> {
+    if (!this.opts.gitProxyContainer) return;
+    await this.ops.removePreviewNetwork(gitLinkNetworkName(ownerId)).catch(err => console.warn('[sandboxes] unlink git-proxy %s:', ownerId, err));
   }
 
   /** Cuts the link again. Safe to call when there is none. */
@@ -441,6 +478,7 @@ export class SandboxManager {
     }
     for (const m of await this.ops.listManaged()) if (m.ownerId === ownerId) ids.add(m.id);
     await this.unpreview(ownerId);
+    await this.unlinkGitProxy(ownerId);
     let containersRemoved = 0;
     for (const id of ids) if (await this.ops.removeContainer(id)) containersRemoved++;
     const volumeRemoved = await this.ops.removeVolume(volumeName(ownerId));

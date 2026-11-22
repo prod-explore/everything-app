@@ -78,6 +78,11 @@ export interface GithubRoutesDeps {
   approvalGate: WebApprovalGate;
   credentials: GitHubCredentials;
   sandbox: SandboxExec;
+  /**
+   * Makes git-proxy resolvable as `git-proxy` inside the owner's sandbox (private link network, no published port).
+   * Called before git is wired, unless GIT_PROXY_SANDBOX_URL points somewhere else (e.g. a published gateway port).
+   */
+  linkGitProxy?: (owner: string) => Promise<unknown>;
   /** Most recently active chat of a project — where push approval cards are shown. */
   activeConversationFor: (projectId: string) => string | null;
   env?: NodeJS.ProcessEnv;
@@ -96,7 +101,7 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
   const adminToken = env['GIT_PROXY_ADMIN_TOKEN'];
   const proxyUrl = env['GIT_PROXY_URL'] ?? 'http://git-proxy:8080';
   /** URL git inside the sandbox uses to reach the proxy (bridge gateway / published port). */
-  const proxyUrlForSandbox = env['GIT_PROXY_SANDBOX_URL'] ?? proxyUrl;
+  const proxyUrlForSandbox = env['GIT_PROXY_SANDBOX_URL'] || proxyUrl;
   const expectedPushes: ExpectedPush[] = [];
   const sandboxTokens = new Map<string, { token: string; expiresAt: number; reposKey: string }>();
 
@@ -568,6 +573,10 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
   async function ensureSandboxGit(projectId: string, opts?: { force?: boolean }): Promise<{ wired: boolean; reason?: string }> {
     if (!adminToken) return { wired: false, reason: 'GIT_PROXY_ADMIN_TOKEN is not configured' };
     if (!(await credentials.getToken())) return { wired: false, reason: 'GitHub is not connected — log in once in Settings → GitHub' };
+    // The link does not survive a stopped sandbox or a supervisor restart, so it is (idempotently) re-made before every use.
+    if (!env['GIT_PROXY_SANDBOX_URL'] && deps.linkGitProxy) {
+      await deps.linkGitProxy(owner(projectId)).catch(err => { throw new Error(`could not link the sandbox to git-proxy: ${(err as Error).message}`); });
+    }
     // One login for the whole app: the proxy token may reach any repository the connected account can; every push still asks.
     const reposKey = '*';
     const cached = sandboxTokens.get(projectId);

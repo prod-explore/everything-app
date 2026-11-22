@@ -31,6 +31,8 @@ async function main(): Promise<void> {
     maxFileBytes: num('SANDBOX_EXPLORER_MAX_FILE_BYTES', 2 * 1024 * 1024),
     // The browser the agent shares with the user; sandboxes are linked to it on demand (preview_sandbox). Empty = off.
     browserContainer: process.env['PREVIEW_BROWSER_CONTAINER'] ?? 'everythingapp-playwright-mcp',
+    // git-proxy joins a private per-sandbox network as `git-proxy` (no host port). Empty = off.
+    gitProxyContainer: process.env['GIT_PROXY_CONTAINER'] ?? 'everythingapp-git-proxy',
     checkpointTimeoutMs: num('SANDBOX_CHECKPOINT_TIMEOUT_MS', 120_000),
     // 0 turns the workspace quota off; unset = 2048 MB.
     disk: { quotaMb: process.env['SANDBOX_WORKSPACE_MB'] === '0' ? 0 : num('SANDBOX_WORKSPACE_MB', 2048) },

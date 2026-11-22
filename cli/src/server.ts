@@ -506,7 +506,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   /** Most recently active chat per project — where push approval cards from git-proxy are shown. */
   const lastConvForProject = new Map<string, string>();
   const github = createGithubRoutes({
-    db, approvalGate, credentials: new GitHubCredentials(router.vault), sandbox: sandboxExec,
+    db, approvalGate, credentials: new GitHubCredentials(router.vault), sandbox: sandboxExec, linkGitProxy: o => supervisor.gitLink(o),
     activeConversationFor: projectId => lastConvForProject.get(projectId) ?? latestOwnerConversation(db, projectId),
   });
 

@@ -34,7 +34,7 @@ function fakeFetch(handler: (url: string, init: RequestInit) => { status?: numbe
   }) as typeof fetch;
 }
 
-async function setup(opts: { fetch?: typeof fetch; exec?: SandboxExec['exec'] } = {}) {
+async function setup(opts: { fetch?: typeof fetch; exec?: SandboxExec['exec']; link?: (o: string) => Promise<unknown>; extraEnv?: Record<string, string> } = {}) {
   const db = openDb(':memory:');
   runMigrations(db);
   const project = createProject(db, { name: 'p' });
@@ -42,9 +42,9 @@ async function setup(opts: { fetch?: typeof fetch; exec?: SandboxExec['exec'] } 
   const gate = new WebApprovalGate(db);
   const execs: string[] = [];
   const sandbox: SandboxExec = { exec: opts.exec ?? (async (_o, cmd) => { execs.push(cmd); return { stdout: '', stderr: '', exitCode: 0 }; }) };
-  const env = { GIT_PROXY_ADMIN_TOKEN: ADMIN, GIT_PROXY_URL: 'http://git-proxy:8080', GITHUB_PAT: 'github_pat_env' } as NodeJS.ProcessEnv;
+  const env = { GIT_PROXY_ADMIN_TOKEN: ADMIN, GIT_PROXY_URL: 'http://git-proxy:8080', GITHUB_PAT: 'github_pat_env', ...opts.extraEnv } as NodeJS.ProcessEnv;
   const credentials = new GitHubCredentials(new KeyVault(db, SECRET), env, opts.fetch);
-  const routes = createGithubRoutes({ db, approvalGate: gate, credentials, sandbox, activeConversationFor: () => conv, env, fetchImpl: opts.fetch });
+  const routes = createGithubRoutes({ db, approvalGate: gate, credentials, sandbox, linkGitProxy: opts.link, activeConversationFor: () => conv, env, fetchImpl: opts.fetch });
   const app = express();
   app.use(express.json());
   app.use('/internal', routes.internal);
@@ -163,6 +163,27 @@ describe('GitHub routes', () => {
       await t.routes.ensureSandboxGit(t.project.id);
       assert.equal(minted.length, 1);
     } finally { t.close(); }
+  });
+
+  it('links the sandbox to git-proxy before every wiring (also when the token is cached); not when a sandbox URL is set', async () => {
+    const mint = fakeFetch(url => url.endsWith('/admin/tokens') ? { status: 201, json: { token: 'gpx_abc123', expiresAt: new Date(Date.now() + 3600e3).toISOString() } } : { status: 404, json: {} });
+    const linked: string[] = [];
+    const t = await setup({ fetch: mint, link: async o => { linked.push(o); } });
+    try {
+      await t.routes.ensureSandboxGit(t.project.id);
+      await t.routes.ensureSandboxGit(t.project.id);
+      assert.deepEqual(linked, [t.project.id, t.project.id]);
+    } finally { t.close(); }
+    const failing = await setup({ fetch: mint, link: async () => { throw new Error('boom'); } });
+    try {
+      await assert.rejects(failing.routes.ensureSandboxGit(failing.project.id), /could not link the sandbox to git-proxy: boom/);
+    } finally { failing.close(); }
+    const explicit: string[] = [];
+    const t3 = await setup({ fetch: mint, link: async o => { explicit.push(o); }, extraEnv: { GIT_PROXY_SANDBOX_URL: 'http://172.30.0.1:8080' } });
+    try {
+      await t3.routes.ensureSandboxGit(t3.project.id);
+      assert.deepEqual(explicit, []);
+    } finally { t3.close(); }
   });
 
   it('revoking a removed sandbox\'s git access revokes its proxy tokens and forgets the cached one', async () => {

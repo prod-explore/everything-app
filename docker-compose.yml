@@ -59,6 +59,8 @@ services:
       # preview_sandbox: the shared browser container is attached, on demand, to a private no-route-out network together
       # with ONE sandbox, so the agent can look at the dev server it is building. Empty = off.
       PREVIEW_BROWSER_CONTAINER: ${PREVIEW_BROWSER_CONTAINER:-everythingapp-playwright-mcp}
+      # Same idea for git: the git-proxy container is attached, on demand, to a private network with ONE sandbox. Empty = off.
+      GIT_PROXY_CONTAINER: ${GIT_PROXY_CONTAINER:-everythingapp-git-proxy}
     ports:
       - "127.0.0.1:3001:3001"
     restart: unless-stopped
@@ -170,9 +172,9 @@ services:
   # git smart-HTTP proxy to github.com. Sandboxes push/pull through it with short-lived proxy
   # tokens; the real GitHub credential (from the orchestrator, or GITHUB_PAT as fallback) is injected
   # here and never reaches the sandbox. Pushes become approval cards unless the repo's pushMode allows.
-  # Reachability from the sandbox bridge (br-ea-sandbox has ICC disabled, so it can't share that bridge):
-  # publish the port on the sandbox bridge gateway via GIT_PROXY_BIND and allow it in deploy/egress-guard.sh
-  # (EGRESS_ALLOW="<gateway-ip>:8080"); the default only binds loopback.
+  # No host port. br-ea-sandbox has ICC disabled, so sandboxes can't share a bridge with it; instead sandbox-supervisor
+  # joins git-proxy and ONE sandbox to a private no-route-out network on demand (POST /gitlink), where it answers as
+  # `git-proxy` (the default GIT_PROXY_SANDBOX_URL). Traffic never touches br-ea-sandbox, so egress-guard is not involved.
   git-proxy:
     container_name: everythingapp-git-proxy
     image: ghcr.io/prod-explore/everythingapp-git-proxy:${EVERYTHINGAPP_IMAGE_TAG:-latest}
@@ -188,8 +190,6 @@ services:
       GIT_PROXY_PROTECTED_BRANCHES: ${GIT_PROXY_PROTECTED_BRANCHES:-main,master}
       GIT_PROXY_DEFAULT_TOKEN_TTL_SECONDS: ${GIT_PROXY_DEFAULT_TOKEN_TTL_SECONDS:-3600}
       GIT_PROXY_MAX_TOKEN_TTL_SECONDS: ${GIT_PROXY_MAX_TOKEN_TTL_SECONDS:-86400}
-    ports:
-      - "${GIT_PROXY_BIND:-127.0.0.1}:8080:8080"
     restart: unless-stopped
     logging: *default-logging
     healthcheck:
@@ -235,8 +235,8 @@ services:
       # git-proxy (orchestrator mints sandbox tokens; git-proxy calls back /internal/*).
       GIT_PROXY_URL: http://git-proxy:8080
       GIT_PROXY_ADMIN_TOKEN: ${GIT_PROXY_ADMIN_TOKEN:?GIT_PROXY_ADMIN_TOKEN is required}
-      # URL git INSIDE the sandbox uses for the proxy (sandbox bridge gateway + GIT_PROXY_BIND port).
-      GIT_PROXY_SANDBOX_URL: ${GIT_PROXY_SANDBOX_URL:-http://git-proxy:8080}
+      # URL git INSIDE the sandbox uses for the proxy. Empty = http://git-proxy:8080 over the private link made by the supervisor.
+      GIT_PROXY_SANDBOX_URL: ${GIT_PROXY_SANDBOX_URL:-}
       # GitHub App (device flow). Without it, connect with a fine-grained PAT in Settings → GitHub.
       GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:-}
       GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET:-}
