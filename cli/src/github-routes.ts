@@ -270,10 +270,10 @@ export function createGithubRoutes(deps: GithubRoutesDeps) {
   }
 
   function cloneDirRel(raw: unknown, fallbackRepo: string): { rel: string } | { error: string } {
-    const cleaned = typeof raw === 'string' ? trimTrailingSlashes(raw.trim().replace(/^\/workspace\/?/, '').replace(/^\.\/?/, '')) : '';
+    const cleaned = typeof raw === 'string' ? trimTrailingSlashes(raw.trim().replace(/^\/workspace\/?/, '').replace(/^\.\//, '')) : '';
     const rel = cleaned || fallbackRepo;
     const segs = rel.split('/');
-    if (segs.length === 0 || segs.length > 2 || segs.some(s => !s || s === '.' || s === '..' || !/^[\w.@+-]+$/.test(s))) {
+    if (segs.length === 0 || segs.length > 2 || segs.some(s => !s || s === '.' || s === '..' || s.startsWith('-') || s.toLowerCase() === '.git' || !/^[\w.@+-]+$/.test(s))) {
       return { error: 'invalid target directory (use a simple folder name or group/repo inside /workspace, max 2 segments)' };
     }
     return { rel };

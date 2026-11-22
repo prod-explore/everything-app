@@ -187,4 +187,31 @@ describe('github virtual tools (github_list_repos & github_clone_repo)', () => {
     assert.ok(execs.some(c => c.includes("https://github.com/miki/frontend.git 'frontend'")));
     assert.ok(!execs.join('\n').includes('github_pat_env'), 'real GitHub token never entered sandbox');
   });
+
+  it('rejects option-like or escaping dir/branch values before anything reaches the sandbox', async () => {
+    const db = openDb(':memory:');
+    runMigrations(db);
+    const project = createProject(db, { name: 'validate' });
+    const conv = createConversation(db, { projectId: project.id }).id;
+    const execs: string[] = [];
+    const fetchImpl = (async () => new Response('{}', { status: 404 })) as typeof fetch;
+    const routes = createGithubRoutes({
+      db,
+      approvalGate: new WebApprovalGate(db),
+      credentials: new GitHubCredentials(new KeyVault(db, SECRET), {} as NodeJS.ProcessEnv, fetchImpl),
+      sandbox: { exec: async (_o, cmd) => { execs.push(cmd); return { stdout: '', stderr: '', exitCode: 0 }; } },
+      activeConversationFor: () => conv,
+      env: {} as NodeJS.ProcessEnv,
+      fetchImpl,
+    });
+    for (const dir of ['../evil', 'a/../b', '--bare', '-x', 'a/b/c', '.git', 'x y', 'a;rm -rf', '$(id)']) {
+      await assert.rejects(routes.cloneGithubRepo(project.id, { repo: 'miki/app', dir }), /invalid target directory/, `dir ${dir}`);
+    }
+    for (const branch of ['--upload-pack=touch /tmp/x', '-b', 'a..b', 'x.lock', 'a b', '$(id)', 'x;y']) {
+      await assert.rejects(routes.cloneGithubRepo(project.id, { repo: 'miki/app', branch }), /invalid branch name/, `branch ${branch}`);
+    }
+    await assert.rejects(routes.cloneGithubRepo(project.id, { repo: 'https://evil.example/miki/app' }), /github\.com repository/);
+    await assert.rejects(routes.cloneGithubRepo(project.id, { repo: 'miki/app', depth: '1; id' }), /depth/);
+    assert.equal(execs.length, 0, 'no command was run for any rejected input');
+  });
 });
