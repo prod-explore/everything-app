@@ -45,6 +45,12 @@ export class LiveTurn {
     if (last?.type === 'reasoning' && last.endedAt === undefined) last.endedAt = this.now();
   }
 
+  /** The request that was producing reasoning is being made again: what comes next is a new reasoning part. */
+  restart(): void {
+    this.touch();
+    this.endReasoning();
+  }
+
   textDelta(block: number, text: string): void {
     this.touch();
     this.endReasoning();

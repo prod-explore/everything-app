@@ -28,8 +28,20 @@ export interface LlmClient {
      * Optional streaming variant. A client without it (a test double, say) simply falls back to
      * `create` — nothing breaks, the reply just arrives in one piece instead of token by token.
      */
-    stream?(params: Llm.MessageCreateParamsNonStreaming, options?: { signal?: AbortSignal }): MessageStreamLike;
+    stream?(params: Llm.MessageCreateParamsNonStreaming, options?: StreamOptions): MessageStreamLike;
   };
+}
+
+/** What a streaming call takes besides the request. */
+export interface StreamOptions {
+  signal?: AbortSignal;
+  /**
+   * Called whenever bytes arrive from the provider, whether or not they carry anything of the answer: an SSE comment (a
+   * gateway's keep-alive while a model thinks) is activity, text is not required. This is what tells "silent" from "alive but
+   * still thinking" to the loop's idle timer. A client that cannot tell may leave it uncalled; the timer then runs as a plain
+   * first-byte limit.
+   */
+  onActivity?: () => void;
 }
 
 /** What the loop needs from a streaming call. */
@@ -158,11 +170,26 @@ export interface ConversationDeps {
   /** Passed to the model on every request; the adapter drops it for models that do not support it. */
   reasoningEffort?: 'low' | 'medium' | 'high';
   /**
-   * How long a streamed request may stay completely silent (no text, no reasoning) before the attempt fails with a
-   * FirstByteTimeoutError. Unset or 0: no limit. Only streamed requests are watched; a whole non-streamed answer
-   * legitimately takes as long as it takes.
+   * Idle limit of a streamed request before the answer starts: how long it may stay completely silent (no text, no
+   * reasoning, and no byte of any kind - a keep-alive comment counts, see StreamOptions.onActivity) before the attempt fails
+   * with a FirstByteTimeoutError. Unset or 0: no limit. Only streamed requests are watched; a whole non-streamed answer
+   * legitimately takes as long as it takes. With a provider that sends no keep-alives this is simply the time to the first byte.
    */
   firstByteTimeoutMs?: number;
+  /**
+   * Hard limit on the time to the first text or reasoning, whatever keep-alives arrive in between (a gateway can keep a
+   * connection warm for a hung model forever). Unset or 0: no limit. Like the idle limit it does not run while the adapter
+   * backs off (waitingUntil) and it stops at the first content.
+   */
+  firstContentTimeoutMs?: number;
+  /**
+   * How often one model request is made again, automatically, when it ends with a FirstByteTimeoutError or with an empty answer
+   * (default 1; 0 = never). Only a request that has produced no text is repeated, and only the request: tools that ran in
+   * earlier steps are not run again.
+   */
+  modelRetries?: number;
+  /** Called right before such a repeat, so the UI can say so. */
+  onModelRetry?: (info: ModelRetryInfo) => void;
   /**
    * Epoch ms until which the provider adapter is deliberately waiting (a back-off before it retries a busy error).
    * The first-byte clock does not run while that is in the future, so the adapter's own retry window is not cut short.
@@ -176,6 +203,13 @@ export interface ConversationDeps {
       | { error: string };
     markPersonalActive?: (toolName: string, active: boolean) => void;
   };
+}
+
+/** Why a model request is being made again. */
+export interface ModelRetryInfo {
+  reason: 'idle' | 'first_content' | 'empty';
+  /** Which try this is going to be (2 for the first repeat). */
+  attempt: number;
 }
 
 /** A message the turn produced; `incomplete` marks a reply that was cut short and carries what it had so far. */
@@ -198,10 +232,15 @@ export class EmptyAnswerError extends Error {
   }
 }
 
-/** A streamed request produced nothing at all within the first-byte limit. */
+/**
+ * A streamed request did not start answering: it was silent for `ms` ('idle': no byte of any kind, keep-alives included), or it
+ * had not produced any text or reasoning `ms` after it began although bytes kept arriving ('first_content').
+ * `attempts` is how many requests were made (2 when the automatic repeat failed as well).
+ */
 export class FirstByteTimeoutError extends Error {
-  constructor(public readonly ms: number) {
-    super(`The model did not start answering within ${Math.round(ms / 1000)} s`);
+  attempts = 1;
+  constructor(public readonly ms: number, public readonly kind: 'idle' | 'first_content' = 'idle') {
+    super(kind === 'idle' ? `The model did not start answering within ${Math.round(ms / 1000)} s` : `The model sent keep-alives but no answer within ${Math.round(ms / 1000)} s`);
     this.name = 'FirstByteTimeoutError';
   }
 }
@@ -390,30 +429,53 @@ export async function runTurn(
 }
 
 /**
- * The first-byte guard of one streamed request: aborts it when nothing (no text, no reasoning) has arrived within
- * `firstByteTimeoutMs`, not counting the time the adapter spends deliberately waiting before a retry. The abort signal it
- * hands out also follows the turn's own (kill switch).
+ * The guard of one streamed request while it has not produced anything of the answer. Two clocks:
+ *  - idle: restarted by every byte the provider sends (`activity`, including keep-alive comments); fires after `firstByteTimeoutMs`
+ *    of complete silence. With a provider that sends no keep-alives it is the old "first byte" limit.
+ *  - first content: runs from the start, never restarted; fires after `firstContentTimeoutMs`.
+ * Both stop at the first text or reasoning (`sawContent`; from then on the adapter's own stall limit applies) and neither runs
+ * while the adapter deliberately waits before a retry (`waitingUntil`). Firing aborts the request with a FirstByteTimeoutError.
+ * The abort signal it hands out also follows the turn's own (kill switch).
  */
-function watchFirstByte(deps: ConversationDeps): { signal: AbortSignal | undefined; sawByte(): void; timedOut(): boolean; stop(): void } {
-  const limit = deps.firstByteTimeoutMs;
-  if (!limit || limit <= 0) return { signal: deps.signal, sawByte() {}, timedOut: () => false, stop() {} };
+function watchFirstByte(deps: ConversationDeps): { signal: AbortSignal | undefined; activity(): void; sawContent(): void; timedOut(): boolean; error(): FirstByteTimeoutError; stop(): void } {
+  const idle = deps.firstByteTimeoutMs && deps.firstByteTimeoutMs > 0 ? deps.firstByteTimeoutMs : 0;
+  const hard = deps.firstContentTimeoutMs && deps.firstContentTimeoutMs > 0 ? deps.firstContentTimeoutMs : 0;
+  const never = new FirstByteTimeoutError(0);
+  if (!idle && !hard) return { signal: deps.signal, activity() {}, sawContent() {}, timedOut: () => false, error: () => never, stop() {} };
   const guard = new AbortController();
-  const state = { fired: false, timer: undefined as ReturnType<typeof setTimeout> | undefined };
-  const arm = (ms: number) => {
-    state.timer = setTimeout(() => {
-      const waitLeft = (deps.waitingUntil?.() ?? 0) - Date.now();
-      if (waitLeft > 0) { arm(waitLeft + limit); return; }
-      state.fired = true;
-      guard.abort(new FirstByteTimeoutError(limit));
-    }, ms);
-  };
-  arm(limit);
+  const state = { fired: undefined as FirstByteTimeoutError | undefined, content: false, idleTimer: undefined as ReturnType<typeof setTimeout> | undefined, hardTimer: undefined as ReturnType<typeof setTimeout> | undefined };
+  const stop = () => { clearTimeout(state.idleTimer); clearTimeout(state.hardTimer); };
+  const arm = (kind: 'idle' | 'first_content', limit: number, ms: number): ReturnType<typeof setTimeout> => setTimeout(() => {
+    const waitLeft = (deps.waitingUntil?.() ?? 0) - Date.now();
+    if (waitLeft > 0) {
+      // The adapter is backing off before a retry: that is not the model's silence. Look again when the wait is over.
+      if (kind === 'idle') state.idleTimer = arm(kind, limit, waitLeft + limit);
+      else state.hardTimer = arm(kind, limit, waitLeft + limit);
+      return;
+    }
+    stop();
+    state.fired = new FirstByteTimeoutError(limit, kind);
+    guard.abort(state.fired);
+  }, ms);
+  if (idle) state.idleTimer = arm('idle', idle, idle);
+  if (hard) state.hardTimer = arm('first_content', hard, hard);
   return {
     signal: deps.signal ? AbortSignal.any([deps.signal, guard.signal]) : guard.signal,
-    sawByte: () => clearTimeout(state.timer),
-    timedOut: () => state.fired,
-    stop: () => clearTimeout(state.timer),
+    activity: () => {
+      if (!idle || state.content || state.fired) return;
+      clearTimeout(state.idleTimer);
+      state.idleTimer = arm('idle', idle, idle);
+    },
+    sawContent: () => { state.content = true; stop(); },
+    timedOut: () => state.fired !== undefined,
+    error: () => state.fired ?? never,
+    stop,
   };
+}
+
+/** A response with no text and no tool call: nothing to show and nothing to run (reasoning alone does not count as an answer). */
+function isEmptyResponse(res: Llm.Message): boolean {
+  return !res.content.some(b => b.type === 'tool_use' || (b.type === 'text' && b.text.trim()));
 }
 
 async function runLoop(
@@ -481,18 +543,18 @@ async function runLoop(
         trace.inflight = inflight;
         const watch = watchFirstByte(deps);
         try {
-          const stream = deps.llm.messages.stream(params, { signal: watch.signal });
+          const stream = deps.llm.messages.stream(params, { signal: watch.signal, onActivity: watch.activity });
           stream.on('streamEvent', event => {
             if (event.type !== 'content_block_delta') return;
             if (event.delta.type === 'text_delta' && event.delta.text) {
               progress.any = true;
-              watch.sawByte();
+              watch.sawContent();
               closeThinking();
               inflight.text.set(event.index, (inflight.text.get(event.index) ?? '') + event.delta.text);
               onTextDelta?.({ block: event.index, text: event.delta.text });
             } else if (event.delta.type === 'thinking_delta' && event.delta.thinking) {
               progress.any = true;
-              watch.sawByte();
+              watch.sawContent();
               clock.thinkingFrom ??= Date.now();
               inflight.thinking += event.delta.thinking;
               onThinkingDelta?.({ text: event.delta.thinking });
@@ -506,7 +568,7 @@ async function runLoop(
         } catch (err) {
           closeThinking();
           // The guard aborted the request: report that, not whatever the HTTP client says about being aborted.
-          throw watch.timedOut() ? new FirstByteTimeoutError(deps.firstByteTimeoutMs ?? 0) : err;
+          throw watch.timedOut() ? watch.error() : err;
         } finally {
           watch.stop();
         }
@@ -514,10 +576,46 @@ async function runLoop(
       return deps.llm.messages.create(params, options);
     };
 
+    // One more try of the same request when it produced nothing: it timed out before the answer started, or it came back empty.
+    // Only this request is repeated; tools that ran in earlier steps are not (they are in `messages` already), and a request that
+    // has streamed text is never repeated (the person has read it). The UI is told through onModelRetry.
+    let retriesLeft = deps.modelRetries ?? 1;
+    let tries = 1;
+    const callWithRetry = async (reqMessages: Llm.MessageParam[], progress: { any: boolean }): Promise<Llm.Message> => {
+      for (;;) {
+        let res: Llm.Message;
+        try {
+          res = await callModel(reqMessages, progress);
+        } catch (err) {
+          if (err instanceof FirstByteTimeoutError) {
+            err.attempts = tries;
+            if (retriesLeft > 0 && !progress.any && !deps.signal?.aborted) {
+              retriesLeft--;
+              tries++;
+              trace.inflight = null;
+              deps.onModelRetry?.({ reason: err.kind, attempt: tries });
+              continue;
+            }
+          }
+          throw err;
+        }
+        if (isEmptyResponse(res) && retriesLeft > 0 && !deps.signal?.aborted) {
+          retriesLeft--;
+          tries++;
+          trace.inflight = null;
+          progress.any = false;
+          deps.onUsage?.(res.usage); // the discarded response was paid for
+          deps.onModelRetry?.({ reason: 'empty', attempt: tries });
+          continue;
+        }
+        return res;
+      }
+    };
+
     const progress = { any: false };
     let response: Llm.Message;
     try {
-      response = await callModel(view, progress);
+      response = await callWithRetry(view, progress);
     } catch (err) {
       const incident = classifyError(err);
       if (steps > 1 && incident.kind === 'context_too_long' && !progress.any && !deps.signal?.aborted) {
@@ -529,7 +627,7 @@ async function runLoop(
         );
         const shrunk = shrinkMessagesForOverflow(view, overhead, target);
         if (estimateTokens(shrunk) + overhead < currentTotal) {
-          response = await callModel(shrunk, progress);
+          response = await callWithRetry(shrunk, progress);
         } else {
           throw err;
         }
@@ -557,7 +655,7 @@ async function runLoop(
     if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
       // Nothing to show and nothing to run: a silent success would leave the person staring at no reply. Whatever the
       // response did carry (reasoning only) is stored first, so the turn's history stays what the model produced.
-      if (toolUses.length === 0 && !response.content.some(b => b.type === 'text' && b.text.trim())) throw new EmptyAnswerError();
+      if (isEmptyResponse(response)) throw new EmptyAnswerError();
       flushNew(deps, trace);
       return messages;
     }

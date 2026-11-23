@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type * as Llm from '../llm-types.js';
-import type { LlmClient, MessageStreamLike } from '../llm-loop.js';
+import type { LlmClient, MessageStreamLike, StreamOptions } from '../llm-loop.js';
 import type { ModelInfo } from './registry.js';
 
 /**
@@ -744,7 +744,7 @@ export class OpenAiCompatClient implements LlmClient {
         throw err;
       }
     },
-    stream: (params: Llm.MessageCreateParamsNonStreaming, options?: { signal?: AbortSignal }): MessageStreamLike => this.stream(params, options),
+    stream: (params: Llm.MessageCreateParamsNonStreaming, options?: StreamOptions): MessageStreamLike => this.stream(params, options),
   };
 
   /**
@@ -755,7 +755,7 @@ export class OpenAiCompatClient implements LlmClient {
    * A failure before the first token is retried by the same loop as create() (one request per attempt); only a server
    * that cannot stream at all falls back to create().
    */
-  stream(params: Llm.MessageCreateParamsNonStreaming, options?: { signal?: AbortSignal }): MessageStreamLike {
+  stream(params: Llm.MessageCreateParamsNonStreaming, options?: StreamOptions): MessageStreamLike {
     const listeners: Array<(e: Llm.MessageStreamEvent) => void> = [];
     const emit = (delta: Llm.MessageStreamEvent['delta']) => {
       const event: Llm.MessageStreamEvent = { type: 'content_block_delta', index: 0, delta };
@@ -765,7 +765,7 @@ export class OpenAiCompatClient implements LlmClient {
     const emitThinking = (thinking: string) => emit({ type: 'thinking_delta', thinking });
     const final = (async () => {
       await Promise.resolve(); // let the caller attach listeners first
-      return this.streamOnce(params, options?.signal, emitText, emitThinking);
+      return this.streamOnce(params, options?.signal, emitText, emitThinking, options?.onActivity);
     })();
     return {
       on(event: 'streamEvent', listener: (e: Llm.MessageStreamEvent) => void) {
@@ -781,6 +781,7 @@ export class OpenAiCompatClient implements LlmClient {
     external: AbortSignal | undefined,
     emitText: (text: string) => void,
     emitThinking?: (text: string) => void,
+    onActivity?: () => void,
   ): Promise<Llm.Message> {
     const info = this.opts.modelInfo(params.model);
     const ctx: TranslateContext = { modelInfo: info, meta: this.opts.meta, names: new NameMap() };
@@ -795,7 +796,7 @@ export class OpenAiCompatClient implements LlmClient {
       ...(tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
     };
     try {
-      return await this.withRetries(() => this.streamAttempt(params, body, ctx, external, emitText, emitThinking), external);
+      return await this.withRetries(() => this.streamAttempt(params, body, ctx, external, emitText, emitThinking, onActivity), external);
     } catch (err) {
       if (this.cannotStream(err, tools.length > 0)) return this.messages.create(params, { signal: external });
       throw err;
@@ -817,6 +818,7 @@ export class OpenAiCompatClient implements LlmClient {
     external: AbortSignal | undefined,
     emitText: (text: string) => void,
     emitThinking?: (text: string) => void,
+    onActivity?: () => void,
   ): Promise<Llm.Message> {
     const { signal, cleanup } = linkSignals(external, this.opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -870,6 +872,9 @@ export class OpenAiCompatClient implements LlmClient {
           throw err;
         }
         if (chunk.done) break;
+        // Any bytes at all - an SSE comment such as a gateway's keep-alive included - show the provider is alive; the turn's idle
+        // timer is restarted by them, while only text or reasoning ends the wait for the answer.
+        onActivity?.();
         buffer += decoder.decode(chunk.value, { stream: true });
         let nl: number;
         while ((nl = buffer.indexOf('\n')) !== -1) {

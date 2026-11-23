@@ -255,8 +255,11 @@ services:
       TOOL_OUTPUT_MAX_CHARS: ${TOOL_OUTPUT_MAX_CHARS:-12000}
       # Model steps one scheduled task run may take.
       SCHEDULE_MAX_STEPS: ${SCHEDULE_MAX_STEPS:-25}
-      # Seconds a streamed model request may stay silent before the attempt fails (0 = no limit).
+      # Seconds a streamed model request may stay completely silent before it starts answering (keep-alive comments from a
+      # gateway count as sound; 0 = no limit).
       FIRST_BYTE_TIMEOUT_S: ${FIRST_BYTE_TIMEOUT_S:-90}
+      # Hard limit, in seconds, on the time to the first text or reasoning, whatever keep-alives arrive meanwhile (0 = no limit).
+      FIRST_CONTENT_TIMEOUT_S: ${FIRST_CONTENT_TIMEOUT_S:-600}
     ports:
       - "127.0.0.1:3000:3000"
     volumes:

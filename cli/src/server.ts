@@ -63,7 +63,7 @@ import { trimLeadingSlashes } from './text-utils.js';
 import { createApiRateLimiter, type ApiRateLimitOptions } from './rate-limit.js';
 import { LiveTurn } from './live-turn.js';
 import { CONTINUE_PROMPT, joinReply } from './continue-reply.js';
-import { classifyTurnError, firstByteTimeoutMs } from './turn-errors.js';
+import { classifyTurnError, firstByteTimeoutMs, firstContentTimeoutMs } from './turn-errors.js';
 import {
   GhostRuleError,
   openDb,
@@ -323,8 +323,12 @@ export interface BuildAppOptions {
   scheduler?: { autostart?: boolean };
   /** Per-IP ceiling for /api and the web app files (default 1200 requests per minute). Tests that hammer one instance raise it. */
   rateLimit?: ApiRateLimitOptions;
-  /** How long a streamed model request may stay silent before the attempt fails (default FIRST_BYTE_TIMEOUT_S, 90 s; 0 = no limit). */
+  /** How long a streamed model request may stay silent, keep-alives counted as sound, before the attempt fails (default FIRST_BYTE_TIMEOUT_S, 90 s; 0 = no limit). */
   firstByteTimeoutMs?: number;
+  /** The hard limit on the time to the first text or reasoning, keep-alives or not (default FIRST_CONTENT_TIMEOUT_S, 10 min; 0 = no limit). */
+  firstContentTimeoutMs?: number;
+  /** Automatic repeats of a model request that timed out before answering or came back empty (default 1; 0 = never). */
+  modelRetries?: number;
 }
 
 export interface BuiltApp {
@@ -735,6 +739,8 @@ ${formatHumanResponse(response)}` };
   /** What each running turn has produced so far (see live-turn.ts). */
   const liveTurns = new Map<string, LiveTurn>();
   const firstByte = opts.firstByteTimeoutMs ?? firstByteTimeoutMs();
+  const firstContent = opts.firstContentTimeoutMs ?? firstContentTimeoutMs();
+  const modelRetries = opts.modelRetries;
   // While a provider adapter backs off before retrying a busy error, the first-byte clock of that conversation's turn does not run.
   const providerWaitUntil = new Map<string, number>();
   const onRetryBase = router.onProviderRetry;
@@ -1561,6 +1567,14 @@ ${formatHumanResponse(response)}` };
 ${m.body}`),
             onStep: () => heartbeatRun(db, rootRun.id),
             firstByteTimeoutMs: opts.unattended ? 0 : firstByte,
+            firstContentTimeoutMs: opts.unattended ? 0 : firstContent,
+            ...(modelRetries !== undefined ? { modelRetries } : {}),
+            onModelRetry: retry => {
+              // Said in the chat the way a provider's own retry is (the notice goes away with the first sign of the answer).
+              console.warn(`[turn] ${provider} gave no answer (${retry.reason}) - asking again (try ${retry.attempt})`);
+              live.restart();
+              sse.emit(convId, 'provider:retry', { provider, conversationId: convId, attempt: retry.attempt - 1, status: retry.reason === 'empty' ? 'empty' : 'timeout', delayMs: 0, remainingMs: 0 });
+            },
             waitingUntil: () => providerWaitUntil.get(convId) ?? 0,
             onMessages: batch => {
               db.transaction(() => {
