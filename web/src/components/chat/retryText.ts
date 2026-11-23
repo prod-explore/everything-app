@@ -11,6 +11,8 @@ export function formatWait(ms: number): string {
 /** What is wrong, in a few words: a 429 is a rate limit, a dropped connection says so, anything else is "busy". */
 export function trouble(r: RetryNotice): string {
   if (r.status === 'network') return `can't reach ${r.provider}`;
+  if (r.status === 'timeout') return `${r.provider} went silent before answering`;
+  if (r.status === 'empty') return `${r.provider} returned an empty answer`;
   if (r.status === 429) return `${r.provider} is rate-limiting requests`;
   return `${r.provider} is busy (HTTP ${r.status})`;
 }

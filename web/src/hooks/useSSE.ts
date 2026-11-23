@@ -132,7 +132,8 @@ export function liveTurnReducer(state: LiveTurnState, action: LiveTurnAction): L
     case 'resume':
       return state.running ? state : liveTurnReducer(state, { type: 'start' });
     case 'retry':
-      return { ...state, retry: action.retry };
+      // The request that was producing reasoning is made again: its reasoning is over, the next arrives as a new part.
+      return { ...state, parts: endReasoning(state.parts, now), retry: action.retry };
     case 'snapshot': {
       const snap = action.snapshot;
       // The server stamped reasoning with its own clock; what matters is how long ago, so move them onto ours.

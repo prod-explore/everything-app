@@ -211,6 +211,21 @@ describe('useSSE', () => {
     expect(result.current.retry).toBeUndefined();
   });
 
+  it('a repeated model request starts a new reasoning part instead of extending the first one', () => {
+    const { result } = renderHook(() => useSSE('c1'));
+    const es = FakeEventSource.instances[0]!;
+    act(() => {
+      es.emit('turn:start');
+      es.emit('turn:thinking_delta', { text: 'first try' });
+      es.emit('provider:retry', { provider: 'P', attempt: 1, status: 'empty', delayMs: 0, remainingMs: 0, conversationId: 'c1' });
+    });
+    expect(result.current.retry).toMatchObject({ status: 'empty' });
+    act(() => es.emit('turn:thinking_delta', { text: 'second try' }));
+    const reasoning = result.current.parts.filter(p => p.type === 'reasoning');
+    expect(reasoning.map(p => (p as { text: string }).text)).toEqual(['first try', 'second try']);
+    expect(result.current.retry).toBeUndefined();
+  });
+
   it('does not connect without a conversation', () => {
     renderHook(() => useSSE(null));
     expect(FakeEventSource.instances).toHaveLength(0);

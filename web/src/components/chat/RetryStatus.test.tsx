@@ -24,6 +24,14 @@ describe('describeRetry', () => {
     expect(describeRetry(notice({ remainingMs: 0 }), 0).giveUpIn).toBeNull();
   });
 
+  it('words a model that went silent or answered with nothing, and retries at once', () => {
+    const silent = describeRetry(notice({ status: 'timeout', delayMs: 0, remainingMs: 0, receivedAt: 0 }), 0);
+    expect(silent.text).toBe('MindGate went silent before answering — retrying now (attempt 2)');
+    expect(silent.waiting).toBe(false);
+    expect(silent.giveUpIn).toBeNull();
+    expect(describeRetry(notice({ status: 'empty', delayMs: 0, remainingMs: 0, receivedAt: 0 }), 0).text).toBe('MindGate returned an empty answer — retrying now (attempt 2)');
+  });
+
   it('formats waits', () => {
     expect([formatWait(400), formatWait(12_000), formatWait(120_000), formatWait(7_200_000)]).toEqual(['1 s', '12 s', '2 min', '2 h 0 min']);
   });
