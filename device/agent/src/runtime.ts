@@ -1,8 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import type { SessionClosedInfo } from '../../../playwright-mcp/src/lib.js';
 import type { ResolvedConfig } from './config.js';
 import { PathGuard } from './fs/guard.js';
-import { buildReport, DEVICE_INFO_URI, deviceLabel, type DeviceReport } from './report.js';
+import { BROWSER_SESSION_CLOSED_METHOD, buildReport, DEVICE_INFO_URI, deviceLabel, type BrowserSessionClosedParams, type DeviceReport } from './report.js';
 import { ShellManager } from './shell/manager.js';
 import { createDeviceBrowser, type DeviceBrowser } from './tools/browser.js';
 import { summarizeCall } from './tools/common.js';
@@ -20,6 +21,8 @@ export class DeviceRuntime {
   readonly shells: ShellManager | null;
   readonly browser: DeviceBrowser | null;
   private readonly guard: PathGuard;
+  /** The MCP servers of the connections that are up right now (normally one). */
+  private readonly servers = new Set<McpServer>();
 
   constructor(
     readonly cfg: ResolvedConfig,
@@ -29,7 +32,7 @@ export class DeviceRuntime {
     this.shells = cfg.shell.enabled
       ? new ShellManager({ spec: { path: cfg.shell.path, kind: cfg.shell.kind, platform: cfg.platform }, defaultCwd: cfg.shell.cwd })
       : null;
-    this.browser = cfg.browser.enabled ? createDeviceBrowser(cfg.browser, cfg.platform) : null;
+    this.browser = cfg.browser.enabled ? createDeviceBrowser(cfg.browser, cfg.platform, { onSessionClosed: info => this.announceSessionClosed(info) }) : null;
     this.guard = new PathGuard(cfg.files.roots);
   }
 
@@ -44,6 +47,8 @@ export class DeviceRuntime {
           'Prefer read-only steps first, say what you are about to change, and never act beyond what the user asked.',
       },
     );
+    this.servers.add(server);
+    server.server.onclose = () => this.servers.delete(server);
     server.registerResource(
       'device-info',
       DEVICE_INFO_URI,
@@ -90,6 +95,19 @@ export class DeviceRuntime {
         return typeof value === 'function' ? value.bind(target) : value;
       },
     });
+  }
+
+  /**
+   * Tells the server that a browser session is over, so the consent it holds for that session ends with it. Best effort:
+   * with no connection up the notification is not sent — the server drops its consent when the device goes offline anyway.
+   */
+  private announceSessionClosed(info: SessionClosedInfo): void {
+    if (!info.profile) return;
+    const params: BrowserSessionClosedParams = { conversationId: info.id, profile: info.profile, reason: info.reason };
+    for (const server of this.servers) {
+      // A method outside the MCP spec's own notification types: the SDK's typed `notification()` has no overload for it.
+      void server.server.notification({ method: BROWSER_SESSION_CLOSED_METHOD, params } as never).catch(() => {});
+    }
   }
 
   /** Ends all shells and closes the browser (pause, unpair, shutdown, config change). */

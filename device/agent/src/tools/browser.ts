@@ -15,6 +15,7 @@ import {
   type ClaimOptions,
   type ContextLauncher,
   type PlaywrightConfig,
+  type SessionClosedInfo,
   type SessionPoolOptions,
   type SessionState,
 } from '../../../../playwright-mcp/src/lib.js';
@@ -177,7 +178,14 @@ export interface DeviceBrowser {
   closeAll(reason: string): Promise<void>;
 }
 
-export function createDeviceBrowser(browser: ResolvedBrowser, platform: DevicePlatform, downloadDir = nodePath.join(homedir(), 'Downloads')): DeviceBrowser {
+export interface DeviceBrowserOptions {
+  downloadDir?: string;
+  /** A browser session ended, for whatever reason (see `SessionPoolOptions.onSessionClosed`). */
+  onSessionClosed?: (info: SessionClosedInfo) => void;
+}
+
+export function createDeviceBrowser(browser: ResolvedBrowser, platform: DevicePlatform, options: DeviceBrowserOptions = {}): DeviceBrowser {
+  const downloadDir = options.downloadDir ?? nodePath.join(homedir(), 'Downloads');
   const availableProfiles = browser.availableProfiles ?? [browser.mode === 'dedicated' ? 'dedicated' : 'personal'];
   const defaultProfile = browser.defaultProfile ?? (browser.mode === 'dedicated' ? 'dedicated' : 'personal');
   const config = embeddedConfig({
@@ -195,6 +203,7 @@ export function createDeviceBrowser(browser: ResolvedBrowser, platform: DevicePl
     maxTabs: config.maxTabs,
     defaultProfile,
     requirePersonalApproval: true,
+    ...(options.onSessionClosed ? { onSessionClosed: options.onSessionClosed } : {}),
     makeLauncher: conversationId => new DeviceLauncher(browser, platform, downloadDir, () => void pool.close(conversationId, 'the browser was closed')),
   });
   return {

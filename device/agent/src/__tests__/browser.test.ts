@@ -8,9 +8,11 @@ import * as nodePath from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { z } from 'zod';
 import { profileInUse } from '../browser/lock.js';
 import { parseConfig, resolveConfig } from '../config.js';
 import { hostEnv } from '../detect.js';
+import { BROWSER_SESSION_CLOSED_METHOD, type BrowserSessionClosedParams } from '../report.js';
 import { DeviceRuntime } from '../runtime.js';
 import { BrowserInUseError, DeviceLauncher, DevicePool, IGNORED_DEFAULT_ARGS, launchArgs } from '../tools/browser.js';
 
@@ -147,7 +149,7 @@ describe('browser tools with the real Chrome (dedicated profile, headless only b
     delete process.env['EVVAPP_DEVICE_TEST_HEADLESS'];
   });
 
-  async function connect(browser: object): Promise<Client> {
+  async function connect(browser: object, closed?: BrowserSessionClosedParams[]): Promise<Client> {
     // A fresh data directory (so a fresh browser profile) per runtime: one Chrome per profile at a time.
     const cfg = resolveConfig(parseConfig({ shell: { enabled: false }, browser: { enabled: true, mode: 'dedicated', product: 'chrome', executable: CHROME, ...browser } }), await mkdtemp(nodePath.join(dir, 'data-')), hostEnv());
     const runtime = new DeviceRuntime(cfg, () => {});
@@ -155,6 +157,11 @@ describe('browser tools with the real Chrome (dedicated profile, headless only b
     const server = runtime.createServer();
     const [a, b] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'evvapp', version: '0' });
+    if (closed) {
+      client.setNotificationHandler(z.object({ method: z.literal(BROWSER_SESSION_CLOSED_METHOD), params: z.object({ conversationId: z.string(), profile: z.string(), reason: z.string() }) }), n => {
+        closed.push(n.params as BrowserSessionClosedParams);
+      });
+    }
     await Promise.all([server.connect(a), client.connect(b)]);
     return client;
   }
@@ -201,6 +208,37 @@ describe('browser tools with the real Chrome (dedicated profile, headless only b
     await call('browser_close', { _conversation_id: 'chat-2' });
   });
 
+  it('tells the server when a browser session ends: browser_close, the idle timeout, the device shutting down', { timeout: 120_000 }, async () => {
+    const closed: BrowserSessionClosedParams[] = [];
+    const client = await connect({}, closed);
+    const settle = () => new Promise(r => setTimeout(r, 50));
+    const open = (id: string) => client.callTool({ name: 'browser_open', arguments: { _conversation_id: id, url: `${base}/` } });
+
+    await open('c-close');
+    assert.equal(closed.length, 0, 'nothing while the session lives');
+    await client.callTool({ name: 'browser_close', arguments: { _conversation_id: 'c-close' } });
+    await settle();
+    assert.equal(closed.length, 1);
+    assert.equal(closed[0]!.conversationId, 'c-close');
+    assert.equal(closed[0]!.profile, 'dedicated');
+
+    await open('c-idle');
+    const runtime = runtimes[runtimes.length - 1]!;
+    const handle = runtime.browser!.pool.get('c-idle')!;
+    handle.lastActivityAt = new Date(Date.now() - 31 * 60_000);
+    runtime.browser!.pool.sweepIdle();
+    await settle();
+    assert.equal(closed.length, 2);
+    assert.equal(closed[1]!.conversationId, 'c-idle');
+    assert.match(closed[1]!.reason, /idle timeout/);
+
+    await open('c-dispose');
+    await runtime.dispose('device paused');
+    await settle();
+    assert.equal(closed.length, 3);
+    assert.equal(closed[2]!.reason, 'device paused');
+  });
+
   it('the domain gate applies: an unapproved host is refused until the user approved it', { timeout: 120_000 }, async () => {
     const client = await connect({});
     const gated = (await client.callTool({ name: 'browser_open', arguments: { _conversation_id: 'g', url: `${base}/`, _policy: { domainGrant: [] } } })) as { isError?: boolean };
@@ -222,7 +260,7 @@ describe('browser tools with the real Chrome (dedicated profile, headless only b
     const downloads = await mkdtemp(nodePath.join(tmpdir(), 'evv-dl-'));
     const { createDeviceBrowser } = await import('../tools/browser.js');
     const cfg = resolveConfig(parseConfig({ shell: { enabled: false }, browser: { enabled: true, mode: 'dedicated', product: 'chrome', executable: CHROME } }), await mkdtemp(nodePath.join(dir, 'data-')), hostEnv());
-    const device = createDeviceBrowser(cfg.browser, 'linux', downloads);
+    const device = createDeviceBrowser(cfg.browser, 'linux', { downloadDir: downloads });
     const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
     const server = new McpServer({ name: 't', version: '0' });
     device.register(server);
