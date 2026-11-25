@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { BrowserContext, Page } from 'playwright';
-import { BrowserSessionPool, type ContextLauncher } from '../sessionPool.js';
+import { BrowserSessionPool, type ContextLauncher, type SessionClosedInfo } from '../sessionPool.js';
 
 /** A launcher that hands back a fake context/page — no real browser involved. */
 function fakeLauncher(closes: string[], id: string): ContextLauncher {
@@ -19,8 +19,12 @@ function fakeLauncher(closes: string[], id: string): ContextLauncher {
   };
 }
 
-function makePool(opts: Partial<{ maxSessions: number; idleTimeoutMs: number }> = {}, closes: string[] = []) {
+function makePool(
+  opts: Partial<{ maxSessions: number; idleTimeoutMs: number; onSessionClosed: (info: SessionClosedInfo) => void }> = {},
+  closes: string[] = [],
+) {
   return new BrowserSessionPool({
+    ...(opts.onSessionClosed ? { onSessionClosed: opts.onSessionClosed } : {}),
     maxSessions: opts.maxSessions ?? 4,
     idleTimeoutMs: opts.idleTimeoutMs ?? 1_800_000,
     watchdogIntervalMs: 120_000,
@@ -126,5 +130,41 @@ describe('BrowserSessionPool', () => {
     assert.equal(status.sessions[0]?.id, 'conv-1');
     assert.ok(status.sessions[0]!.idleSinceMs >= 0);
     pool.stopWatchdog();
+  });
+
+  describe('onSessionClosed', () => {
+    it('is told once per ended session, with the profile and the reason', async () => {
+      const told: SessionClosedInfo[] = [];
+      const pool = makePool({ onSessionClosed: i => told.push(i) });
+      const { session } = await pool.claim('conv-1', { profile: 'personal' });
+      assert.equal(session.state.profile, 'personal');
+      await pool.close('conv-1', 'browser_close');
+      await pool.close('conv-1', 'again'); // already gone: no second signal
+      assert.deepEqual(told, [{ id: 'conv-1', profile: 'personal', reason: 'browser_close' }]);
+      pool.stopWatchdog();
+    });
+
+    it('fires for an idle-timeout close too, and leaves out the profile when the session has none', async () => {
+      const told: SessionClosedInfo[] = [];
+      const pool = makePool({ idleTimeoutMs: 1000, onSessionClosed: i => told.push(i) });
+      const { session } = await pool.claim('conv-idle');
+      session.lastActivityAt = new Date(Date.now() - 10_000);
+      pool.sweepIdle();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(told.length, 1);
+      assert.equal(told[0]!.id, 'conv-idle');
+      assert.ok(!('profile' in told[0]!));
+      assert.match(told[0]!.reason, /idle timeout/);
+      pool.stopWatchdog();
+    });
+
+    it('a handler that throws does not stop the session from closing', async () => {
+      const closes: string[] = [];
+      const pool = makePool({ onSessionClosed: () => { throw new Error('boom'); } }, closes);
+      await pool.claim('conv-1');
+      assert.equal(await pool.close('conv-1', 'test'), true);
+      assert.deepEqual(closes, ['conv-1']);
+      pool.stopWatchdog();
+    });
   });
 });

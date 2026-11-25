@@ -72,6 +72,22 @@ export interface SessionPoolOptions {
   maxTabs?: number;
   /** Overridable in tests so no real browser is ever launched there. */
   makeLauncher: (sessionId: string) => ContextLauncher;
+  /**
+   * Called once for every session that ends, whatever the cause (browser_close, idle timeout, the person closing the
+   * window, a profile or JS-policy switch, shutdown). The device agent uses it to tell the server that a browser session —
+   * and with it the consent the user gave for it — is over. A throw is logged and ignored.
+   */
+  onSessionClosed?: (info: SessionClosedInfo) => void;
+}
+
+/** What `onSessionClosed` is told. */
+export interface SessionClosedInfo {
+  /** The conversation id the session was claimed under. */
+  id: string;
+  /** The profile the session ran (device hosts only; undefined for the server's ephemeral browser). */
+  profile?: 'dedicated' | 'personal';
+  /** Why it ended, in words (the string `close()` was given). */
+  reason: string;
 }
 
 export class SessionLimitError extends Error {
@@ -162,6 +178,12 @@ export class BrowserSessionPool {
     this.sessions.delete(conversationId);
     s.tabs.markClosing();
     console.log('[sessionPool] closing session %s — %s', conversationId.slice(0, 8), reason);
+    // Told before the context finishes closing: a consumer that revokes something on this signal errs on the safe side.
+    try {
+      this.opts.onSessionClosed?.({ id: conversationId, ...(s.state.profile ? { profile: s.state.profile } : {}), reason });
+    } catch (err) {
+      console.error('[sessionPool] onSessionClosed handler failed for %s:', conversationId.slice(0, 8), err);
+    }
     try {
       await s.context.close();
     } catch (err) {
