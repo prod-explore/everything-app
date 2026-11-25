@@ -74,6 +74,16 @@ How a retry works:
 
 `budget_exhausted` from a gateway is never retried.
 
+### Context window and oversize requests
+
+Everything that keeps a request inside the window (trimming old tool outputs at 60% of it, cutting harder above 90%, summarising older turns at 75%) works from the model's `context_length`, so a model that reports none is not managed at all. Three things keep that figure honest:
+
+- **Background refresh.** `MODEL_METADATA_REFRESH_HOURS` (default 6, `0` = off) re-reads `GET /models` of every enabled provider, at start-up and then on that interval, and updates what the existing models report. It never adds, enables or removes a model (that stays with *Refresh models* and *Add provider*), and a figure you set yourself wins.
+- **Learned from a refusal.** A 400 `context_length_exceeded` that names its limit ("maximum context length is 100000 tokens") is applied at once, on the first step of a turn as on a later one: the request is cut down and sent once more (never as a second plain request after a streamed one). For a model that reported no window the figure is stored until the next refresh replaces it.
+- **A turn that is one long run.** A single turn of many tool calls cannot be cut at a turn boundary, so only its old tool outputs and, above 90% of the window, its oldest results and longest texts are cut from the request view. The stored conversation is never changed.
+
+A reply whose tool call the gateway could not read (the agy bridge's 502 `unparsable tool-call block`, which can only arrive after part of the reply was streamed) does not end the turn: the call is recorded as a failed `unreadable_tool_call`, the model is told to write it again, and after two such replies in a row the error is reported as before.
+
 The adapter keeps what a provider returns per tool call (`extra_content`, `reasoning_content`) and sends it back unchanged while the tool loop runs, which is what providers with thought signatures or thinking modes ask of an OpenAI-compatible client. Anything beyond that — schema limits, missing fields, odd error codes — is for the gateway to smooth over.
 
 Design rationale: [ADR 0008](adr/0008-unified-provider-catalog.md).

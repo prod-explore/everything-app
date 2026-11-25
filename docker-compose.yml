@@ -260,6 +260,8 @@ services:
       FIRST_BYTE_TIMEOUT_S: ${FIRST_BYTE_TIMEOUT_S:-90}
       # Hard limit, in seconds, on the time to the first text or reasoning, whatever keep-alives arrive meanwhile (0 = no limit).
       FIRST_CONTENT_TIMEOUT_S: ${FIRST_CONTENT_TIMEOUT_S:-600}
+      # Hours between background re-reads of what providers report about their models, the context window above all (0 = off).
+      MODEL_METADATA_REFRESH_HOURS: ${MODEL_METADATA_REFRESH_HOURS:-6}
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
