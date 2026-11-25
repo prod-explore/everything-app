@@ -92,6 +92,17 @@ Exposed only when their capability is on. Tools whose name starts with `_` are i
 | `_fs_write_b64` | `path`, `base64`, `overwrite` (always sent; refuse an existing file unless true) | internal |
 | `browser_open` … `browser_close` | as in playwright-mcp | domain gate; `browser_act` → `browserAct` |
 
+### Personal profile consent
+
+A device in `both` mode (or with only the personal profile on) can open the person's own, logged-in browser profile. The server asks for that once per chat and device — per the device's `browserPersonalProfile` level, `deny` | `ask` | `auto` (default `ask`) — and passes `_personal_profile_approved` to the device on the calls it covers. That consent is **not** open-ended; it lives exactly as long as the browser session it was given for. It ends when:
+
+1. the model calls `browser_close`, or opens or defaults to the dedicated profile;
+2. the device sends **`notifications/evvapp/browser_session_closed`** (MCP notification, device → server) — the device's session pool announces every session that ends, whatever the cause: `browser_close`, the 30-minute idle timeout, the person closing the browser window, a profile or JS-policy switch, pause/unpair/shutdown. Params: `{ conversationId: string, profile: 'dedicated' | 'personal', reason: string }`; the server acts on `personal` only. `conversationId` is the `_conversation_id` the session was opened under (`default` when a call carried none);
+3. the device goes offline (the sessions are not trusted across a reconnect);
+4. the chat has not used the device's browser for **`DEVICE_PERSONAL_BROWSER_IDLE_MINUTES`** (default 25, `0` = no idle limit). Any `browser_*` call of the chat on that device renews it, as it renews the device's own idle clock. This is the safety net for a device agent that predates the notification, and for a notification lost with a dropped connection; the default sits 5 minutes below the device's 30 so the server never trusts a session the device has just closed. Keep it below 30: above the device's limit an older agent's expired session would still count as approved, and the next personal `browser_open` would start a fresh session in the person's browser without asking.
+
+After any of these, the next personal-profile request (`browser_open` with `profile: "personal"`, or `browser_tabs` that would use it) goes through the consent gate again, by the device's policy. A `browser_tabs` call without `profile` counts as personal only while the consent lives. An older agent never sends the notification; for it, rules 1, 3 and 4 apply. A newer agent talking to an older server is harmless: the server ignores a notification it does not know.
+
 Shell sessions are per `(conversation, session)`: at most 8 per device, closed after 30 min idle. Output per call is capped at 30 000 chars (head and tail kept). A command that times out is interrupted; the session survives. `background: true` starts the command in its own session (named by `session`) and returns at once; `shell_read` collects its output.
 
 The server-side virtual tool `device_transfer` (`from`, `to`, each `device-<slug>:<path>` or `workspace:<path>`) copies a file between a device and the chat's sandbox workspace through `_fs_read_b64` / `_fs_write_b64` and the workspace write path. Approval: `filesWrite` of the target device; into the workspace needs none (ADR 0010). A copy that the device's own settings rule out (files off, or read-only as a target) is refused before any card is shown.

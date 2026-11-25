@@ -3,7 +3,7 @@ import type { Duplex } from 'node:stream';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { ToolRegistry } from '../tool-registry.js';
-import { DeviceConnection } from './connection.js';
+import { DeviceConnection, type BrowserSessionClosed } from './connection.js';
 import type { DeviceRow, DeviceStore } from './store.js';
 import { DEFAULT_DEVICE_POLICY, connectionNameOf } from './types.js';
 import { MAX_FRAME_BYTES, WsTransport } from './ws-transport.js';
@@ -33,6 +33,8 @@ export interface HubOptions {
   initTimeoutMs?: number;
   /** A device came, went or changed (for the live Settings page). Must not throw. */
   onChange?: (deviceId: string) => void;
+  /** A live device reported that one of its browser sessions ended (connection name `device-<slug>`). Must not throw. */
+  onBrowserSessionClosed?: (connectionName: string, event: BrowserSessionClosed) => void;
   log?: (message: string) => void;
 }
 
@@ -173,6 +175,10 @@ export class DeviceHub {
       slug: live.slug,
       client,
       policy: () => store.get(live.deviceId)?.policy ?? DEFAULT_DEVICE_POLICY,
+      onBrowserSessionClosed: event => {
+        // Only the device's current connection speaks for it: a replaced socket's late word is not news.
+        if (this.live.get(live.deviceId) === live) this.opts.onBrowserSessionClosed?.(connectionNameOf(live.slug), event);
+      },
     });
     const report = await conn.readReport();
     if (!report) this.log(`[devices] '${conn.name}' sent no usable device info; its shell is treated as unparsable`);

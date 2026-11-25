@@ -262,6 +262,9 @@ services:
       FIRST_CONTENT_TIMEOUT_S: ${FIRST_CONTENT_TIMEOUT_S:-600}
       # Hours between background re-reads of what providers report about their models, the context window above all (0 = off).
       MODEL_METADATA_REFRESH_HOURS: ${MODEL_METADATA_REFRESH_HOURS:-6}
+      # Minutes without browser use after which a chat's consent for a paired device's PERSONAL browser profile lapses and is asked
+      # for again (the device closes an idle browser session after 30; 0 = no idle limit, only the device's own signal ends it).
+      DEVICE_PERSONAL_BROWSER_IDLE_MINUTES: ${DEVICE_PERSONAL_BROWSER_IDLE_MINUTES:-25}
     ports:
       - "127.0.0.1:3000:3000"
     volumes:

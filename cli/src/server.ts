@@ -50,7 +50,9 @@ import type { FetchOptions } from './web/http.js';
 import type { McpConnectionLike } from './mcp-client.js';
 import { LIVEVIEW_PATH, createLiveViewUpgrade } from './liveview-proxy.js';
 import { attachUpgradeRouter } from './upgrade-router.js';
+import { createDeviceBrowserGate, revokeOnSessionClosed } from './devices/browser-gate.js';
 import { CONNECT_PATH as DEVICE_CONNECT_PATH, createDeviceService, type DeviceService } from './devices/index.js';
+import { PersonalBrowserGrants, personalGrantIdleMs } from './devices/personal-grants.js';
 import {
   GHOST_IMMUTABLE_CODE, GHOST_MODEL_CODE, GHOST_MOVE_CODE, GHOST_PROMPT,
   assertLocalModel, ghostConnectorNames, ghostModelProblem,
@@ -399,73 +401,25 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   const ledger = new UsageLedger(db);
   const sse = new SSEManager();
   // ─── Device bridge: the user's own machines as MCP servers (docs/devices.md, ADR 0017–0020) ───
-  const activePersonalBrowsers = new Set<string>();
+  // Consent for a chat to drive a device's personal browser profile; ends with the device's browser session (see devices/personal-grants.ts).
+  const personalGrants = new PersonalBrowserGrants({ ttlMs: personalGrantIdleMs() });
   const devices = createDeviceService({
     db,
     registry,
     onChange: id => {
-      if (!devices.hub.isOnline(id)) {
-        const onlineNames = new Set(devices.hub.list().map(d => d.connectionName));
-        for (const key of activePersonalBrowsers) {
-          const conn = key.slice(key.indexOf(':') + 1);
-          if (!onlineNames.has(conn)) activePersonalBrowsers.delete(key);
-        }
-      }
+      if (!devices.hub.isOnline(id)) personalGrants.retainDevices(new Set(devices.hub.list().map(d => d.connectionName)));
       sse.emitAll('devices:changed', { id });
+    },
+    onBrowserSessionClosed: (connectionName, event) => {
+      if (revokeOnSessionClosed(personalGrants, connectionName, event)) {
+        console.log("[devices] '%s' closed its personal browser session (%s): consent for that chat ended", connectionName, event.reason.replace(/\s+/g, ' ').slice(0, 120) || 'no reason given');
+      }
     },
   });
   approvalGate.setCommandScopeResolver(devices.commandScope);
 
-  function deviceBrowserGateFor(convId: string | null | undefined): ConversationDeps['deviceBrowserGate'] {
-    return {
-      checkPersonalProfile(toolName, args) {
-        if (!toolName.startsWith('device-')) return { required: false };
-        const sep = toolName.indexOf('__');
-        if (sep < 0) return { required: false };
-        const connName = toolName.slice(0, sep);
-        const real = toolName.slice(sep + 2);
-        if (real !== 'browser_open' && real !== 'browser_tabs') return { required: false };
-        const row = devices.store.getBySlug(connName.slice('device-'.length));
-        if (!row?.report?.browser.enabled) return { error: `Browser control is not enabled on ${row?.name ?? connName}.` };
-        const mode = row.report.browser.mode;
-        const rawProfile = args['profile'];
-        if (rawProfile !== undefined && rawProfile !== 'dedicated' && rawProfile !== 'personal') {
-          return { error: `Invalid browser profile "${String(rawProfile)}" — expected "dedicated" or "personal".` };
-        }
-        const key = `${convId ?? ''}:${connName}`;
-        let target: 'dedicated' | 'personal';
-        if (mode === 'profile') {
-          if (rawProfile === 'dedicated') return { error: `${row.name} only enables your personal browser profile (mode="profile").` };
-          target = 'personal';
-        } else if (mode === 'dedicated') {
-          if (rawProfile === 'personal') return { error: `${row.name} is set to Dedicated browser mode only; switch it to "both" in the tray app to allow personal profile.` };
-          target = 'dedicated';
-        } else {
-          if (rawProfile === 'personal') target = 'personal';
-          else if (rawProfile === 'dedicated') target = 'dedicated';
-          else target = real === 'browser_tabs' && activePersonalBrowsers.has(key) ? 'personal' : 'dedicated';
-        }
-        if (target !== 'personal') return { required: false };
-        return {
-          required: true,
-          policy: row.policy.browserPersonalProfile,
-          label: `${connName}/browser_personal_profile`,
-          deviceName: row.name,
-          browser: row.report.browser.product,
-          alreadyActive: activePersonalBrowsers.has(key),
-        };
-      },
-      markPersonalActive(toolName, active) {
-        if (!convId || !toolName.startsWith('device-')) return;
-        const sep = toolName.indexOf('__');
-        if (sep < 0) return;
-        const connName = toolName.slice(0, sep);
-        const key = `${convId}:${connName}`;
-        if (active) activePersonalBrowsers.add(key);
-        else activePersonalBrowsers.delete(key);
-      },
-    };
-  }
+  const deviceBrowserGateFor = (convId: string | null | undefined): ConversationDeps['deviceBrowserGate'] =>
+    createDeviceBrowserGate({ store: devices.store, grants: personalGrants }, convId);
   /**
    * Model for chats that have none of their own: the `chat` slot — the user's explicit default, else a usable `free`
    * model, else any usable chat model — and finally the configured DEFAULT_MODEL (may be empty: then the turn says

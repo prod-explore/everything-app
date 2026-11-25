@@ -146,3 +146,8 @@ export interface DeviceInfo {
 export const connectionNameOf = (slug: string): string => `device-${slug}`;
 export const CONNECT_PATH = '/api/devices/connect';
 export const REPORT_URI = 'evvapp://device/info';
+/**
+ * MCP notification a device sends when one of its browser sessions has ended (browser_close, idle timeout, window closed,
+ * profile switch, pause). Agents older than this notification never send it; the server then relies on its own idle limit.
+ */
+export const BROWSER_SESSION_CLOSED_METHOD = 'notifications/evvapp/browser_session_closed';

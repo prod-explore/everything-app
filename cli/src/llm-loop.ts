@@ -207,6 +207,11 @@ export interface ConversationDeps {
       | { required: true; policy: 'deny' | 'ask' | 'auto'; label: string; deviceName: string; browser: string; alreadyActive: boolean }
       | { error: string };
     markPersonalActive?: (toolName: string, active: boolean) => void;
+    /**
+     * The chat is using a device browser tool (any of them, not only the two that ask): renews the personal-profile consent
+     * the way the device renews its own idle clock. Called before and after the call; never creates consent.
+     */
+    noteBrowserUse?: (toolName: string) => void;
   };
 }
 
@@ -876,7 +881,10 @@ async function runLoop(
           if (real === 'browser_open' && approvedHost) enrichedArgs._approved_host = approvedHost;
           if (personalProfileApproved) enrichedArgs._personal_profile_approved = true;
         }
+        const gateForCall = !virtual ? deps.deviceBrowserGate : undefined;
+        if (BROWSER_TOOL_NAMES.has(real)) gateForCall?.noteBrowserUse?.(use.name);
         result = await deps.tools.call(use.name, enrichedArgs);
+        if (BROWSER_TOOL_NAMES.has(real)) gateForCall?.noteBrowserUse?.(use.name);
         if (!virtual && deps.deviceBrowserGate) {
           // A browser_open that needed no personal-profile approval (explicit or defaulted dedicated) replaces the personal session on the device.
           if (real === 'browser_close' || (real === 'browser_open' && !personalProfileApproved && !result.isError)) {

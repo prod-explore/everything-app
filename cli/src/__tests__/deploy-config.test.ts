@@ -7,6 +7,7 @@ import { DEFAULT_AUTO_APPROVE_TOOLS } from '../config.js';
 import { DEFAULT_GHOST_CONNECTORS } from '../ghost.js';
 import { DEFAULT_TOOL_OUTPUT_MAX_CHARS } from '../output-truncator.js';
 import { DEFAULT_RETENTION_MONTHS } from '../retention.js';
+import { DEFAULT_PERSONAL_GRANT_IDLE_MINUTES } from '../devices/personal-grants.js';
 import { DEFAULT_SCHEDULE_MAX_STEPS } from '../server.js';
 import { firstByteTimeoutMs, firstContentTimeoutMs } from '../turn-errors.js';
 
@@ -79,6 +80,7 @@ describe('deployment configuration', () => {
     assert.equal(webDefault('SCHEDULE_MAX_STEPS'), String(DEFAULT_SCHEDULE_MAX_STEPS));
     assert.equal(webDefault('FIRST_BYTE_TIMEOUT_S'), String(firstByteTimeoutMs() / 1000));
     assert.equal(webDefault('FIRST_CONTENT_TIMEOUT_S'), String(firstContentTimeoutMs() / 1000));
+    assert.equal(webDefault('DEVICE_PERSONAL_BROWSER_IDLE_MINUTES'), String(DEFAULT_PERSONAL_GRANT_IDLE_MINUTES));
     assert.equal(webDefault('RETENTION_MONTHS'), String(DEFAULT_RETENTION_MONTHS));
     assert.equal(webDefault('GHOST_CONNECTORS'), DEFAULT_GHOST_CONNECTORS.join(','));
     assert.ok(envExample.includes(DEFAULT_AUTO_APPROVE_TOOLS.join(',')), '.env.example names the default auto-approve list');

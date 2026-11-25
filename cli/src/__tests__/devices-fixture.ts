@@ -110,12 +110,16 @@ export interface Rig {
 }
 
 
-export async function deviceRig(hub: { pingIntervalMs?: number; deadAfterMs?: number; initTimeoutMs?: number } = {}, autoApprove: string[] = []): Promise<Rig> {
+export async function deviceRig(
+  hub: { pingIntervalMs?: number; deadAfterMs?: number; initTimeoutMs?: number } = {},
+  autoApprove: string[] = [],
+  onBrowserSessionClosed?: Parameters<typeof createDeviceService>[0]['onBrowserSessionClosed'],
+): Promise<Rig> {
   const db = openDb(':memory:');
   runMigrations(db);
   const registry = new ToolRegistry(autoApprove);
   const changes: string[] = [];
-  const svc = createDeviceService({ db, registry, onChange: id => changes.push(id), hub: { ...hub, log: () => {} } });
+  const svc = createDeviceService({ db, registry, onChange: id => changes.push(id), onBrowserSessionClosed, hub: { ...hub, log: () => {} } });
   const server = http.createServer((_q, res) => { res.statusCode = 404; res.end(); });
   attachUpgradeRouter(server, { [CONNECT_PATH]: svc.hub.handleUpgrade });
   const port = await listen(server);

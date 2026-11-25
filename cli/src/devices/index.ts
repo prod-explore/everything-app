@@ -17,6 +17,8 @@ export interface DeviceServiceOptions {
   db: Database.Database;
   registry: ToolRegistry;
   onChange?: (deviceId: string) => void;
+  /** A device reported that one of its browser sessions ended. */
+  onBrowserSessionClosed?: HubOptions['onBrowserSessionClosed'];
   hub?: Partial<Pick<HubOptions, 'pingIntervalMs' | 'deadAfterMs' | 'initTimeoutMs' | 'log'>>;
   pairing?: PairingOptions;
 }
@@ -35,7 +37,7 @@ export interface DeviceService {
 export function createDeviceService(opts: DeviceServiceOptions): DeviceService {
   migrateDevices(opts.db);
   const store = new DeviceStore(opts.db);
-  const hub = new DeviceHub({ store, registry: opts.registry, onChange: opts.onChange, ...opts.hub });
+  const hub = new DeviceHub({ store, registry: opts.registry, onChange: opts.onChange, onBrowserSessionClosed: opts.onBrowserSessionClosed, ...opts.hub });
   const pairing = new PairingManager({
     ...opts.pairing,
     // An approval whose token was never collected leaves a device that can never connect: remove it, unless it did connect somehow.

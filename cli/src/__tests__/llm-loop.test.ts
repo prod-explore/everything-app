@@ -699,4 +699,45 @@ describe('runTurn — _project_id injection (one sandbox per project)', () => {
     assert.equal(called.length, 1);
     assert.equal(active, false, 'defaulted dedicated open resets personal active state');
   });
+
+  it('tells the device-browser gate about every browser call (before and after), and about nothing else', async () => {
+    const registry = new ToolRegistry([]);
+    const log: string[] = [];
+    await registry.loadFrom([
+      {
+        name: 'device-pc',
+        autoApproves: () => true,
+        async listTools() {
+          return [
+            { name: 'browser_observe', description: 'look', inputSchema: { type: 'object' } },
+            { name: 'shell_read', description: 'read', inputSchema: { type: 'object' } },
+          ];
+        },
+        async callTool(name) {
+          log.push(`call ${name}`);
+          return { text: 'ok', isError: false };
+        },
+      } as McpConnectionLike,
+    ]);
+    await runTurn(
+      {
+        llm: scriptedLlm([
+          fakeMessage([toolUseBlock('a', 'device-pc__browser_observe', {}), toolUseBlock('b', 'device-pc__shell_read', { session: 'main' })], 'tool_use'),
+          fakeMessage([textBlock('done')], 'end_turn'),
+        ]),
+        model: '@t/m',
+        tools: registry,
+        systemPrompt: 'sys',
+        conversationId: 'c1',
+        confirm: async () => true,
+        deviceBrowserGate: {
+          checkPersonalProfile: () => ({ required: false }),
+          noteBrowserUse: name => { log.push(`note ${name}`); },
+        },
+      },
+      [],
+      'look',
+    );
+    assert.deepEqual(log, ['note device-pc__browser_observe', 'call browser_observe', 'note device-pc__browser_observe', 'call shell_read']);
+  });
 });

@@ -1,6 +1,7 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { z } from 'zod';
 import { TOOL_CALL_TIMEOUT_MS, toCallResult, type McpConnectionLike, type McpToolCallResult, type McpToolInfo } from '../mcp-client.js';
-import { connectionNameOf, parseDeviceReport, REPORT_URI, type DevicePolicy, type DeviceReport } from './types.js';
+import { BROWSER_SESSION_CLOSED_METHOD, connectionNameOf, parseDeviceReport, REPORT_URI, type DevicePolicy, type DeviceReport } from './types.js';
 
 /**
  * A device that is online, as the rest of the app sees it: an ordinary MCP connection named `device-<slug>` (ADR 0017).
@@ -35,12 +36,30 @@ export function deviceAutoApproves(realName: string, policy: DevicePolicy): bool
   return false;
 }
 
+/** A browser session of the device ended (device → server notification, see docs/devices.md). */
+export interface BrowserSessionClosed {
+  conversationId: string;
+  profile: 'dedicated' | 'personal';
+  reason: string;
+}
+
+const BrowserSessionClosedNotification = z.object({
+  method: z.literal(BROWSER_SESSION_CLOSED_METHOD),
+  params: z.object({
+    conversationId: z.string().min(1).max(200),
+    profile: z.enum(['dedicated', 'personal']),
+    reason: z.string().max(500).catch(''),
+  }),
+});
+
 export interface DeviceConnectionOptions {
   deviceId: string;
   slug: string;
   client: Client;
   /** Current permission levels of the device (read live). */
   policy: () => DevicePolicy;
+  /** The device says one of its browser sessions has ended. Must not throw. */
+  onBrowserSessionClosed?: (event: BrowserSessionClosed) => void;
 }
 
 export class DeviceConnection implements McpConnectionLike {
@@ -56,6 +75,13 @@ export class DeviceConnection implements McpConnectionLike {
     this.slug = opts.slug;
     this.client = opts.client;
     this.policy = opts.policy;
+    const onClosed = opts.onBrowserSessionClosed;
+    if (onClosed) {
+      // A device that does not know this notification never sends it; a malformed one is dropped by the SDK's error path.
+      this.client.setNotificationHandler(BrowserSessionClosedNotification, n => {
+        try { onClosed(n.params); } catch { /* a bookkeeping problem never breaks the device connection */ }
+      });
+    }
   }
 
   get name(): string {

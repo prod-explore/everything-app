@@ -14,3 +14,5 @@ The tools are `playwright-mcp`'s six, imported from it as a library (`playwright
 A persistent profile is one browser process, so a device serves **one browser session at a time**; a second chat that wants it gets a clear "in use by another chat" error until the first closes it or idles out.
 
 **Consequences.** Agents act in the user's accounts in a visible window, and the person can take over by simply using it. The security of that rests on the domain gate and on `browserAct: ask` as the default; the dedicated profile is the option for running agents next to one's own browsing, and the only one for Google Chrome's default profile. Not built: attaching to an already-running browser (would need an extension, see context).
+
+**Addendum — consent for the personal profile expires with the session.** The device pool reports every ended session to the server (`notifications/evvapp/browser_session_closed`), and the server also lets a chat's consent lapse after `DEVICE_PERSONAL_BROWSER_IDLE_MINUTES` (default 25) without browser use, so an older agent is covered by the timer alone. Details in `docs/devices.md`, "Personal profile consent".
