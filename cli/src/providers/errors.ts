@@ -93,6 +93,9 @@ function tryAgain(retryAfterMs: number | undefined): string {
   return `${when} Raise "Retry busy errors for" on the provider card to keep retrying automatically for longer.`;
 }
 
+/** A reply whose tool-call block was unparsable: nothing ran, the model can simply write it again. */
+const MALFORMED_TOOL_CALL = /unparsable tool-call block|invalid-tool-calls/i;
+
 export function classifyError(err: unknown, redact: (s: string) => string = s => s): Incident {
   const raw = err instanceof Error ? err.message : String(err);
   const text = redact(raw);
@@ -111,6 +114,11 @@ export function classifyError(err: unknown, redact: (s: string) => string = s =>
         ...(limit ? { limit } : {}),
         transient: false,
       };
+    }
+    // The gateway's own word for "the model wrote a tool call that could not be read" (agy-cli-wrapper answers 502 upstream_error
+    // with this text, as an event after the stream has started, i.e. after some of the reply was already sent).
+    if (MALFORMED_TOOL_CALL.test(detail)) {
+      return { kind: 'tool_parse', message: 'The model produced a malformed tool call and the gateway refused it. Retrying usually works.', transient: true };
     }
     if (QUOTA_CODE.test(detail)) {
       const when = describeReset(detail);

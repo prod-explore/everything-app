@@ -679,6 +679,35 @@ describe('server: context management', () => {
     }
   });
 
+  it('a single long run of tool calls that the provider refuses: the window it names is learned and the repeat is cut down to it', async () => {
+    let chatAttempts = 0;
+    const t = await boot({
+      script: p => {
+        if (isSummaryCall(p)) return msg([text('unused')], 'end_turn');
+        chatAttempts++;
+        if (chatAttempts === 1) return new ProviderHttpError('t', 400, '{"error":{"message":"maximum context length is 20000 tokens","code":"context_length_exceeded","upstream_status":400}}', { code: 'context_length_exceeded' });
+        return msg([text('fits now')], 'end_turn');
+      },
+    });
+    try {
+      appendMessage(t.db, t.conv, 'user', 'research this');
+      for (let i = 0; i < 10; i++) {
+        appendMessage(t.db, t.conv, 'assistant', [{ type: 'tool_use', id: `t${i}`, name: 'web_fetch', input: { url: `https://e.test/${i}` } }]);
+        appendMessage(t.db, t.conv, 'user', [{ type: 'tool_result', tool_use_id: `t${i}`, content: 'x'.repeat(40_000) }]);
+      }
+      const before = getMessages(t.db, t.conv).length;
+      await req(t.port, 'POST', `/api/conversations/${t.conv}/message`, { text: 'continue' });
+      await done(t.db, t.conv, before + 2);
+      assert.equal(chatAttempts, 2, 'refused once, repeated once');
+      const sent = t.seen.filter(p => !isSummaryCall(p));
+      assert.ok(estimateTokens(sent[1]!.messages) < estimateTokens(sent[0]!.messages) / 2, 'the repeat is far smaller');
+      assert.equal((await req(t.port, 'GET', `/api/conversations/${t.conv}/status`)).json.status, 'done');
+      assert.equal((await req(t.port, 'GET', `/api/conversations/${t.conv}/state`)).json.context.limit, 20_000, 'the named window is remembered for the model');
+    } finally {
+      t.stop();
+    }
+  });
+
   it('POST /compact summarises now, and says so when there is nothing to cut', async () => {
     const t = await boot({ script: p => (isSummaryCall(p) ? msg([text('MANUAL SUMMARY')], 'end_turn') : msg([text('ok')], 'end_turn')) });
     try {

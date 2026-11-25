@@ -85,6 +85,17 @@ export interface RouterOptions {
  * Settings takes effect on the very next turn with no restart. Decrypted keys are cached in memory only until
  * that provider's key changes.
  */
+/**
+ * MODEL_METADATA_REFRESH_HOURS: how often the models' reported metadata is re-read in the background.
+ * Unset = 6, 0 = off; anything that is not a whole number from 0 to 168 = the default.
+ */
+export function modelMetadataRefreshHours(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env['MODEL_METADATA_REFRESH_HOURS'] ?? '').trim();
+  if (raw === '') return 6;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= 168 ? n : 6;
+}
+
 export class ProviderRouter {
   readonly vault: KeyVault;
   readonly catalog: ModelCatalog;
@@ -306,5 +317,28 @@ export class ProviderRouter {
     } catch (err) {
       return { ok: false, error: this.redact((err as Error).message) };
     }
+  }
+
+  /**
+   * Keeps what the models of a provider report (context length above all) current without touching which models exist:
+   * a gateway changes its figures after this app has stored them, and a stale or missing window means nothing is trimmed
+   * before a request is sent. Used by the background refresh; never throws.
+   */
+  async syncModelMetadata(slug: ProviderId): Promise<number> {
+    const provider = this.catalog.get(slug);
+    if (!provider || !provider.enabled) return 0;
+    const key = this.resolveKey(provider);
+    if (key === null) return 0;
+    try {
+      const raw = await this.makeClient(provider, key, false).listModels();
+      return raw.length === 0 ? 0 : this.catalog.refreshReported(slug, raw);
+    } catch {
+      return 0;
+    }
+  }
+
+  /** The window a provider named in a refusal, for a model that reported none (see ModelCatalog.learnContextLength). */
+  learnContextLength(modelId: string, limit: number): boolean {
+    return this.catalog.learnContextLength(modelId, limit);
   }
 }

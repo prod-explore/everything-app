@@ -1,7 +1,7 @@
 import type * as Llm from './llm-types.js';
 import type { ToolRegistry } from './tool-registry.js';
 import { truncateToolOutput } from './output-truncator.js';
-import { dropOldToolImages, estimateTokens, shrinkMessagesForOverflow, trimForContext, TRIM_AT } from './context.js';
+import { dropOldToolImages, estimateTokens, fitToWindow, shrinkMessagesForOverflow } from './context.js';
 import { classifyError } from './providers/errors.js';
 import { toolResultContent, type ToolImage } from './tool-images.js';
 import { looksDangerous } from './web-approval.js';
@@ -165,6 +165,11 @@ export interface ConversationDeps {
   onMessages?: (messages: TurnMessage[]) => void;
   /** The model's context window in tokens, when known: old tool outputs are dropped from the request as it fills up. */
   contextWindow?: number;
+  /**
+   * Called when the provider refused a request as too long and named its limit (tokens), so the caller can remember the window
+   * of a model that reports none. The turn itself uses the figure from then on.
+   */
+  onContextLimit?: (limit: number) => void;
   /** Called with the provider-measured prompt size after every response. */
   onContext?: (info: { used: number; limit?: number }) => void;
   /** Passed to the model on every request; the adapter drops it for models that do not support it. */
@@ -216,6 +221,10 @@ export interface ModelRetryInfo {
 export type TurnMessage = Llm.MessageParam & {
   incomplete?: { reason: 'stopped' | 'error'; error?: unknown };
 };
+
+/** The name a reply whose tool call could not be read is recorded under (it is not a tool the model has). */
+export const UNREADABLE_TOOL_CALL = 'unreadable_tool_call';
+const MAX_UNREADABLE_TOOL_CALLS = 2;
 
 export class StepLimitError extends Error {
   constructor(public readonly limit: number) {
@@ -494,6 +503,10 @@ async function runLoop(
   ];
 
   let steps = 0;
+  // The window the turn trims to: the model's reported one, or the one a refusal named.
+  let windowTokens = deps.contextWindow;
+  // Consecutive replies whose tool-call block could not be read (see the catch below).
+  let unreadable = 0;
   // Set once a browser observation looked like a prompt injection: from then on every tool call with an
   // effect needs a fresh human approval (grants and auto-approve don't apply).
   let injectionWarning: string | null = null;
@@ -517,9 +530,7 @@ async function runLoop(
     // What is sent may be a trimmed copy (old tool outputs stubbed); `messages` itself is never trimmed. Tool outputs in it are already truncated per result.
     const overhead = estimateTokens([], deps.systemPrompt, toolDefs);
     const recent = dropOldToolImages(messages);
-    const view = deps.contextWindow
-      ? trimForContext(recent, Math.floor(deps.contextWindow * TRIM_AT), overhead).messages
-      : recent;
+    const view = windowTokens ? fitToWindow(recent, windowTokens, overhead) : recent;
 
     const callModel = async (reqMessages: Llm.MessageParam[], progress: { any: boolean }): Promise<Llm.Message> => {
       const params: Llm.MessageCreateParamsNonStreaming = {
@@ -618,8 +629,31 @@ async function runLoop(
       response = await callWithRetry(view, progress);
     } catch (err) {
       const incident = classifyError(err);
-      if (steps > 1 && incident.kind === 'context_too_long' && !progress.any && !deps.signal?.aborted) {
+      if (incident.kind === 'tool_parse' && unreadable < MAX_UNREADABLE_TOOL_CALLS && !deps.signal?.aborted) {
+        // The model wrote a tool call that could not be read; nothing ran. Ending the turn here would throw away every step
+        // before it (a turn can be long), and repeating the request would show the person the same text twice. Instead the
+        // call is recorded as a failed one, with what the model had written, and the model is told to write it again.
+        unreadable++;
+        const written = [...(trace.inflight?.text.values() ?? [])].join('').trim();
         trace.inflight = null;
+        const id = `toolu_unreadable_${steps}`;
+        const note = `The tool call you wrote could not be read (the JSON of the call is invalid), so nothing was executed. Write the call again as one valid JSON object; escape newlines inside strings as \\n and keep each call small (split long content over several calls).`;
+        messages.push({ role: 'assistant', content: [...(written ? [{ type: 'text' as const, text: written }] : []), { type: 'tool_use', id, name: UNREADABLE_TOOL_CALL, input: {} }] });
+        messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: note, is_error: true }] });
+        deps.onToolResult?.(UNREADABLE_TOOL_CALL, note, note, true);
+        continue;
+      }
+      if (incident.kind === 'context_too_long' && !progress.any && !deps.signal?.aborted) {
+        trace.inflight = null;
+        // The provider named its window: remember it, so the rest of the turn (and the caller's repeat of it) trims to it.
+        if (incident.limit) {
+          windowTokens ??= incident.limit;
+          deps.onContextLimit?.(incident.limit);
+        }
+        // On the first step the history is what earlier turns left, and a summary of it (server.ts compacts and repeats the turn)
+        // keeps more than cutting does; from the second step on the turn's own steps are the weight and only a cut can help.
+        if (steps === 1) throw err;
+        // Cut the view down to what the provider said it takes (or 55% of what was sent) and ask once more.
         const currentTotal = estimateTokens(view) + overhead;
         const target = Math.max(
           overhead + 2_000,
@@ -635,6 +669,7 @@ async function runLoop(
         throw err;
       }
     }
+    unreadable = 0;
     trace.inflight = null;
 
     messages.push({ role: 'assistant', content: response.content });

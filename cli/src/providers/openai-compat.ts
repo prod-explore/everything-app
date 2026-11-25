@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type * as Llm from '../llm-types.js';
 import type { LlmClient, MessageStreamLike, StreamOptions } from '../llm-loop.js';
 import type { ModelInfo } from './registry.js';
+import { looksLikeContextOverflow } from './errors.js';
 
 /**
  * Adapter for any server that speaks OpenAI chat-completions. It never looks at who the
@@ -656,6 +657,8 @@ function effortField(params: Llm.MessageCreateParamsNonStreaming, info: ModelInf
 
 /** Statuses a server answers with when it does not do `stream: true`. */
 const STREAM_REFUSED = new Set([400, 404, 405, 415, 422, 501]);
+/** The word "stream" in an error text, not inside another one: MindGate's `"upstream_status":400` is not a complaint about streaming. */
+const STREAM_WORD = /(?<![a-z])stream/i;
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_STREAM_IDLE_MS = 120_000;
@@ -807,7 +810,9 @@ export class OpenAiCompatClient implements LlmClient {
   private cannotStream(err: unknown, hasTools: boolean): boolean {
     if (!(err instanceof ProviderHttpError) || err.progressed) return false;
     if (hasTools && err.status === 400 && TOOL_PARSE_ERROR.test(err.message)) return true;
-    return STREAM_REFUSED.has(err.status) && /stream/i.test(err.detail);
+    // A request that was refused for its size is refused the same way without streaming: a second try only doubles the load.
+    if (looksLikeContextOverflow(err.status, err.detail)) return false;
+    return STREAM_REFUSED.has(err.status) && STREAM_WORD.test(err.detail);
   }
 
   /** One streamed request. Whatever fails before the first delta is thrown as it is for the retry loop; after it, the error is marked `progressed`. */

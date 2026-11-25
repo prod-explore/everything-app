@@ -3,6 +3,7 @@ import {
   formatModelId,
   isModelKind,
   isModelLocality,
+  parseModelId,
   setCatalogSnapshot,
   type ModelInfo,
   type ModelKind,
@@ -337,6 +338,53 @@ export class ModelCatalog {
     })();
     this.sync();
     return { count: parsed.size, added, removed };
+  }
+
+  /**
+   * Re-reads what a provider says about the models the catalog already has (context length, abilities, tags) and
+   * nothing else: no model is added, switched on or dropped, so it is safe to run unattended. A user's overrides still win.
+   * Returns how many models were updated.
+   */
+  refreshReported(slug: string, rawModels: unknown[]): number {
+    let changed = 0;
+    const select = this.db.prepare(`SELECT reported FROM provider_models WHERE provider = ? AND model_id = ?`);
+    const update = this.db.prepare(`UPDATE provider_models SET reported = ?, last_seen = ? WHERE provider = ? AND model_id = ?`);
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      const seen = new Set<string>();
+      for (const raw of rawModels) {
+        const m = parseDiscoveredModel(raw);
+        if (!m || seen.has(m.id)) continue;
+        seen.add(m.id);
+        const row = select.get(slug, m.id) as { reported: string } | undefined;
+        if (!row) continue;
+        const next = JSON.stringify(m.reported);
+        if (next === JSON.stringify(parseJson(row.reported))) continue;
+        update.run(next, now, slug, m.id);
+        changed++;
+      }
+    })();
+    if (changed > 0) this.sync();
+    return changed;
+  }
+
+  /**
+   * A context length the provider refused a request with ("maximum context length is 100000 tokens") for a model that
+   * reports none. Stored as if reported, so the next discovery replaces it with the provider's own figure; a reported
+   * or user-set length is never touched. Returns true when it was stored.
+   */
+  learnContextLength(modelId: string, limit: number): boolean {
+    if (!Number.isFinite(limit) || limit < 1_000) return false;
+    const parsed = parseModelId(modelId);
+    if (!parsed) return false;
+    const row = this.db.prepare(`SELECT reported, overrides FROM provider_models WHERE provider = ? AND model_id = ?`).get(parsed.slug, parsed.upstream) as
+      { reported: string; overrides: string } | undefined;
+    if (!row) return false;
+    const rep = parseJson(row.reported);
+    if (rep.contextLength !== undefined || parseJson(row.overrides).contextLength !== undefined) return false;
+    this.db.prepare(`UPDATE provider_models SET reported = ? WHERE provider = ? AND model_id = ?`).run(JSON.stringify({ ...rep, contextLength: Math.trunc(limit) }), parsed.slug, parsed.upstream);
+    this.sync();
+    return true;
   }
 
   /** Adds a model by hand (a provider with no `/models`, or one that hides some). */

@@ -318,6 +318,7 @@ export class AgentManager {
           model: run.model,
           maxTokens: Math.max(4096, info.minOutputTokens ?? 0),
           contextWindow: info.contextLength,
+          onContextLimit: limit => { router.learnContextLength(run.model, limit); },
           tools,
           systemPrompt,
           virtualTools: [...this.agentTools(run.id, signal), ...(this.deps.workerExtraTools?.(run, signal) ?? [])],

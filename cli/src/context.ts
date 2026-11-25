@@ -19,6 +19,8 @@ const IMAGE_TOKENS = 1200;
 export const COMPACT_AT = 0.75;
 /** Trim old tool outputs when a request would take more than this share. */
 export const TRIM_AT = 0.6;
+/** A request that is still above this share after trimming is cut down harder (shrinkMessagesForOverflow): it would be refused anyway. */
+export const SHRINK_AT = 0.9;
 
 const textLen = (b: Llm.TextBlockParam | Llm.ImageBlockParam): number => (b.type === 'text' ? b.text.length : IMAGE_TOKENS * CHARS_PER_TOKEN);
 
@@ -131,6 +133,20 @@ export function shrinkMessagesForOverflow(
     return changed ? { role: m.role, content: blocks } : m;
   });
   return clipped;
+}
+
+/**
+ * What one model request may carry, as a view over `messages`: old tool outputs are stubbed once the request passes TRIM_AT of the
+ * window, and when that is not enough (the weight is in the turn's own text, the user's messages or the newest result) the oldest
+ * turns and long outputs are cut until it fits. Nothing that is stored changes. Returns the input array itself when it already fits.
+ */
+export function fitToWindow(messages: Llm.MessageParam[], windowTokens: number, overheadTokens = 0): Llm.MessageParam[] {
+  const trimmed = trimForContext(messages, Math.floor(windowTokens * TRIM_AT), overheadTokens).messages;
+  if (estimateTokens(trimmed) + overheadTokens <= windowTokens * SHRINK_AT) return trimmed;
+  // When the system prompt and tool definitions alone fill half the window, no amount of history cut away makes a request fit
+  // comfortably: leave it as it is and let a refusal from the provider decide.
+  if (overheadTokens > windowTokens * 0.5) return trimmed;
+  return shrinkMessagesForOverflow(trimmed, overheadTokens, Math.floor(windowTokens * TRIM_AT));
 }
 
 const IMAGE_DROPPED = '[An image from an earlier tool call was dropped to save context. Run the tool again if you need to see it.]';

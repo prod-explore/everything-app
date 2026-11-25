@@ -20,7 +20,7 @@ import { backgroundModel, fallbackTitle, generateTitle, noteHelperFailure } from
 import { generateDailySummary } from './gazeta.js';
 import { UsageLedger, type UsageRange } from './usage-ledger.js';
 import { withModelIdentity } from './providers/identity.js';
-import { ProviderRouter } from './providers/router.js';
+import { ProviderRouter, modelMetadataRefreshHours } from './providers/router.js';
 import { SLUG_RE, normalizeBaseUrl, sanitizeFields } from './providers/catalog.js';
 import { getModelInfo, isCatalogModel, isLocalModel, supportsTools } from './providers/registry.js';
 import { SSEManager } from './sse.js';
@@ -1556,6 +1556,9 @@ ${formatHumanResponse(response)}` };
             tools: turnTools,
             systemPrompt: effectiveSystem,
             contextWindow: info.contextLength,
+            onContextLimit: limit => {
+              if (router.learnContextLength(effectiveModel, limit)) console.log(`[context] ${effectiveModel} refused a request as too long and named ${limit} tokens; using that as its window until the provider reports one`);
+            },
             reasoningEffort: state.effort,
             onContext: (c: { used: number; limit?: number }) => {
               setConversationState(db, convId, { lastInputTokens: c.used });
@@ -1634,8 +1637,14 @@ ${m.body}`),
           // after tools ran, repeating could redo their effects, so that case is reported instead.
           // Nothing of this attempt may be stored yet, or the repeat would store the same steps twice.
           const incident = classifyTurnError(err);
-          if (incident.kind === 'context_too_long' && !toolRan && !storedAny && !controller.signal.aborted && (await compactNow(true, incident.limit))) {
-            history = llmHistory(db, convId, userMessageId);
+          if (incident.kind === 'context_too_long' && !toolRan && !storedAny && !controller.signal.aborted) {
+            // Summarise what can be summarised. When nothing can (the history is one long run of tool calls) the repeat still goes ahead
+            // if the provider has just named a window the turn did not know: the loop then cuts the request view down to it.
+            const compacted = await compactNow(true, incident.limit);
+            const learned = runDeps.contextWindow === undefined && incident.limit !== undefined;
+            if (!compacted && !learned) throw err;
+            if (compacted) history = llmHistory(db, convId, userMessageId);
+            runDeps.contextWindow ??= incident.limit;
             updatedHistory = await runTurn(runDeps, history, content);
           } else {
             throw err;
@@ -2610,11 +2619,29 @@ ${formatHumanResponse(response)}`;
   const pruneInterval = setInterval(prune, 24 * 60 * 60 * 1000);
   pruneInterval.unref();
 
+  // What a provider reports about its models (context window above all) is read when the provider is added or the person presses
+  // "refresh", and would otherwise stay as it was that day: a gateway that starts announcing a window later never reaches the
+  // turn loop, which then trims nothing. MODEL_METADATA_REFRESH_HOURS (default 6, 0 = off) re-reads it; models are never added or removed.
+  const refreshHours = modelMetadataRefreshHours();
+  const syncMetadata = async (): Promise<void> => {
+    for (const p of router.catalog.list()) {
+      const n = await router.syncModelMetadata(p.slug);
+      if (n > 0) console.log(`[models] ${p.slug}: refreshed what ${n} model(s) report`);
+    }
+  };
+  let metadataInterval: NodeJS.Timeout | undefined;
+  if (refreshHours > 0) {
+    void syncMetadata();
+    metadataInterval = setInterval(() => { void syncMetadata(); }, refreshHours * 60 * 60 * 1000);
+    metadataInterval.unref();
+  }
+
   function stop(): void {
     scheduler.stop();
     auth.dispose();
     clearInterval(digestInterval);
     clearInterval(pruneInterval);
+    if (metadataInterval) clearInterval(metadataInterval);
     clearInterval(keepaliveInterval);
   }
 
