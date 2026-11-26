@@ -9,7 +9,7 @@ import type { McpConnectionLike } from '../mcp-client.js';
 import { OpenAiCompatClient, ProviderHttpError } from '../providers/openai-compat.js';
 import { ProviderNotConfiguredError, ProviderRouter } from '../providers/router.js';
 import { classifyError, contextLimitFromMessage, describeReset } from '../providers/errors.js';
-import { estimateTokens, planCompaction, renderTranscript, shrinkMessagesForOverflow, summarizeHistory, trimForContext, withSummary } from '../context.js';
+import { applyMidTurnCompaction, COMPACT_AT, estimateTokens, MID_TURN_SUMMARY_PREFIX, planCompaction, planMidTurnCompaction, renderTranscript, shrinkMessagesForOverflow, SHRINK_AT, stripToolEnvelope, summarizeHistory, SUMMARY_PREFIX, TRIM_AT, trimForContext, withSummary } from '../context.js';
 import { parseTodos, projectInstructionsPrompt } from '../chat-tools.js';
 import { appendMessage, appendSummary, createConversation, deactivateMessagesFrom, deleteMessagesFrom, getConversationState, getMessages, loadLlmHistory, openDb, runMigrations, setConversationState } from '../db.js';
 import { llmHistory } from '../compaction.js';
@@ -886,5 +886,173 @@ describe('shrinkMessagesForOverflow', () => {
     }
     assert.equal(out[0]!.role, 'user');
     assert.ok(JSON.stringify(out).includes('latest'));
+  });
+});
+
+describe('byte-aware estimation, mid-turn compaction, non-looping stubs & duplicate-read notices', () => {
+  it('estimateTokens tracks UTF-8 bytes so multi-byte Polish/CJK text matches byte-budgeted bridges without changing ASCII', () => {
+    const ascii = 'a'.repeat(350);
+    const asciiEst = estimateTokens([userText(ascii)]);
+    assert.equal(asciiEst, Math.ceil((350 + 8) / 3.5), 'ASCII still uses chars / 3.5');
+
+    // Polish diacritics are 2 bytes each in UTF-8: 400 chars = 800 bytes → 800/4 = 200 > 400/3.5 = 115.
+    const polish = 'ąćęłńóśźżĄ'.repeat(40);
+    assert.equal(polish.length, 400);
+    assert.equal(Buffer.byteLength(polish, 'utf8'), 800);
+    assert.equal(estimateTokens([userText(polish)]), Math.ceil((800 + 8) / 4));
+
+    assert.equal(COMPACT_AT, 0.80);
+    assert.equal(TRIM_AT, 0.86);
+    assert.equal(SHRINK_AT, 0.90);
+  });
+
+  it('contextLimitFromMessage parses JSON limit_tokens first and JSON limit_bytes as bytes/4', () => {
+    assert.equal(contextLimitFromMessage('{"error":{"code":"context_length_exceeded","limit_tokens":175000,"limit_bytes":700000}}'), 175000);
+    assert.equal(contextLimitFromMessage('{"error":{"code":"context_length_exceeded","limit_bytes":700000}}'), 175000);
+    assert.equal(contextLimitFromMessage('{"error":{"code":"context_length_exceeded","limit_bytes":2000}}'), 1000, 'clamps to at least 1000 tokens');
+  });
+
+  it('trimForContext stub names tool + target + envelope-stripped preview and discourages re-running', () => {
+    const wrapped = '[browser-meta] {"url":"https://cars.example/1","injection_suspected":false}\nURL: https://cars.example/1\n<untrusted_web_content nonce="abc123">\nFiat Bravo II 1.4 T-Jet 150KM — €4,250, 2011, 148 000 km\n' + 'details '.repeat(6000) + '\n</untrusted_web_content nonce="abc123">';
+    const history: Llm.MessageParam[] = [
+      userText('find cars'),
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'c1', name: 'web_fetch', input: { url: 'https://cars.example/1' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: wrapped }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'c2', name: 'web_fetch', input: { url: 'https://cars.example/2' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c2', content: 'latest listing' }] },
+    ];
+    const { messages, trimmed } = trimForContext(history, 2_000);
+    assert.equal(trimmed, 1);
+    const stubText = String(((messages[2]!.content as Llm.ToolResultBlockParam[])[0]!).content);
+    assert.match(stubText, /Output dropped to save context/);
+    assert.match(stubText, /web_fetch\(https:\/\/cars\.example\/1\)/);
+    assert.match(stubText, /Fiat Bravo II 1\.4 T-Jet 150KM/);
+    assert.doesNotMatch(stubText, /\[browser-meta\]|<untrusted_web_content/);
+    assert.match(stubText, /Already read earlier; do not re-run unless you specifically need missing detail\./);
+    assert.doesNotMatch(stubText, /Run the tool again/);
+  });
+
+  it('stripToolEnvelope and renderTranscript strip security wrappers before clipping tool outputs', () => {
+    const raw = '[browser-meta] {"url":"https://a.test","injection_suspected":false}\n<untrusted_web_content nonce="deadbeef">\nReal listing content: €3,990\n</untrusted_web_content nonce="deadbeef">';
+    assert.equal(stripToolEnvelope(raw), 'Real listing content: €3,990');
+    const parts = renderTranscript([call('1', 'web_fetch'), result('1', raw)], { toolChars: 60 });
+    assert.match(parts[1]!, /Real listing content: €3,990/);
+    assert.doesNotMatch(parts[1]!, /\[browser-meta\]|untrusted_web_content/);
+  });
+
+  it('planMidTurnCompaction and applyMidTurnCompaction preserve user blocks + images, never stack summaries, and keep strict alternation', () => {
+    const img: Llm.ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } };
+    const singleShort: Llm.MessageParam[] = [userText('hi'), call('1'), result('1', 'ok')];
+    assert.equal(planMidTurnCompaction(singleShort), null, 'single turn with < 2 steps returns null');
+
+    // Multi-turn with < 2 steps in current turn folds earlier turns [0..turnStart-1]
+    const multi: Llm.MessageParam[] = [userText('old q'), asstText('old a'), userText('current q'), call('1'), result('1', 'r1')];
+    const pMulti = planMidTurnCompaction(multi);
+    assert.deepEqual(pMulti, { turnStart: 2, cut: 2 });
+    const afterMulti = applyMidTurnCompaction(multi, pMulti!, 'OLD SUMMARY');
+    assert.equal(afterMulti[0]!.role, 'user');
+    assert.equal(afterMulti[1]!.role, 'assistant');
+    assert.equal(afterMulti[2]!.role, 'user');
+    assert.match(JSON.stringify(afterMulti[0]), /current q/);
+    assert.match(JSON.stringify(afterMulti[0]), /OLD SUMMARY/);
+
+    // Long single turn with user image + existing DB summary + 4 steps
+    const longTurn: Llm.MessageParam[] = [
+      { role: 'user', content: [{ type: 'text', text: `${SUMMARY_PREFIX}PRIOR DB` }, img, { type: 'text', text: 'Inspect all cars' }] },
+      call('s1'), result('s1', 'out1'),
+      call('s2'), result('s2', 'out2'),
+      call('s3'), result('s3', 'out3'),
+      call('s4'), result('s4', 'out4'),
+    ];
+    const p1 = planMidTurnCompaction(longTurn, { keepSteps: 2 })!;
+    assert.deepEqual(p1, { turnStart: 0, cut: 5 }, 'keeps steps s3 and s4');
+    const c1 = applyMidTurnCompaction(longTurn, p1, 'ROLLING-1');
+    assert.equal(c1.length, 5, 'user + 2 kept (assistant, user) pairs');
+    const u1Blocks = c1[0]!.content as Llm.ContentBlockParam[];
+    assert.ok(u1Blocks.some(b => b.type === 'image'), 'user image preserved verbatim');
+    assert.ok(u1Blocks.some(b => b.type === 'text' && b.text === 'Inspect all cars'), 'original prompt preserved');
+    assert.equal(u1Blocks.filter(b => b.type === 'text' && b.text.startsWith(SUMMARY_PREFIX)).length, 0, 'prior DB summary stripped');
+    assert.equal(u1Blocks.filter(b => b.type === 'text' && b.text.startsWith(MID_TURN_SUMMARY_PREFIX)).length, 1);
+
+    // Second rolling compaction must replace (not stack) MID_TURN_SUMMARY_PREFIX
+    const extended: Llm.MessageParam[] = [...c1, call('s5'), result('s5', 'out5')];
+    const p2 = planMidTurnCompaction(extended, { keepSteps: 1 })!;
+    const c2 = applyMidTurnCompaction(extended, p2, 'ROLLING-2');
+    const u2Blocks = c2[0]!.content as Llm.ContentBlockParam[];
+    const midBlocks = u2Blocks.filter(b => b.type === 'text' && b.text.startsWith(MID_TURN_SUMMARY_PREFIX));
+    assert.equal(midBlocks.length, 1, 'rolling summaries never stack');
+    assert.match((midBlocks[0] as Llm.TextBlockParam).text, /ROLLING-2/);
+    assert.doesNotMatch((midBlocks[0] as Llm.TextBlockParam).text, /ROLLING-1/);
+    assert.ok(u2Blocks.some(b => b.type === 'image'), 'user image still preserved on 2nd compaction');
+    // Strict alternation and zero orphan tool_result
+    const seenUses = new Set<string>();
+    c2.forEach((m, idx) => {
+      assert.equal(m.role, idx % 2 === 0 ? 'user' : 'assistant');
+      if (Array.isArray(m.content)) {
+        for (const b of m.content) {
+          if (b.type === 'tool_use') seenUses.add(b.id);
+          if (b.type === 'tool_result') assert.ok(seenUses.has(b.tool_use_id));
+        }
+      }
+    });
+  });
+
+  it('onContext reports updated tightened windowTokens after mid-turn context_too_long refusal', async () => {
+    const reg = new ToolRegistry(['s__read_file']);
+    await reg.loadFrom([{
+      name: 's',
+      async listTools() { return [{ name: 'read_file', description: 'read', inputSchema: { type: 'object' } }]; },
+      async callTool() { return { text: 'D'.repeat(20_000), isError: false }; },
+    }]);
+    let n = 0;
+    const llm: LlmClient = {
+      messages: {
+        async create() {
+          n++;
+          if (n === 1) return msg([toolUse('u1', 's__read_file', { path: 'a.txt' })], 'tool_use', { usage: { ...usage, input_tokens: 1000 } });
+          if (n === 2) throw new ProviderHttpError('agy', 400, '{"error":{"code":"context_length_exceeded","limit_tokens":175000}}');
+          return msg([text('done')], 'end_turn', { usage: { ...usage, input_tokens: 5500 } });
+        },
+      },
+    };
+    const contexts: Array<{ used: number; limit?: number }> = [];
+    const prior = [userText('old ' + 'Q'.repeat(30_000)), asstText('ans ' + 'A'.repeat(30_000))];
+    await runTurn({ ...base, llm, tools: reg, contextWindow: 1_000_000, onContext: c => contexts.push(c) }, prior, 'go');
+    assert.deepEqual(contexts, [
+      { used: 1000, limit: 1_000_000 },
+      { used: 5500, limit: 175_000 },
+    ]);
+  });
+
+  it('appends a non-blocking notice on exact duplicate idempotent reads with unchanged content, never blocking', async () => {
+    let reads = 0;
+    let fileContent = 'alpha-v1';
+    const reg = new ToolRegistry(['s__read_file']);
+    await reg.loadFrom([{
+      name: 's',
+      async listTools() { return [{ name: 'read_file', description: 'read', inputSchema: { type: 'object' } }]; },
+      async callTool() { reads++; return { text: fileContent, isError: false }; },
+    }]);
+    const { llm, calls } = scripted([
+      msg([toolUse('1', 's__read_file', { path: 'notes.md', mode: 'full' })], 'tool_use'),
+      msg([toolUse('2', 's__read_file', { mode: 'full', path: 'notes.md' })], 'tool_use'), // same args, different key order
+      msg([toolUse('3', 's__read_file', { path: 'notes.md', mode: 'full' })], 'tool_use'), // file changes before this call
+      msg([text('finished')], 'end_turn'),
+    ]);
+    // Mutate file content after 2nd read completes (before 3rd call)
+    const origCreate = llm.messages.create.bind(llm.messages);
+    llm.messages.create = async p => {
+      if (reads === 2) fileContent = 'alpha-v2-changed';
+      return origCreate(p);
+    };
+    await runTurn({ ...base, llm, tools: reg }, [], 'read file');
+    assert.equal(reads, 3, 'all 3 reads executed — never blocked');
+    const r1 = String((calls[1]!.messages.at(-1)!.content as Llm.ToolResultBlockParam[])[0]!.content);
+    const r2 = String((calls[2]!.messages.at(-1)!.content as Llm.ToolResultBlockParam[])[0]!.content);
+    const r3 = String((calls[3]!.messages.at(-1)!.content as Llm.ToolResultBlockParam[])[0]!.content);
+    assert.doesNotMatch(r1, /already ran this exact/);
+    assert.match(r2, /already ran this exact s__read_file call earlier in this turn \(2x\)/);
+    assert.match(r2, /alpha-v1/, 'original output still delivered in full');
+    assert.doesNotMatch(r3, /already ran this exact/, 'changed content resets repeat notice');
   });
 });

@@ -133,7 +133,7 @@ services:
       # Browser-agent sessions (browser_open/observe/act/tabs/close).
       PLAYWRIGHT_MAX_SESSIONS: ${PLAYWRIGHT_MAX_SESSIONS:-4}
       PLAYWRIGHT_MAX_TABS: ${PLAYWRIGHT_MAX_TABS:-6}
-      PLAYWRIGHT_SESSION_IDLE_TIMEOUT_MS: ${PLAYWRIGHT_SESSION_IDLE_TIMEOUT_MS:-1800000}
+      PLAYWRIGHT_SESSION_IDLE_TIMEOUT_MS: ${PLAYWRIGHT_SESSION_IDLE_TIMEOUT_MS:-3600000}
       PLAYWRIGHT_WATCHDOG_INTERVAL_MS: ${PLAYWRIGHT_WATCHDOG_INTERVAL_MS:-120000}
       # SSRF guard: the browser may only reach the PUBLIC internet. Comma-separated private
       # hostnames/IPs to allow on purpose (default none), e.g. a NAS you want the agent to read.
@@ -252,7 +252,7 @@ services:
       # Tools of the connectors above that run without an approval card (the variable replaces the list; see .env.example).
       AUTO_APPROVE_TOOLS: ${AUTO_APPROVE_TOOLS:-read_log,get_path,search_notes,browser_open,browser_observe,browser_screenshot,browser_act,browser_tabs,browser_close}
       # Tool output sent back to the model is cut to head + tail at this many characters.
-      TOOL_OUTPUT_MAX_CHARS: ${TOOL_OUTPUT_MAX_CHARS:-12000}
+      TOOL_OUTPUT_MAX_CHARS: ${TOOL_OUTPUT_MAX_CHARS:-24000}
       # Model steps one scheduled task run may take.
       SCHEDULE_MAX_STEPS: ${SCHEDULE_MAX_STEPS:-25}
       # Seconds a streamed model request may stay completely silent before it starts answering (keep-alive comments from a

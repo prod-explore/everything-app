@@ -107,7 +107,7 @@ describe('summaries cut off by the output limit', () => {
     const budgets: number[] = [];
     const llm = { messages: { async create(p: Llm.MessageCreateParamsNonStreaming) { budgets.push(p.max_tokens); return budgets.length === 1 ? reply('The user said hel', 'max_tokens') : reply('Complete summary.', 'end_turn'); } } } as unknown as LlmClient;
     assert.equal(await summarizeHistory({ llm, model: 'm', messages }), 'Complete summary.');
-    assert.deepEqual(budgets, [2000, 4000]);
+    assert.deepEqual(budgets, [4000, 8000]);
   });
 
   it('refuses a summary that is still cut off', async () => {

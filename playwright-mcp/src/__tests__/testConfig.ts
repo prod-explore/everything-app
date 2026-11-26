@@ -7,7 +7,7 @@ export function testConfig(overrides: Partial<PlaywrightConfig> = {}): Playwrigh
     navTimeoutMs: 30000,
     maxSessions: 4,
     maxTabs: 6,
-    sessionIdleTimeoutMs: 1800000,
+    sessionIdleTimeoutMs: 3600000,
     watchdogIntervalMs: 120000,
     allowPrivateHosts: [],
     observationMaxTextChars: 12000,

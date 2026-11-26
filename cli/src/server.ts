@@ -27,7 +27,8 @@ import { SSEManager } from './sse.js';
 import { classifyError } from './providers/errors.js';
 import { compactConversation, llmHistory } from './compaction.js';
 import { editQueuedMessage, enqueueMessage, listQueue, promoteQueuedMessage, removeQueuedMessage, takeNextQueued, toPublic } from './message-queue.js';
-import { COMPACT_AT, estimateTokens, isUserTurn } from './context.js';
+import { COMPACT_AT, estimateTokens, isUserTurn, summarizeHistory } from './context.js';
+import { distillOversizedToolOutput, distillWebContent } from './distill.js';
 import { AGENTS_FILE, WORKING_STYLE_PROMPT, projectInstructionsPrompt, proposePlanTool, todoTool } from './chat-tools.js';
 import { REQUEST_HUMAN_INPUT_TOOL, POST_REPORT_TOOL, formatHumanResponse, handleRequestHumanInput, resolveHumanInput, awaitHumanInput, DISMISSED_RESPONSE, isDismissedResponse, type GazetaField } from './gazeta.js';
 import { parseCommandPolicy } from './command-policy.js';
@@ -312,7 +313,7 @@ export interface BuildAppOptions {
   authToken: string;
   /** Password for the browser login form (SERVER_PASSWORD). Defaults to authToken. */
   password?: string;
-  config: Pick<Config, 'model' | 'autoApproveTools'>;
+  config: Pick<Config, 'model' | 'autoApproveTools'> & Partial<Pick<Config, 'mcpServers'>>;
   /** Connectors a ghost chat may use (default: GHOST_CONNECTORS or sandbox + obsidian). */
   ghostConnectors?: string[];
   /** Path of policy.json; omitted/null disables the file (tests). main() passes policyFilePath(). */
@@ -360,8 +361,10 @@ export interface BuiltApp {
  */
 export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   const { db, connections, authToken, config } = opts;
+  const playwrightCfg = config.mcpServers?.find(c => c.name === 'playwright');
   const auth = createAuth({ db, authToken, password: opts.password });
   const router = opts.router ?? new ProviderRouter({ db, llmOverride: opts.llm });
+  const ledger = new UsageLedger(db);
 
   const registry = new ToolRegistry(config.autoApproveTools);
   // A connector that is down at startup is skipped, not fatal: it shows as disconnected in Settings → Connectors and can be reconnected there.
@@ -376,10 +379,38 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
   // ─── Web access: web_search / web_fetch + Settings → Web ──────────────────
   const webRoutes = createWebRoutes({ db, vault: router.vault, fetchImpl: opts.web?.fetchImpl, env: opts.web?.env });
   const webPageCache = new PageCache(Date.now);
-  /** Built per turn: web_search appears only while a search engine is configured. */
-  const webTools = (): VirtualTool[] => buildWebTools({ db, vault: router.vault, cache: webPageCache, ...opts.web });
-  /** web_search / web_fetch for a chat — none in a ghost chat (a query or a URL would leave the machine). */
-  const webToolsFor = (conversationId: string | null | undefined): VirtualTool[] => (isGhostConversation(db, conversationId) ? [] : webTools());
+  /** Built per turn: web_search appears only while a search engine is configured; web_fetch(extract) uses the helper model. */
+  const webToolsFor = (conversationId: string | null | undefined): VirtualTool[] => {
+    if (isGhostConversation(db, conversationId)) return [];
+    return buildWebTools({
+      db,
+      vault: router.vault,
+      cache: webPageCache,
+      ...opts.web,
+      distill: async ({ url, title, content, prompt, signal }) => {
+        const bg = backgroundModel(db, router, { localOnly: false });
+        if (!bg) return null;
+        try {
+          return await distillWebContent({
+            llm: bg.client,
+            model: bg.model,
+            url,
+            title,
+            content,
+            prompt,
+            contextLength: bg.contextLength,
+            signal,
+            onUsage: usage => ledger.record({ conversationId: conversationId ?? null, provider: bg.provider, model: bg.model, usage }),
+          });
+        } catch (err) {
+          if (signal?.aborted) throw err;
+          console.warn('[distill] web_fetch extract failed: %s', router.redact((err as Error).message));
+          noteHelperFailure(bg.model);
+          return null;
+        }
+      },
+    });
+  };
   const webHostsFor = (conversationId: string | null | undefined, projectId: string | null | undefined, modelId: string) =>
     () => listGrantedWebHosts(db, { conversationId: conversationId ?? undefined, projectId: projectId ?? undefined, modelId });
 
@@ -398,7 +429,6 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuiltApp> {
     stillWaiting: () => approvalGate.isPending(entry.id),
   });
   if (opts.policyFile) { policyStore.get(); console.log('[policy] always-allow/block lists and domains: %s%s', opts.policyFile, policyStore.lastError ? ` (INVALID: ${policyStore.lastError})` : ''); }
-  const ledger = new UsageLedger(db);
   const sse = new SSEManager();
   // ─── Device bridge: the user's own machines as MCP servers (docs/devices.md, ADR 0017–0020) ───
   // Consent for a chat to drive a device's personal browser profile; ends with the device's browser session (see devices/personal-grants.ts).
@@ -1463,12 +1493,13 @@ ${formatHumanResponse(response)}` };
         const turnTools = conv.ghost ? ghostRegistry() : registry;
         const toolDefs = turnTools.toLlmTools() as Llm.Tool[];
 
-        // Summarise the older part of the conversation with the helper model (or the chat model itself).
+        // Summarise the older part of the conversation with the helper model (falling back to the chat model if the helper fails).
         const compactNow = async (tight: boolean, limitHint?: number): Promise<boolean> => {
           const bg = backgroundModel(db, router, { localOnly: conv.ghost });
-          const via = bg ?? { model: effectiveModel, provider, client: client as LlmClient };
+          const primary = bg ?? { model: effectiveModel, provider, client: client as LlmClient };
+          const fallback = bg && bg.model !== effectiveModel ? { model: effectiveModel, provider, client: client as LlmClient } : null;
           const effectiveLimit = info.contextLength ?? limitHint;
-          try {
+          const tryWith = async (via: { model: string; provider: typeof provider; client: LlmClient }) => {
             const r = await compactConversation(db, convId, {
               llm: via.client,
               model: via.model,
@@ -1480,11 +1511,21 @@ ${formatHumanResponse(response)}` };
             });
             if (r.compacted) sse.emit(convId, 'conversation:compacted', { replaced: r.replaced });
             return r.compacted;
+          };
+          try {
+            return await tryWith(primary);
           } catch (err) {
             if (controller.signal.aborted) throw err;
-            console.warn('[context] compaction failed: %s', router.redact((err as Error).message));
+            console.warn('[context] compaction failed on %s: %s', primary.model, router.redact((err as Error).message));
             if (bg) noteHelperFailure(bg.model);
-            return false;
+            if (!fallback) return false;
+            try {
+              return await tryWith(fallback);
+            } catch (fallbackErr) {
+              if (controller.signal.aborted) throw fallbackErr;
+              console.warn('[context] compaction fallback failed on %s: %s', fallback.model, router.redact((fallbackErr as Error).message));
+              return false;
+            }
           }
         };
 
@@ -1497,6 +1538,7 @@ ${formatHumanResponse(response)}` };
         }
 
         let toolRan = false;
+        let usedBrowser = false;
         // The turn is stored as it happens (see ConversationDeps.onMessages): each new row chains off the previous one,
         // so the whole turn, tool-loop plumbing included, hangs off the user message as one branch.
         let previousId = userMessageId;
@@ -1513,6 +1555,62 @@ ${formatHumanResponse(response)}` };
             onContextLimit: limit => {
               if (router.learnContextLength(effectiveModel, limit)) console.log(`[context] ${effectiveModel} refused a request as too long and named ${limit} tokens; using that as its window until the provider reports one`);
             },
+            compactMidTurn: async req => {
+              const bg = backgroundModel(db, router, { localOnly: conv.ghost });
+              const primary = bg ?? { model: effectiveModel, provider, client: client as LlmClient };
+              const fallback = bg && bg.model !== effectiveModel ? { model: effectiveModel, provider, client: client as LlmClient } : null;
+              const tryWith = async (via: { model: string; provider: typeof provider; client: LlmClient }) => {
+                const summary = await summarizeHistory({
+                  llm: via.client,
+                  model: via.model,
+                  messages: req.messages,
+                  previous: req.previousSummary,
+                  maxTokens: req.tight ? 2500 : 4000,
+                  signal: req.signal,
+                  onUsage: usage => ledger.record({ conversationId: convId, provider: via.provider, model: via.model, usage }),
+                });
+                sse.emit(convId, 'conversation:compacted', { replaced: req.messages.length, midTurn: true });
+                return summary;
+              };
+              try {
+                return await tryWith(primary);
+              } catch (err) {
+                if (req.signal?.aborted) throw err;
+                console.warn('[context] mid-turn compaction failed on %s: %s', primary.model, router.redact((err as Error).message));
+                if (bg) noteHelperFailure(bg.model);
+                if (!fallback) return null;
+                try {
+                  return await tryWith(fallback);
+                } catch (fallbackErr) {
+                  if (req.signal?.aborted) throw fallbackErr;
+                  console.warn('[context] mid-turn compaction fallback failed on %s: %s', fallback.model, router.redact((fallbackErr as Error).message));
+                  return null;
+                }
+              }
+            },
+            distillToolOutput: async req => {
+              const bg = backgroundModel(db, router, { localOnly: conv.ghost });
+              if (!bg) return null;
+              try {
+                return await distillOversizedToolOutput({
+                  llm: bg.client,
+                  model: bg.model,
+                  toolName: req.toolName,
+                  args: req.args,
+                  output: req.output,
+                  maxChars: req.maxChars,
+                  goal: req.goal,
+                  contextLength: bg.contextLength,
+                  signal: req.signal,
+                  onUsage: usage => ledger.record({ conversationId: convId, provider: bg.provider, model: bg.model, usage }),
+                });
+              } catch (err) {
+                if (req.signal?.aborted) throw err;
+                console.warn('[distill] oversized tool output distillation failed: %s', router.redact((err as Error).message));
+                noteHelperFailure(bg.model);
+                return null;
+              }
+            },
             reasoningEffort: state.effort,
             onContext: (c: { used: number; limit?: number }) => {
               setConversationState(db, convId, { lastInputTokens: c.used });
@@ -1522,7 +1620,16 @@ ${formatHumanResponse(response)}` };
             ...(opts.maxSteps !== undefined ? { maxSteps: opts.maxSteps } : {}),
             drainInbox: () => drainRunMessages(db, rootRun.id).map(m => `[message from ${m.fromLabel}]
 ${m.body}`),
-            onStep: () => heartbeatRun(db, rootRun.id),
+            onStep: () => {
+              heartbeatRun(db, rootRun.id);
+              if (usedBrowser && playwrightCfg) {
+                fetch(`${new URL(playwrightCfg.url).origin}/mcp/browser-sessions/${encodeURIComponent(convId)}/touch`, {
+                  method: 'POST',
+                  headers: playwrightCfg.apiKey ? { authorization: `Bearer ${playwrightCfg.apiKey}` } : {},
+                  signal: AbortSignal.timeout(2_000),
+                }).catch(() => {});
+              }
+            },
             firstByteTimeoutMs: opts.unattended ? 0 : firstByte,
             firstContentTimeoutMs: opts.unattended ? 0 : firstContent,
             ...(modelRetries !== undefined ? { modelRetries } : {}),
@@ -1573,7 +1680,12 @@ ${m.body}`),
             onAssistantText: text => { live.text(text); sse.emit(convId, 'turn:text', { text }); },
             onTextDelta: delta => { live.textDelta(delta.block, delta.text); sse.emit(convId, 'turn:text_delta', delta); },
             onThinkingDelta: delta => { live.thinkingDelta(delta.text); sse.emit(convId, 'turn:thinking_delta', delta); },
-            onToolStart: (label: string) => { toolRan = true; live.toolUse(label); sse.emit(convId, 'turn:tool_use', { label }); },
+            onToolStart: (label: string) => {
+              toolRan = true;
+              if (/browser_|playwright/i.test(label)) usedBrowser = true;
+              live.toolUse(label);
+              sse.emit(convId, 'turn:tool_use', { label });
+            },
             onToolResult: (toolName, fullOutput, truncatedOutput, isError) => {
               live.toolResult(toolName, truncatedOutput, isError, fullOutput !== truncatedOutput);
               sse.emit(convId, 'turn:tool_result', { toolName, truncatedOutput, isError, wasTruncated: fullOutput !== truncatedOutput });
@@ -1593,12 +1705,14 @@ ${m.body}`),
           const incident = classifyTurnError(err);
           if (incident.kind === 'context_too_long' && !toolRan && !storedAny && !controller.signal.aborted) {
             // Summarise what can be summarised. When nothing can (the history is one long run of tool calls) the repeat still goes ahead
-            // if the provider has just named a window the turn did not know: the loop then cuts the request view down to it.
+            // if the provider has just named a window the turn did not know (or a tighter one): the loop then compacts/trims to it.
             const compacted = await compactNow(true, incident.limit);
-            const learned = runDeps.contextWindow === undefined && incident.limit !== undefined;
-            if (!compacted && !learned) throw err;
+            const tightened = incident.limit !== undefined && (runDeps.contextWindow === undefined || incident.limit < runDeps.contextWindow);
+            if (!compacted && !tightened) throw err;
             if (compacted) history = llmHistory(db, convId, userMessageId);
-            runDeps.contextWindow ??= incident.limit;
+            if (incident.limit !== undefined) {
+              runDeps.contextWindow = runDeps.contextWindow ? Math.min(runDeps.contextWindow, incident.limit) : incident.limit;
+            }
             updatedHistory = await runTurn(runDeps, history, content);
           } else {
             throw err;

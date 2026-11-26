@@ -91,14 +91,26 @@ describe('BrowserSessionPool', () => {
     pool.stopWatchdog();
   });
 
-  it('touch() updates lastActivityAt so an active session is not the one that idles out', async () => {
-    const pool = makePool({ idleTimeoutMs: 1000 });
+  it('touch() updates lastActivityAt, returns true, and prevents idle eviction', async () => {
+    const closes: string[] = [];
+    const pool = makePool({ idleTimeoutMs: 1000 }, closes);
     const { session } = await pool.claim('conv-1');
 
     // Simulate real idle time having passed without touch().
     session.lastActivityAt = new Date(Date.now() - 5000);
-    pool.touch('conv-1');
+    assert.equal(pool.touch('conv-1'), true);
     assert.ok(Date.now() - session.lastActivityAt.getTime() < 100);
+
+    pool.sweepIdle();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(pool.get('conv-1'));
+    assert.deepEqual(closes, []);
+    pool.stopWatchdog();
+  });
+
+  it('touch() returns false for an unknown conversationId', () => {
+    const pool = makePool();
+    assert.equal(pool.touch('does-not-exist'), false);
     pool.stopWatchdog();
   });
 

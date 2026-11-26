@@ -66,7 +66,10 @@ function createMcpServer(config: PlaywrightConfig, pool: BrowserSessionPool): Mc
   return server;
 }
 
-export function createApp(config: PlaywrightConfig, opts: { rateLimitPerMinute?: number } = {}): {
+export function createApp(
+  config: PlaywrightConfig,
+  opts: { rateLimitPerMinute?: number; pool?: BrowserSessionPool } = {},
+): {
   app: express.Express;
   attachLiveViewToServer: (server: http.Server) => void;
 } {
@@ -90,13 +93,15 @@ export function createApp(config: PlaywrightConfig, opts: { rateLimitPerMinute?:
   // One pool for the whole process — NOT per MCP connection. The streamable HTTP
   // transport below is stateless (a fresh McpServer per POST), so the sticky
   // per-conversation session guarantee lives in the pool, not in any one transport.
-  const pool = new BrowserSessionPool({
-    maxSessions: config.maxSessions,
-    idleTimeoutMs: config.sessionIdleTimeoutMs,
-    watchdogIntervalMs: config.watchdogIntervalMs,
-    maxTabs: config.maxTabs,
-    makeLauncher: () => new ChromiumLauncher(guardFor(config)),
-  });
+  const pool =
+    opts.pool ??
+    new BrowserSessionPool({
+      maxSessions: config.maxSessions,
+      idleTimeoutMs: config.sessionIdleTimeoutMs,
+      watchdogIntervalMs: config.watchdogIntervalMs,
+      maxTabs: config.maxTabs,
+      makeLauncher: () => new ChromiumLauncher(guardFor(config)),
+    });
 
   // MCP clients probe for OAuth metadata before connecting; a 404 tells them there is none and the bearer key is used.
   app.get(/^\/\.well-known\/oauth-.*/, (_req, res) => res.status(404).end());
@@ -149,6 +154,13 @@ export function createApp(config: PlaywrightConfig, opts: { rateLimitPerMinute?:
   app.get('/mcp/browser-sessions', (req, res) => {
     if (!requireAuth(config, req, res)) return;
     res.json(pool.status());
+  });
+
+  // Renews the idle timer for an active browser session while the chat turn is busy with non-browser steps.
+  app.post('/mcp/browser-sessions/:id/touch', (req, res) => {
+    if (!requireAuth(config, req, res)) return;
+    const touched = pool.touch(req.params.id);
+    res.json({ ok: true, touched });
   });
 
   // Live-view WS is attached in index.ts after http.createServer(app),

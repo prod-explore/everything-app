@@ -67,9 +67,9 @@ describe('background (free tier) calls', () => {
     assert.ok(id); assert.equal(used, 1);
   });
 
-  it('tool output cap defaults to 12k and keeps head and tail', () => {
+  it('tool output cap defaults to 24k and keeps head and tail', () => {
     const r = truncateToolOutput('a'.repeat(5000) + 'MID' + 'b'.repeat(50_000));
-    assert.ok(r.wasTruncated && r.truncated.length < 12_100);
+    assert.ok(r.wasTruncated && r.truncated.length < 24_100);
     assert.ok(r.truncated.startsWith('aaaa') && r.truncated.endsWith('bbbb'));
   });
 });

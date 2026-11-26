@@ -18,6 +18,7 @@ export interface BackgroundModel {
   model: string;
   provider: ProviderId;
   client: LlmClient;
+  contextLength?: number;
 }
 
 /**
@@ -46,8 +47,8 @@ export function backgroundModel(db: Database.Database, router: ProviderRouter, o
   const localOk = (id: string) => !opts.localOnly || candidates.some(c => c.id === id);
   const model = resolveSlot(db, 'helper', candidates, id => localOk(id) && router.isAvailable(id));
   if (!model || helperParked(model)) return null;
-  const { provider, client } = router.clientFor(model, { quickRetries: true });
-  return { model, provider, client: client as LlmClient };
+  const { provider, info, client } = router.clientFor(model, { quickRetries: true });
+  return { model, provider, client: client as LlmClient, ...(info.contextLength ? { contextLength: info.contextLength } : {}) };
 }
 
 const textOf = (m: Llm.Message): string =>

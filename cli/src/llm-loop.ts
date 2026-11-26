@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import type * as Llm from './llm-types.js';
 import type { ToolRegistry } from './tool-registry.js';
-import { truncateToolOutput } from './output-truncator.js';
-import { dropOldToolImages, estimateTokens, fitToWindow, shrinkMessagesForOverflow } from './context.js';
+import { defaultToolOutputMaxChars, truncateToolOutput } from './output-truncator.js';
+import { applyMidTurnCompaction, COMPACT_AT, dropOldToolImages, estimateTokens, fitToWindow, planMidTurnCompaction, shrinkMessagesForOverflow } from './context.js';
 import { classifyError } from './providers/errors.js';
 import { toolResultContent, type ToolImage } from './tool-images.js';
 import { looksDangerous } from './web-approval.js';
@@ -115,8 +116,30 @@ export interface ConversationDeps {
   maxSteps?: number;
   /** AbortSignal — set by the kill switch (POST /api/conversations/:id/kill). */
   signal?: AbortSignal;
-  /** Max tool output length in characters before truncating for the model context. Default 12 000 (see output-truncator.ts). */
+  /** Max tool output length in characters before truncating for the model context. Default 24 000 (see output-truncator.ts). */
   maxToolOutputLength?: number;
+  /**
+   * Optional semantic mid-turn compactor: called proactively once the projected request crosses COMPACT_AT (80%)
+   * of the model's context window (or tightly on mid-turn overflow) to fold older steps into a dense factual summary.
+   */
+  compactMidTurn?: (req: {
+    messages: Llm.MessageParam[];
+    previousSummary: string | null;
+    tight: boolean;
+    signal?: AbortSignal;
+  }) => Promise<string | null>;
+  /**
+   * Optional helper-LLM distiller for oversized tool outputs exceeding the tool output cap: compresses raw output
+   * while preserving concrete facts and security boundaries before hard head+tail truncation.
+   */
+  distillToolOutput?: (req: {
+    toolName: string;
+    args: Record<string, unknown>;
+    output: string;
+    maxChars: number;
+    goal: string;
+    signal?: AbortSignal;
+  }) => Promise<string | null>;
   /**
    * Current conversation ID — injected as `_conversation_id` into sandbox and browser tool args: the browser keeps one
    * session per chat, and a chat without a project owns its sandbox. The model never supplies this; the orchestrator sets it.
@@ -276,6 +299,23 @@ const STATEFUL_TOOL_NAMES = new Set([...SANDBOX_TOOL_NAMES, ...BROWSER_TOOL_NAME
 const READ_ONLY_AFTER_INJECTION = new Set(['browser_observe', 'browser_screenshot', 'browser_tabs', 'browser_close', 'read_log', 'terminal_list', 'read_file']);
 /** Results of these virtual tools carry the same `[browser-meta]` first line as browser observations. */
 const WEB_VIRTUAL_TOOLS = new Set(['web_fetch', 'web_search']);
+/** Idempotent read-only tools monitored for exact-duplicate calls within a single turn (non-blocking notice only). */
+const IDEMPOTENT_READ_TOOLS = new Set(['web_fetch', 'web_search', 'read_file', 'get_path', 'get_vault_tree', 'search_notes']);
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map(k => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`;
+}
+
+function extractTurnGoal(content: Llm.MessageParam['content']): string {
+  const raw = typeof content === 'string'
+    ? content
+    : content.filter((b): b is Llm.TextBlockParam => b.type === 'text').map(b => b.text).join('\n');
+  return raw.replace(/\s+/g, ' ').trim().slice(0, 500);
+}
 const IRREVERSIBLE_WARNING = 'This browser action looks irreversible (payment, deletion, subscription…). Check that it is what you asked for.';
 const BROWSER_META_PREFIX = '[browser-meta] ';
 
@@ -499,6 +539,10 @@ async function runLoop(
   trace: TurnTrace,
 ): Promise<Llm.MessageParam[]> {
   const messages: TurnMessage[] = [...sanitizeHistory(history), { role: 'user', content: userContent }];
+  // Working request-only history for this turn: may undergo rolling mid-turn semantic compaction while `messages`
+  // remains strictly append-only for DB persistence and URL provenance (`collectContextUrls`).
+  let workingMessages: TurnMessage[] = [...messages];
+  const turnGoal = extractTurnGoal(userContent);
   trace.messages = messages;
   trace.persisted = messages.length;
   const virtualByName = new Map((deps.virtualTools ?? []).map(v => [v.definition.name, v]));
@@ -508,13 +552,49 @@ async function runLoop(
   ];
 
   let steps = 0;
-  // The window the turn trims to: the model's reported one, or the one a refusal named.
+  // The window the turn compacts/trims to: the model's reported one, or a tighter one a refusal named.
   let windowTokens = deps.contextWindow;
+  // Rolling summary accumulated across mid-turn compactions in this turn.
+  let midTurnSummary: string | null = null;
+  // Provider-measured input tokens from the previous response, anchored to workingMessages.length at send time.
+  let lastMeasuredPromptTokens: { tokens: number; atWorkingLen: number } | null = null;
+  // Exact-duplicate read-call tracking for gentle non-blocking notices (never blocks or refuses calls).
+  const readCallRepeats = new Map<string, { count: number; hash: string }>();
   // Consecutive replies whose tool-call block could not be read (see the catch below).
   let unreadable = 0;
   // Set once a browser observation looked like a prompt injection: from then on every tool call with an
   // effect needs a fresh human approval (grants and auto-approve don't apply).
   let injectionWarning: string | null = null;
+
+  const runMidTurnCompaction = async (opts: { keepSteps: number; maxTailTokens?: number; tight: boolean }): Promise<boolean> => {
+    if (!deps.compactMidTurn) return false;
+    const plan = planMidTurnCompaction(workingMessages, { keepSteps: opts.keepSteps, maxTailTokens: opts.maxTailTokens });
+    if (!plan) return false;
+    const toSummarize = midTurnSummary === null
+      ? (plan.cut === plan.turnStart
+          ? workingMessages.slice(0, plan.turnStart)
+          : [...workingMessages.slice(0, plan.turnStart), workingMessages[plan.turnStart]!, ...workingMessages.slice(plan.turnStart + 1, plan.cut)])
+      : workingMessages.slice(plan.turnStart + 1, plan.cut);
+    if (toSummarize.length === 0) return false;
+    let summary: string | null = null;
+    try {
+      summary = await deps.compactMidTurn({
+        messages: toSummarize,
+        previousSummary: midTurnSummary,
+        tight: opts.tight,
+        signal: deps.signal,
+      });
+    } catch (err) {
+      if (deps.signal?.aborted) throw err;
+      return false;
+    }
+    if (!summary || !summary.trim()) return false;
+    midTurnSummary = summary.trim();
+    workingMessages = applyMidTurnCompaction(workingMessages, plan, midTurnSummary);
+    lastMeasuredPromptTokens = null;
+    return true;
+  };
+
   for (;;) {
     // Kill switch check before each API call
     if (deps.signal?.aborted) throw new Error('Turn aborted by user (kill switch)');
@@ -524,17 +604,40 @@ async function runLoop(
     }
     deps.onStep?.(steps);
     const inbox = deps.drainInbox?.() ?? [];
-    const lastMsg = messages[messages.length - 1];
-    if (inbox.length > 0 && lastMsg?.role === 'user') {
-      const blocks = typeof lastMsg.content === 'string' ? [{ type: 'text' as const, text: lastMsg.content }] : [...lastMsg.content];
-      for (const text of inbox) blocks.push({ type: 'text', text });
-      messages[messages.length - 1] = { role: 'user', content: blocks };
+    if (inbox.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg?.role === 'user') {
+        const blocks = typeof lastMsg.content === 'string' ? [{ type: 'text' as const, text: lastMsg.content }] : [...lastMsg.content];
+        for (const text of inbox) blocks.push({ type: 'text', text });
+        messages[messages.length - 1] = { role: 'user', content: blocks };
+      }
+      const lastWork = workingMessages[workingMessages.length - 1];
+      if (lastWork?.role === 'user') {
+        const blocks = typeof lastWork.content === 'string' ? [{ type: 'text' as const, text: lastWork.content }] : [...lastWork.content];
+        for (const text of inbox) blocks.push({ type: 'text', text });
+        workingMessages[workingMessages.length - 1] = { role: 'user', content: blocks };
+      }
     }
     flushNew(deps, trace); // the previous step (reply + tool results, inbox text included) is complete
 
-    // What is sent may be a trimmed copy (old tool outputs stubbed); `messages` itself is never trimmed. Tool outputs in it are already truncated per result.
+    // Near-limit semantic auto-compaction at COMPACT_AT (80%): zero cutting below 80%; fallback trimming at TRIM_AT (86%).
+    // `messages` itself stays append-only and untouched.
     const overhead = estimateTokens([], deps.systemPrompt, toolDefs);
-    const recent = dropOldToolImages(messages);
+    const est = estimateTokens(dropOldToolImages(workingMessages)) + overhead;
+    const projected = lastMeasuredPromptTokens
+      ? Math.max(
+          lastMeasuredPromptTokens.tokens + estimateTokens(workingMessages.slice(lastMeasuredPromptTokens.atWorkingLen)),
+          est,
+        )
+      : est;
+    if (windowTokens && deps.compactMidTurn && projected > windowTokens * COMPACT_AT && (overhead <= windowTokens * 0.5 || steps > 1)) {
+      await runMidTurnCompaction({
+        keepSteps: 2,
+        maxTailTokens: Math.floor(windowTokens * 0.30),
+        tight: false,
+      });
+    }
+    const recent = dropOldToolImages(workingMessages);
     const view = windowTokens ? fitToWindow(recent, windowTokens, overhead) : recent;
 
     const callModel = async (reqMessages: Llm.MessageParam[], progress: { any: boolean }): Promise<Llm.Message> => {
@@ -643,30 +746,52 @@ async function runLoop(
         trace.inflight = null;
         const id = `toolu_unreadable_${steps}`;
         const note = `The tool call you wrote could not be read (the JSON of the call is invalid), so nothing was executed. Write the call again as one valid JSON object; escape newlines inside strings as \\n and keep each call small (split long content over several calls).`;
-        messages.push({ role: 'assistant', content: [...(written ? [{ type: 'text' as const, text: written }] : []), { type: 'tool_use', id, name: UNREADABLE_TOOL_CALL, input: {} }] });
-        messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: note, is_error: true }] });
+        const synthAsst: TurnMessage = { role: 'assistant', content: [...(written ? [{ type: 'text' as const, text: written }] : []), { type: 'tool_use', id, name: UNREADABLE_TOOL_CALL, input: {} }] };
+        const synthUser: TurnMessage = { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: note, is_error: true }] };
+        messages.push(synthAsst, synthUser);
+        workingMessages.push(synthAsst, synthUser);
         deps.onToolResult?.(UNREADABLE_TOOL_CALL, note, note, true);
         continue;
       }
       if (incident.kind === 'context_too_long' && !progress.any && !deps.signal?.aborted) {
         trace.inflight = null;
-        // The provider named its window: remember it, so the rest of the turn (and the caller's repeat of it) trims to it.
+        // The provider named its window: remember it (tightening if stricter than what we had), so the rest of the turn uses it.
         if (incident.limit) {
-          windowTokens ??= incident.limit;
+          windowTokens = windowTokens ? Math.min(windowTokens, incident.limit) : incident.limit;
           deps.onContextLimit?.(incident.limit);
         }
         // On the first step the history is what earlier turns left, and a summary of it (server.ts compacts and repeats the turn)
-        // keeps more than cutting does; from the second step on the turn's own steps are the weight and only a cut can help.
+        // keeps more than cutting does; from the second step on the turn's own steps are the weight.
         if (steps === 1) throw err;
-        // Cut the view down to what the provider said it takes (or 55% of what was sent) and ask once more.
+        // Try tight semantic mid-turn compaction first so facts survive; fall back to shrinking the view down to target.
         const currentTotal = estimateTokens(view) + overhead;
         const target = Math.max(
           overhead + 2_000,
           Math.min(incident.limit ? Math.floor(incident.limit * 0.7) : Number.MAX_SAFE_INTEGER, Math.floor(currentTotal * 0.55)),
         );
-        const shrunk = shrinkMessagesForOverflow(view, overhead, target);
-        if (estimateTokens(shrunk) + overhead < currentTotal) {
-          response = await callWithRetry(shrunk, progress);
+        let retryView: Llm.MessageParam[] | null = null;
+        if (deps.compactMidTurn) {
+          const compacted = await runMidTurnCompaction({
+            keepSteps: 1,
+            maxTailTokens: Math.floor((windowTokens ?? currentTotal) * 0.25),
+            tight: true,
+          });
+          if (compacted) {
+            const afterRecent = dropOldToolImages(workingMessages);
+            const candidate = windowTokens ? fitToWindow(afterRecent, windowTokens, overhead) : afterRecent;
+            if (estimateTokens(candidate) + overhead < currentTotal) {
+              retryView = candidate;
+            }
+          }
+        }
+        if (!retryView) {
+          const shrunk = shrinkMessagesForOverflow(view, overhead, target);
+          if (estimateTokens(shrunk) + overhead < currentTotal) {
+            retryView = shrunk;
+          }
+        }
+        if (retryView) {
+          response = await callWithRetry(retryView, progress);
         } else {
           throw err;
         }
@@ -677,10 +802,16 @@ async function runLoop(
     unreadable = 0;
     trace.inflight = null;
 
-    messages.push({ role: 'assistant', content: response.content });
+    const sentWorkingLen = workingMessages.length;
+    const assistantMsg: TurnMessage = { role: 'assistant', content: response.content };
+    messages.push(assistantMsg);
+    workingMessages.push(assistantMsg);
     deps.onUsage?.(response.usage);
     const promptTokens = response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0);
-    if (promptTokens > 0) deps.onContext?.({ used: promptTokens, limit: deps.contextWindow });
+    if (promptTokens > 0) {
+      deps.onContext?.({ used: promptTokens, limit: windowTokens });
+      lastMeasuredPromptTokens = { tokens: promptTokens, atWorkingLen: sentWorkingLen };
+    }
 
     for (const block of response.content) {
       if (block.type === 'text' && block.text) {
@@ -902,20 +1033,54 @@ async function runLoop(
       }
       const isError = result.isError === true;
 
-      // Long outputs are truncated (head + tail) for the model and for storage
-      const { truncated } = truncateToolOutput(result.text, deps.maxToolOutputLength);
+      // Oversized tool outputs are distilled by the helper model (when configured) so middle content survives,
+      // then capped at maxLen (head + tail) for the model and for storage.
+      const maxLen = deps.maxToolOutputLength ?? defaultToolOutputMaxChars();
+      let effectiveText = result.text;
+      if (!isError && effectiveText.length > maxLen && deps.distillToolOutput) {
+        try {
+          const distilled = await deps.distillToolOutput({
+            toolName: use.name,
+            args,
+            output: effectiveText,
+            maxChars: maxLen,
+            goal: turnGoal,
+            signal: deps.signal,
+          });
+          if (distilled && distilled.trim()) effectiveText = distilled;
+        } catch (err) {
+          if (deps.signal?.aborted) throw err;
+        }
+      }
+      const { truncated } = truncateToolOutput(effectiveText, maxLen);
       deps.onToolResult?.(use.name, result.text, truncated, isError);
+
+      let modelText = truncated;
+      if (!isError && IDEMPOTENT_READ_TOOLS.has(virtual ? use.name : real)) {
+        const callKey = `${use.name}:${stableJson(args)}`;
+        const hash = createHash('sha1').update(result.text).digest('hex');
+        const prev = readCallRepeats.get(callKey);
+        if (prev && prev.hash === hash) {
+          const count = prev.count + 1;
+          readCallRepeats.set(callKey, { count, hash });
+          modelText += `\n\n[Note: You already ran this exact ${use.name} call earlier in this turn (${count}x) and received the same content. Avoid repeating completed reads — use the data already gathered or proceed to the next step.]`;
+        } else {
+          readCallRepeats.set(callKey, { count: 1, hash });
+        }
+      }
 
       toolResults.push({
         type: 'tool_result',
         tool_use_id: use.id,
         // Pictures from the tool (a screenshot) ride along with the text; a failed call has none worth sending.
-        content: toolResultContent(truncated, isError ? undefined : result.images),
+        content: toolResultContent(modelText, isError ? undefined : result.images),
         is_error: isError,
       });
     }
 
-    messages.push({ role: 'user', content: toolResults });
+    const toolResultMsg: TurnMessage = { role: 'user', content: toolResults };
+    messages.push(toolResultMsg);
+    workingMessages.push(toolResultMsg);
     trace.pending = [];
   }
 }

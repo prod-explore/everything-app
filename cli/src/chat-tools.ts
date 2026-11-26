@@ -97,7 +97,8 @@ export function proposePlanTool(): VirtualTool {
 export const WORKING_STYLE_PROMPT =
   'For work with several steps, keep a task list with todo_write (full list each time, one item in_progress, mark items completed as you finish them). ' +
   'For a large, risky or ambiguous job, propose the plan with propose_plan and wait for approval before changing anything; for small, clear tasks just do the work. ' +
-  'If tool results or your own earlier messages reveal that you misjudged something, say so and correct course instead of pressing on.';
+  'If tool results or your own earlier messages reveal that you misjudged something, say so and correct course instead of pressing on. ' +
+  'Avoid re-reading unchanged files or URLs you already inspected in this turn; for broad multi-source research, work in small batches and consolidate findings (or use spawn_agent for independent tracks).';
 
 export const AGENTS_FILE = 'AGENTS.md';
 const AGENTS_MAX_CHARS = 20_000;

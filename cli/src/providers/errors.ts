@@ -43,14 +43,18 @@ const CONTEXT_PATTERNS = [
   /limit of this provider is [\d,]+/i,
 ];
 
-/** "maximum context length is 32768 tokens" / "limit of 1048576" / legacy char limits → tokens */
+/** "maximum context length is 32768 tokens" / "limit of 1048576" / JSON limit_tokens / limit_bytes / legacy char limits → tokens */
 export function contextLimitFromMessage(text: string): number | undefined {
+  const jsonTok = /"limit_tokens"\s*:\s*(\d{3,12})/.exec(text);
+  if (jsonTok) return Number(jsonTok[1]!);
   const tok =
     /(?:maximum|max)\s+context\s+length\s+(?:is|of)\s+([\d,]{3,12})/i.exec(text) ??
     /context\s+(?:window|length|limit)\s+(?:is|of)\s+([\d,]{3,12})/i.exec(text) ??
     /limit\s+(?:is|of)\s+([\d,]{4,12})\s+tokens/i.exec(text) ??
     /exceeds? the limit of ([\d,]{4,12})/i.exec(text);
   if (tok) return Number(tok[1]!.replace(/,/g, ''));
+  const jsonBytes = /"limit_bytes"\s*:\s*(\d{4,12})/.exec(text);
+  if (jsonBytes) return Math.max(1000, Math.floor(Number(jsonBytes[1]!) / 4));
   const chars = /(?:limit of this provider is|max(?:imum)?\s+prompt\s+chars?\s+(?:is|of))\s+([\d,]{4,12})/i.exec(text);
   if (chars) return Math.max(1000, Math.floor(Number(chars[1]!.replace(/,/g, '')) / 3.5));
   return undefined;

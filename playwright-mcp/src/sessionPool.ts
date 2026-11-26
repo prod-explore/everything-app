@@ -162,9 +162,11 @@ export class BrowserSessionPool {
     return this.sessions.get(conversationId);
   }
 
-  touch(conversationId: string): void {
+  touch(conversationId: string): boolean {
     const s = this.sessions.get(conversationId);
-    if (s) s.lastActivityAt = new Date();
+    if (!s) return false;
+    s.lastActivityAt = new Date();
+    return true;
   }
 
   setCurrentUrl(conversationId: string, url: string): void {

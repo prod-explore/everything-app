@@ -1,6 +1,11 @@
-/** Characters of tool output the model gets back (about 3k tokens) when TOOL_OUTPUT_MAX_CHARS is not set. */
-export const DEFAULT_TOOL_OUTPUT_MAX_CHARS = 12_000;
-const DEFAULT_MAX_LENGTH = Number(process.env['TOOL_OUTPUT_MAX_CHARS']) > 0 ? Number(process.env['TOOL_OUTPUT_MAX_CHARS']) : DEFAULT_TOOL_OUTPUT_MAX_CHARS;
+/** Characters of tool output the model gets back (about 6k tokens — fits default web_fetch 20k markdown + envelope without middle truncation) when TOOL_OUTPUT_MAX_CHARS is not set. */
+export const DEFAULT_TOOL_OUTPUT_MAX_CHARS = 24_000;
+
+/** Effective tool output cap from TOOL_OUTPUT_MAX_CHARS, falling back to DEFAULT_TOOL_OUTPUT_MAX_CHARS. */
+export function defaultToolOutputMaxChars(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env['TOOL_OUTPUT_MAX_CHARS']);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : DEFAULT_TOOL_OUTPUT_MAX_CHARS;
+}
 
 export interface TruncationResult {
   truncated: string;
@@ -15,7 +20,7 @@ export interface TruncationResult {
  */
 export function truncateToolOutput(
   text: string,
-  maxLength: number = DEFAULT_MAX_LENGTH,
+  maxLength: number = defaultToolOutputMaxChars(),
 ): TruncationResult {
   if (text.length <= maxLength) {
     return { truncated: text, wasTruncated: false };

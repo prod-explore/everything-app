@@ -3,6 +3,9 @@ import type Database from 'better-sqlite3';
 import { allowPaidAgents, isFreeModel, resolveSlot } from './slots.js';
 import type * as Llm from './llm-types.js';
 import { runTurn, StepLimitError, type LlmClient, type VirtualTool, type ConversationDeps } from './llm-loop.js';
+import { backgroundModel, noteHelperFailure } from './background.js';
+import { summarizeHistory } from './context.js';
+import { distillOversizedToolOutput } from './distill.js';
 
 type ConversationBrowserPolicy = NonNullable<ConversationDeps['browserPolicy']>;
 import type { ToolRegistry } from './tool-registry.js';
@@ -311,14 +314,73 @@ export class AgentManager {
         'file paths you changed, open problems. That report is what your parent receives.',
         run.model,
       );
+      const workerLlm = queuedClient(client as LlmClient, sem, signal);
       const history = await runTurn(
         {
           // Queue every model call through the provider's semaphore.
-          llm: queuedClient(client as LlmClient, sem, signal),
+          llm: workerLlm,
           model: run.model,
           maxTokens: Math.max(4096, info.minOutputTokens ?? 0),
           contextWindow: info.contextLength,
           onContextLimit: limit => { router.learnContextLength(run.model, limit); },
+          compactMidTurn: async req => {
+            const bg = backgroundModel(db, router, { localOnly: this.isGhost(run) });
+            const primary = bg
+              ? { model: bg.model, provider: bg.provider, client: queuedClient(bg.client, this.semaphore(bg.provider), signal) }
+              : { model: run.model, provider, client: workerLlm };
+            const fallback = bg && bg.model !== run.model ? { model: run.model, provider, client: workerLlm } : null;
+            const tryWith = (via: { model: string; provider: ProviderId; client: LlmClient }) =>
+              summarizeHistory({
+                llm: via.client,
+                model: via.model,
+                messages: req.messages,
+                previous: req.previousSummary,
+                maxTokens: req.tight ? 2500 : 4000,
+                signal: req.signal,
+                onUsage: usage => {
+                  this.deps.recordUsage({ conversationId: run.conversationId, provider: via.provider, model: via.model, usage });
+                  addRunUsage(db, run.id, { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens });
+                },
+              });
+            try {
+              return await tryWith(primary);
+            } catch (err) {
+              if (req.signal?.aborted) throw err;
+              if (bg) noteHelperFailure(bg.model);
+              if (!fallback) return null;
+              try {
+                return await tryWith(fallback);
+              } catch (fallbackErr) {
+                if (req.signal?.aborted) throw fallbackErr;
+                return null;
+              }
+            }
+          },
+          distillToolOutput: async req => {
+            const bg = backgroundModel(db, router, { localOnly: this.isGhost(run) });
+            if (!bg) return null;
+            try {
+              return await distillOversizedToolOutput({
+                llm: queuedClient(bg.client, this.semaphore(bg.provider), signal),
+                model: bg.model,
+                toolName: req.toolName,
+                args: req.args,
+                output: req.output,
+                maxChars: req.maxChars,
+                goal: req.goal,
+                contextLength: bg.contextLength,
+                signal: req.signal,
+                onUsage: usage => {
+                  this.deps.recordUsage({ conversationId: run.conversationId, provider: bg.provider, model: bg.model, usage });
+                  addRunUsage(db, run.id, { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens });
+                },
+              });
+            } catch (err) {
+              if (req.signal?.aborted) throw err;
+              noteHelperFailure(bg.model);
+              return null;
+            }
+          },
           tools,
           systemPrompt,
           virtualTools: [...this.agentTools(run.id, signal), ...(this.deps.workerExtraTools?.(run, signal) ?? [])],
