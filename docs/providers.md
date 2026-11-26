@@ -47,7 +47,7 @@ Nothing is inferred from a URL, a name or a tag, so a model nobody vouched for i
 | Slot | Used for | When unset |
 |---|---|---|
 | Chat default | New conversations | first `free` model, else first usable |
-| Helper | Chat titles, daily digest, compaction | first `free` model — never a paid one — preferring one *other than* the chat default, so housekeeping does not queue behind the model you are chatting on (with a single free model, that one is shared). For a ghost chat only a *local* helper is used; without one, the chat's own model summarises and the title stays the plain first-words title |
+| Helper | Chat titles, daily digest, compaction, `web_fetch(extract)` & oversized tool distillation | first `free` model — never a paid one — preferring one *other than* the chat default, so housekeeping does not queue behind the model you are chatting on (with a single free model, that one is shared). For a ghost chat only a *local* helper is used; without one, the chat's own model summarises and the title stays the plain first-words title |
 | Agents | Default model of `spawn_agent` workers | the first free model; if none, the parent's own model |
 | Escalation | The stronger model the assistant reaches for | none (never automatic) |
 
@@ -74,13 +74,15 @@ How a retry works:
 
 `budget_exhausted` from a gateway is never retried.
 
-### Context window and oversize requests
+### Context window, long runs and oversize requests
 
-Everything that keeps a request inside the window (trimming old tool outputs at 60% of it, cutting harder above 90%, summarising older turns at 75%) works from the model's `context_length`, so a model that reports none is not managed at all. Three things keep that figure honest:
+Everything that keeps a request inside the window works from the model's `context_length` (with UTF-8 byte-aware estimation so multi-byte languages match byte-budgeted bridges), leaving the full conversation completely untouched until **80%** of the window. Above that:
 
+- **Near-limit auto-compaction (80%).** Both before a turn and **mid-turn** during long tool loops, older turns or earlier steps are folded into a dense, rolling factual summary by the `helper` slot (falling back immediately to the chat model if the helper fails). The user's original prompt and the latest steps stay verbatim; the stored conversation and URL provenance are never altered.
+- **Fallback safety net (86% / 90%).** Only if compaction is unavailable or cannot bring the request down does the loop stub old tool outputs (86%, keeping tool/target and a short preview without prompting re-runs) or shrink harder (90%).
+- **Layered helper distillation.** `web_fetch` accepts an optional `extract` prompt so long/noisy pages can be distilled into verbatim structured facts by the helper model; any non-error tool output above `TOOL_OUTPUT_MAX_CHARS` (default 24,000) is also distilled by the helper before head+tail truncation so middle-of-page content survives, while preserving `[browser-meta]` injection flags and fresh `<untrusted_...>` nonces.
 - **Background refresh.** `MODEL_METADATA_REFRESH_HOURS` (default 6, `0` = off) re-reads `GET /models` of every enabled provider, at start-up and then on that interval, and updates what the existing models report. It never adds, enables or removes a model (that stays with *Refresh models* and *Add provider*), and a figure you set yourself wins.
-- **Learned from a refusal.** A 400 `context_length_exceeded` that names its limit ("maximum context length is 100000 tokens") is applied at once, on the first step of a turn as on a later one: the request is cut down and sent once more (never as a second plain request after a streamed one). For a model that reported no window the figure is stored until the next refresh replaces it.
-- **A turn that is one long run.** A single turn of many tool calls cannot be cut at a turn boundary, so only its old tool outputs and, above 90% of the window, its oldest results and longest texts are cut from the request view. The stored conversation is never changed.
+- **Learned from a refusal.** A 400 `context_length_exceeded` that names its limit (`"limit_tokens": 175000` or `"maximum context length is 175000 tokens"`) is applied at once, tightening the live window on both the first step and later steps: the request is compacted/trimmed and sent once more (never as a second plain request after a streamed one). For a model that reported no window the figure is stored until the next refresh replaces it.
 
 A reply whose tool call the gateway could not read (the agy bridge's 502 `unparsable tool-call block`, which can only arrive after part of the reply was streamed) does not end the turn: the call is recorded as a failed `unreadable_tool_call`, the model is told to write it again, and after two such replies in a row the error is reported as before.
 
